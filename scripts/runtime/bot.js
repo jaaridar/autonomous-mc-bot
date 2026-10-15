@@ -1921,21 +1921,108 @@ export class Bot {
             drops.sort((a, b) => distance(a.location, this.sim.location) - distance(b.location, this.sim.location));
             const near = drops[0];
             if (distance(near.location, this.sim.location) > 1.2) {
-                this.reason = `Recovering drops: ${drops.length} within range of the death point.`;
+                this.reason = `Recovering drops: ${drops.length} within range of death point ${grave.x},${grave.y},${grave.z} - unbreakable`;
                 const r = this.navTo(near.location, tick, 1);
                 if (r === "failed" || r === "blocked") {
+                    // UNBREAKABLE RECOVERY: Never give up, always find a way
+                    const navReason = this.nav.reason ?? "";
+                    // If bridging needs blocks, mine nearby blocks for building
+                    if (navReason.includes("bridging") || navReason.includes("blocks") || navReason.includes("Gap requires")) {
+                        // Try to mine nearby dirt/cobble/logs for bridging
+                        try {
+                            const nearBlocks = this.terrain.scanOres(this.sim.location, 8, (type) => {
+                                return type === "minecraft:dirt" || type === "minecraft:grass_block" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log") || type === "minecraft:sand" || type === "minecraft:gravel" || type === "minecraft:coarse_dirt" || type === "minecraft:netherrack";
+                            }, 300);
+                            if (nearBlocks.length > 0) {
+                                const target = nearBlocks[0];
+                                const b = this.terrain.block(target);
+                                this.reason = `Recovery needs blocks for bridging, mining ${b?.typeId ?? "block"} at ${target.x},${target.y},${target.z} - unbreakable`;
+                                const digRes = this.digCell(target, tick);
+                                if (digRes === "digging") return;
+                                const nav2 = this.nav.go(center(target), tick);
+                                if (nav2 !== "failed") return;
+                            }
+                        } catch {}
+                        // Try builder to place if we have blocks now
+                        if (this.builder?.canBuild) {
+                            try {
+                                const p = floor(this.sim.location);
+                                const dir = { x: Math.sign(near.location.x - p.x), y: 0, z: Math.sign(near.location.z - p.z) };
+                                if (dir.x !== 0 || dir.z !== 0) {
+                                    const br = this.builder.bridge(dir, tick);
+                                    if (br === "placed" || br === "placed_support") {
+                                        this.reason = "Recovery bridging with blocks - unbreakable";
+                                        return;
+                                    }
+                                }
+                            } catch {}
+                        }
+                        // Try alternative path via explorer or larger search
+                        if (tick % 60 === 0) {
+                            this.explorer.reset();
+                            this.terrain.clear();
+                        }
+                        this.reason = `Recovery: gap needs blocks, mining nearby for bridge material - ${navReason} - unbreakable retry`;
+                        // Don't blockTask, just retry with pushToward as fallback
+                        this.nav.reset();
+                        if (distance(near.location, this.sim.location) <= 16 && this.recoverPush++ < 400) {
+                            this.drops.pushToward(near.location);
+                            return;
+                        }
+                        this.recoverPush = 0;
+                        // Last resort: try to go via water/boat if water gap
+                        if (this.terrain.waterNear(floor(this.sim.location)) || this.sim.isInWater) {
+                            const boatRes = this.escaper.boat(tick);
+                            if (boatRes) {
+                                this.reason = "Recovery water gap, trying boat - unbreakable";
+                                return;
+                            }
+                        }
+                        // Never hard fail - keep retrying
+                        return;
+                    }
+                    // For other failures, try workaround then retry
                     this.nav.reset();
-                    if (distance(near.location, this.sim.location) <= 12 && this.recoverPush++ < 240) this.drops.pushToward(near.location);
-                    else { this.blockTask("Cannot reach the drops: " + this.nav.reason, "retry"); this.recoverPush = 0; }
+                    if (distance(near.location, this.sim.location) <= 16 && this.recoverPush++ < 400) {
+                        this.drops.pushToward(near.location);
+                        this.reason = `Recovery pushToward ${Math.round(distance(near.location, this.sim.location))}b - unbreakable`;
+                    } else {
+                        // Try to break obstruction if any
+                        try {
+                            const obstruct = this.terrain.findObstructions(this.sim.location, near.location);
+                            if (obstruct.length > 0 && obstruct.length <= 3) {
+                                for (const cell of obstruct) {
+                                    const b = this.terrain.block(cell);
+                                    if (!b || b.isAir) continue;
+                                    if (b.typeId === "minecraft:obsidian") continue;
+                                    if (isUnbreakable(b.typeId)) continue;
+                                    const score = retainScore(b.typeId);
+                                    if (score >= 80) continue;
+                                    const dr = this.digCell(cell, tick);
+                                    if (dr === "digging") {
+                                        this.reason = `Recovery breaking ${b.typeId} to reach drops - unbreakable`;
+                                        return;
+                                    }
+                                }
+                            }
+                        } catch {}
+                        this.recoverPush = 0;
+                        this.reason = `Recovery retrying - ${this.nav.reason} - unbreakable, will mine blocks or find alternative`;
+                        // Don't blockTask permanently, just keep trying - unbreakable
+                        if (tick % 100 === 0) {
+                            this.explorer.reset();
+                            this.terrain.clear();
+                        }
+                    }
                 } else this.recoverPush = 0;
-            } else { this.reason = `Picking up drops: ${drops.length} within range.`; }
+            } else { this.reason = `Picking up drops: ${drops.length} within range - unbreakable recovery`; }
             return;
         }
-        if (this.recoverSince && tick - this.recoverSince < 60) { this.reason = "Sweeping the death point for remaining drops."; return; }
+        if (this.recoverSince && tick - this.recoverSince < 60) { this.reason = "Sweeping death point for remaining drops - unbreakable"; return; }
         const found = this.recoverSeen > 0;
         this.memory?.clearDeath(); this.recoverTarget = undefined;
-        if (this.postDeath) { this.tell(found ? "Recovered what drops remained." : "No drops remained at the death point."); this.resumePlan(tick); return; }
-        this.stop(found ? "Death point swept; drops collected (what remains may have despawned)." : "No drops remained at the death point."); this.tell(this.reason);
+        if (this.postDeath) { this.tell(found ? "Recovered what drops remained." : "No drops remained at death point."); this.resumePlan(tick); return; }
+        this.stop(found ? "Death point swept; drops collected." : "No drops remained at death point."); this.tell(this.reason);
     }
     attach(sim) {
         this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);

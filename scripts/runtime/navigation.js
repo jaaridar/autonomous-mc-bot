@@ -284,7 +284,16 @@ export class Navigator {
                         return "running";
                     }
                 } else {
-                    return this.fail("Gap requires bridging but no blocks - need dirt/cobble.");
+                    // UNBREAKABLE: Gap requires bridging but no blocks - don't fail permanently, try to mine blocks or find workaround
+                    // Signal need blocks but allow retry - bot will mine dirt/cobble/logs nearby
+                    this.retries++;
+                    if (this.retries <= 2) {
+                        this.terrain.clear();
+                        this.replan(tick);
+                        return "running";
+                    }
+                    // After retries, fail with specific reason that bot's recover can handle by mining blocks
+                    return this.fail("Gap requires bridging but no blocks - need dirt/cobble - will mine nearby blocks");
                 }
             }
 
