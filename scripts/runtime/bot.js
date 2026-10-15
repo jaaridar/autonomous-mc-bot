@@ -1059,31 +1059,151 @@ export class Bot {
         return result;
     }
     follow(goal, tick, leash) {
-        // UNBREAKABLE FOLLOW: water handling, boat, bridge, mining blocks if needed
-        if (this.sim.isInWater) {
-            // If in water while following, force water escape logic via escaper, but also try boat/bridge
-            this.reason = "In water while following - trying boat/bridge/swim to you";
-            // Try boat if far
+        // UNBREAKABLE FOLLOW V2: handles 100 block tower + deep water + boat crafting
+        const selfFloor = floor(this.sim.location);
+        const goalFloor = floor(goal);
+        const verticalDiff = goal.y - this.sim.location.y;
+        const horizDist = horizontal(this.sim.location, goal);
+        const totalDist = distance(this.sim.location, goal);
+
+        // === DEEP WATER HANDLING: always try boat if water ===
+        const inWater = this.sim.isInWater;
+        const waterNear = this.terrain.waterNear ? this.terrain.waterNear(selfFloor) : false;
+        const goalInWater = (() => { try { const b = this.terrain.block(goalFloor); return b && b.isLiquid; } catch { return false; } })();
+        const waterBetween = this.waterAhead ? this.waterAhead(goal) : undefined;
+
+        if (inWater || waterNear || goalInWater || waterBetween) {
+            // If far in water, need boat
+            if (totalDist > 4) {
+                const boatRes = this.escaper.boat(tick);
+                if (boatRes) {
+                    this.reason = `Deep water follow: making/using boat to reach you ${Math.round(totalDist)}b away - water traversal`;
+                    return;
+                }
+                // If boat failed, try to craft boat from any wood
+                if (this.settings.assistedCrafting && this.bag.find(s => s.typeId.endsWith("_boat")) < 0) {
+                    try {
+                        const counts = this.bag.counts();
+                        const hasPlanks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
+                        const hasLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0);
+                        if (hasPlanks >= 5) {
+                            this.reason = "Deep water: crafting boat from planks to follow you";
+                            this.obtain("minecraft:oak_boat", 1, tick);
+                            return;
+                        } else if (hasLogs >= 1) {
+                            // Need planks
+                            const logType = Object.keys(counts).find(k => k.endsWith("_log") || k.endsWith("_wood"));
+                            if (logType) {
+                                const plankType = logType.replace("_log","_planks").replace("_wood","_planks");
+                                this.reason = "Deep water: crafting planks for boat to follow you";
+                                this.obtain(plankType, 4, tick);
+                                return;
+                            }
+                        } else {
+                            // Need to mine logs for boat - unbreakable
+                            this.reason = "Deep water: no wood for boat, mining ANY wood to craft boat and follow you - unbreakable";
+                            const near = this.terrain.scanOres(this.sim.location, 12, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem"), 300);
+                            if (near.length) {
+                                const r = this.nav.go(center(near[0]), tick);
+                                if (r !== "failed") return;
+                            }
+                        }
+                    } catch {}
+                }
+                // If boat crafting not possible, try swim + bridge
+                this.reason = "Deep water: boat not available, swimming/bridging to you - unbreakable";
+            }
+        }
+
+        // === 100 BLOCK TOWER HANDLING: pillar up ===
+        if (verticalDiff > 12) {
+            // Owner is high up - need to pillar
+            const blocks = this.builder ? this.builder.countBlocks() : 0;
+            const hasBlocks = this.bag.buildBlock() >= 0 || blocks > 0;
+            
+            if (!hasBlocks) {
+                // Need to mine blocks for pillaring - unbreakable
+                if (tick % 20 === 0) {
+                    this.reason = `You are ${Math.round(verticalDiff)} blocks above me, need blocks to pillar up 100 blocks - mining nearby - unbreakable`;
+                    try {
+                        const near = this.terrain.scanOres(this.sim.location, 8, (type) => {
+                            return type === "minecraft:dirt" || type === "minecraft:grass_block" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log") || type === "minecraft:sand" || type === "minecraft:gravel" || type === "minecraft:netherrack" || type === "minecraft:coarse_dirt";
+                        }, 300);
+                        if (near.length) {
+                            const r = this.nav.go(center(near[0]), tick);
+                            if (r !== "failed") return;
+                            // Try direct break if front
+                            const b = this.terrain.block(near[0]);
+                            if (b) {
+                                const dr = this.digCell(near[0], tick);
+                                if (dr === "digging") return;
+                            }
+                        }
+                    } catch {}
+                }
+            } else {
+                // Have blocks, pillar up towards goal
+                this.reason = `You are ${Math.round(verticalDiff)}b above, pillaring up 100 blocks to reach you - unbreakable tower follow`;
+                // Move horizontally towards goal first if far
+                if (horizDist > 4) {
+                    const r = this.navTo({ x: goal.x, y: selfFloor.y, z: goal.z }, tick, 2);
+                    if (r === "running") return;
+                }
+                // Now pillar
+                if (this.builder) {
+                    const pr = this.builder.pillar(tick);
+                    if (pr === "placed" || pr === "jumping") {
+                        return;
+                    }
+                    // If pillar failed due to no support, try to place support
+                    if (pr === "no-support") {
+                        const below = add(selfFloor, { x: 0, y: -1, z: 0 });
+                        const support = this.builder.findSupportFor(below);
+                        if (support) {
+                            const r = this.builder.placeAt(below, support.pos, { sneak: true, autoAnchor: true });
+                            if (r === "placed") return;
+                        }
+                        // Try to move to find support
+                        this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, 16);
+                        return;
+                    }
+                }
+            }
+            // If pillar not possible, still try navTo with high vertical tolerance
+            const r = this.navTo(goal, tick, leash);
+            if (r !== "failed" && r !== "blocked") return;
+        }
+
+        // === NORMAL FOLLOW WITH WATER/BOAT/BRIDGE FALLBACKS ===
+        if (inWater) {
+            this.reason = "In water while following - trying boat/bridge/swim to you - deep water fix";
             const dist = distance(this.sim.location, goal);
             if (dist > 5) {
                 const boatRes = this.escaper.boat(tick);
                 if (boatRes) return;
             }
-            // If has blocks, try to bridge towards goal
-            if (this.settings.bridge && this.bag.buildBlock() >= 0 && dist < 20) {
-                // Attempt bridging in water - will be handled by escaper water mode
-            }
         }
         const r = this.navTo(goal, tick, leash);
         if (r === "blocked") {
             this.followBlocked = this.followBlocked || tick;
-            // Try workaround: if water between, make boat
-            const waterBetween = this.waterAhead ? this.waterAhead(goal) : undefined;
-            if (waterBetween) {
+            if (waterBetween || inWater || waterNear) {
                 const br = this.escaper.boat(tick);
-                if (br) { this.reason = "Water between us, making boat to follow"; return; }
+                if (br) { this.reason = "Water between us, making boat to follow - deep water"; return; }
+                // Craft boat if needed
+                if (this.settings.assistedCrafting && tick % 40 === 0) {
+                    try {
+                        const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat","minecraft:bamboo_raft"];
+                        for (const bt of boatTypes) {
+                            const slot = this.bag.find(s => s.typeId === bt);
+                            if (slot >= 0) { this.escaper.boat(tick); return; }
+                        }
+                        // Try craft any boat
+                        for (const bt of boatTypes) {
+                            try { this.craft(bt, 1); this.escaper.boat(tick); return; } catch {}
+                        }
+                    } catch {}
+                }
             }
-            // If have blocks, try to bridge
             if (this.settings.bridge && this.bag.buildBlock() >= 0) {
                 try {
                     const p = floor(this.sim.location);
@@ -1091,15 +1211,14 @@ export class Bot {
                     if (dir.x !== 0 || dir.z !== 0) {
                         const bridgeRes = this.builder ? this.builder.bridge(dir, tick) : undefined;
                         if (bridgeRes === "placed" || bridgeRes === "placed_support") {
-                            this.reason = "No standable spot, bridging with blocks to reach you";
+                            this.reason = "No standable spot, bridging with blocks to reach you - 100 block tower/water";
                             return;
                         }
                     }
                 } catch {}
             }
-            // If no blocks, try to mine blocks nearby for bridging
             if (tick % 40 === 0 && this.bag.buildBlock() < 0) {
-                this.reason = "No blocks to bridge, mining nearby for blocks to follow you";
+                this.reason = "No blocks to bridge, mining nearby for blocks to follow you - unbreakable";
                 try {
                     const near = this.terrain.scanOres(this.sim.location, 6, (type) => type === "minecraft:dirt" || type === "minecraft:sand" || type === "minecraft:gravel" || type.endsWith("_log"), 100);
                     if (near.length) {
@@ -1108,24 +1227,49 @@ export class Bot {
                     }
                 } catch {}
             }
-            this.reason = "Holding position; no standable spot near the target yet - trying boat/bridge.";
+            // For high tower, try pillar even when blocked
+            if (verticalDiff > 8 && this.builder && this.builder.canBuild) {
+                this.reason = `Blocked but you are ${Math.round(verticalDiff)}b up, pillaring - tower 100 fix`;
+                const pr = this.builder.pillar(tick);
+                if (pr === "placed" || pr === "jumping") return;
+            }
+            this.reason = "Holding position; no standable spot near target yet - trying boat/bridge/pillar - unbreakable";
+            if (tick % 30 === 0) {
+                // Keep moving, don't stop - anti-idle
+                this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, 16);
+                return;
+            }
             try { this.sim.stopMoving(); } catch {}
             this.nav.reset();
-            if (tick - this.followBlocked > 200) { this.followBlocked = tick; this.tell("Waiting for a standable spot near you, trying to make boat/bridge."); }
+            if (tick - this.followBlocked > 200) { this.followBlocked = tick; this.tell("Waiting for standable spot near you, trying to make boat/bridge/pillar 100 blocks."); }
             return;
         }
         this.followBlocked = 0;
         if (r === "failed") {
             this.followFails = (this.followFails ?? 0) + 1;
             this.reason = this.nav.reason;
-            // UNBREAKABLE: on fail, try boat, bridge, or mine blocks
-            if (this.followFails % 3 === 0) {
-                const waterBetween = this.waterAhead ? this.waterAhead(goal) : undefined;
-                if (waterBetween || this.sim.isInWater || this.terrain.waterNear(floor(this.sim.location))) {
+            if (this.followFails % 2 === 0) {
+                // Every 2 fails, try water/boat
+                const wb = this.waterAhead ? this.waterAhead(goal) : undefined;
+                if (wb || inWater || waterNear || this.terrain.waterNear(floor(this.sim.location))) {
                     const br = this.escaper.boat(tick);
-                    if (br) { this.reason = `Water blocks path to you, making boat (${this.nav.reason})`; return; }
+                    if (br) { this.reason = `Water blocks path to you, making boat (${this.nav.reason}) - deep water fix`; return; }
+                    // Try craft boat
+                    if (this.settings.assistedCrafting) {
+                        try {
+                            const counts = this.bag.counts();
+                            const hasBoat = Object.keys(counts).some(k => k.endsWith("_boat"));
+                            if (!hasBoat) {
+                                const hasPlanks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
+                                if (hasPlanks >= 5) {
+                                    this.craft("minecraft:oak_boat", 1);
+                                    this.escaper.boat(tick);
+                                    return;
+                                }
+                            }
+                        } catch {}
+                    }
                 }
-                // Try to break obstruction if any
                 try {
                     const obstruct = this.terrain.findObstructions(this.sim.location, goal);
                     if (obstruct.length > 0 && obstruct.length <= 3) {
@@ -1137,25 +1281,47 @@ export class Bot {
                             const score = retainScore(b.typeId);
                             if (score >= 80) continue;
                             const dr = this.digCell(cell, tick);
-                            if (dr === "digging") { this.reason = `Breaking ${b.typeId} to follow you`; return; }
+                            if (dr === "digging") { this.reason = `Breaking ${b.typeId} to follow you - unbreakable`; return; }
                         }
                     }
                 } catch {}
-                // Try bridging
                 if (this.settings.bridge && this.bag.buildBlock() >= 0) {
                     try {
                         const p = floor(this.sim.location);
                         const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
-                        const br = this.builder ? this.builder.bridge(dir, tick) : undefined;
-                        if (br === "placed") { this.reason = "Bridging to follow you"; return; }
+                        if (verticalDiff > 8) {
+                            // Pillar up for tower
+                            const pr = this.builder ? this.builder.pillar(tick) : undefined;
+                            if (pr === "placed" || pr === "jumping") { this.reason = `Pillaring ${Math.round(verticalDiff)}b up to follow you - 100 block tower`; return; }
+                        } else {
+                            const br = this.builder ? this.builder.bridge(dir, tick) : undefined;
+                            if (br === "placed") { this.reason = "Bridging to follow you - unbreakable"; return; }
+                        }
                     } catch {}
+                } else if (verticalDiff > 8) {
+                    // Need blocks for tower, mine them
+                    if (tick % 20 === 0) {
+                        try {
+                            const near = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:dirt" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log"), 200);
+                            if (near.length) {
+                                const nr = this.nav.go(center(near[0]), tick);
+                                if (nr !== "failed") { this.reason = `Need blocks to pillar ${Math.round(verticalDiff)}b up, mining - tower 100`; return; }
+                            }
+                        } catch {}
+                    }
                 }
             }
-            if (this.followFails >= 6 && this.followFails % 6 === 0) this.tell(`Still trying to reach you (${this.nav.reason}) - will make boat/bridge/mine if needed`);
+            if (this.followFails >= 6 && this.followFails % 6 === 0) this.tell(`Still trying to reach you (${this.nav.reason}) - will make boat/bridge/pillar 100 blocks if needed - unbreakable`);
+            // Anti-idle: keep exploring towards goal even on fail
+            if (tick % 30 === 0) {
+                this.explorer.step(this.sim.location, goal, tick, this.terrain, this.nav, Math.max(32, totalDist));
+            }
             return;
         }
         this.followFails = 0;
     }
+
+
     idle(tick) {
         // ANTI-IDLE: never stay idle unless compulsory - always active guarding/patrolling/collecting
         const owner = this.owner();

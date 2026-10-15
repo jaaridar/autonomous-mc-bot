@@ -161,6 +161,16 @@ export class PathSearch {
                 }
             }
 
+            // Pillar up: if need to go high (100 block tower), allow pillar up with build blocks
+            if (this.allowBridge || this.options.allowPillar) {
+                const up = add(p, { x: 0, y: 1, z: 0 });
+                const up2 = add(p, { x: 0, y: 2, z: 0 });
+                // If up is air and we have solid below, we can pillar
+                if (this.air(up) && this.air(up2) && this.solid(add(p, { x: 0, y: -1, z: 0 }))) {
+                    out.push({ ...up, kind: "pillar" });
+                }
+            }
+
             // Bridging: if gap with no support, allow if builder enabled (higher cost)
             if (this.allowBridge) {
                 const belowQ = add(q, { x: 0, y: -1, z: 0 });
@@ -177,8 +187,10 @@ export class PathSearch {
                 }
             }
         }
+        // UNBREAKABLE TOWER 100: allow up to 128 vertical for following high towers, 32 for normal
+        const vertLimit = this.radius >= 100 ? 128 : (this.allowBridge ? 64 : 24);
         return out.filter((q) => horizontal(q, this.start) <= this.radius &&
-            Math.abs(q.y - this.start.y) <= 12);
+            Math.abs(q.y - this.start.y) <= vertLimit);
     }
 
     penalty(p) {

@@ -58,17 +58,24 @@ export class Navigator {
 
     replan(tick) {
         const allowBridge = this.allowBridge || this.builder?.canBuild;
+        const allowPillar = allowBridge; // For 100 block tower, allow pillar
+        const verticalDiff = Math.abs(floor(this.sim.location).y - floor(this.target).y);
+        const horiz = horizontal(this.sim.location, this.target);
+        // For high tower (100 blocks), increase search radius and nodes
+        const isHighTower = verticalDiff > 20 || horiz > 50;
+        const maxNodes = isHighTower ? 8000 : 3000;
+        const radius = isHighTower ? 128 : 36;
         this.search = new PathSearch(
             this.terrain.read,
             floor(this.sim.location),
             floor(this.target),
             0.7,
             this.parkour,
-            3000,
-            36,
+            maxNodes,
+            radius,
             horizontal(this.sim.location, this.target) > 20,
             this.avoid,
-            { allowBridge, allowSprintJump: this.allowSprintJump }
+            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump }
         );
         this.path = [];
         this.corridor = [];
