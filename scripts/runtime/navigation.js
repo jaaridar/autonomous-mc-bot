@@ -315,9 +315,10 @@ export class Navigator {
                 }
             }
 
-            this.sim.isSprinting = sprint || w.kind === "jump" || w.kind === "sprintjump";
+            // Advanced 3-block sprinting jumps - always sprint for these
+            this.sim.isSprinting = sprint || w.kind === "jump" || w.kind === "sprintjump" || w.kind === "sprintjump3" || w.kind === "sprintjump_up";
 
-            if (w.kind === "step" || w.kind === "jump" || w.kind === "sprintjump" || w.kind === "jumpup") {
+            if (w.kind === "step" || w.kind === "jump" || w.kind === "sprintjump" || w.kind === "sprintjump3" || w.kind === "sprintjump_up" || w.kind === "jumpup") {
                 if (!this.sim.isOnGround) {
                     this.lastIssued = -1;
                     return "running";
@@ -328,6 +329,10 @@ export class Navigator {
             if (w.kind === "bigdrop") {
                 // For big drops, don't sprint
                 this.sim.isSprinting = false;
+            }
+            // For 3-block jumps, ensure extra sprint speed
+            if (w.kind === "sprintjump3" || w.kind === "sprintjump_up") {
+                this.sim.isSprinting = true;
             }
 
             try {

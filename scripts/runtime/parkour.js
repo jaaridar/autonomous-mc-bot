@@ -27,6 +27,7 @@ export class Parkour {
     }
 
     canJumpGap(p, dir, gapSize = 1) {
+        // Advanced: supports up to 3 block gaps for sprinting
         // gapSize 1 = 1 block gap, 2 = 2 blocks etc
         for (let i = 1; i <= gapSize; i++) {
             const gap = add(p, { x: dir.x * i, y: 0, z: dir.z * i });
@@ -195,13 +196,17 @@ export class Parkour {
             }
         }
 
-        // Horizontal gaps
+        // Horizontal gaps - ADVANCED: 1, 2, and 3 block sprinting jumps
         if (dy === 0 || Math.abs(dy) <= 1) {
             if (hDist > 1 && hDist <= 2.5 && this.canJumpGap(p, dir, 1)) {
                 return this.jump(dir, tick);
             }
-            if (hDist > 2.5 && hDist <= 4 && this.canJumpGap(p, { x: dir.x, y: 0, z: dir.z }, 2)) {
+            if (hDist > 2.5 && hDist <= 3.5 && this.canJumpGap(p, { x: dir.x, y: 0, z: dir.z }, 2)) {
                 return this.sprintJump({ x: dir.x * 2, y: 0, z: dir.z * 2 }, tick);
+            }
+            // 3-BLOCK GAP SPRINTING JUMP - ADVANCED MOVEMENT
+            if (hDist > 3.5 && hDist <= 5 && this.canJumpGap(p, { x: dir.x, y: 0, z: dir.z }, 3)) {
+                return this.sprintJump({ x: dir.x * 3, y: 0, z: dir.z * 3 }, tick);
             }
             if (hDist > 1 && this.bridgeIfNeeded(dir, tick)) return true;
         }
@@ -213,10 +218,19 @@ export class Parkour {
             }
         }
 
-        // Ascend gap (up + forward)
+        // Ascend gap (up + forward) - ADVANCED
         if (dy === 1 && hDist > 1 && hDist <= 3) {
             if (this.canStepUp(p, dir) && this.canJumpGap(p, dir, 1)) {
                 return this.sprintJump(dir, tick);
+            }
+        }
+        // 3-block gap up 1 - advanced parkour
+        if (dy === 1 && hDist > 3 && hDist <= 5) {
+            if (this.canJumpGap(p, { x: dir.x, y: 0, z: dir.z }, 3)) {
+                const upTarget = add(p, { x: dir.x * 3, y: 1, z: dir.z * 3 });
+                if (this.terrain.safe(upTarget)) {
+                    return this.sprintJump({ x: dir.x * 3, y: 1, z: dir.z * 3 }, tick);
+                }
             }
         }
 

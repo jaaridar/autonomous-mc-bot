@@ -135,7 +135,7 @@ export class PathSearch {
                     out.push({ ...land, kind: "jump" });
                 }
 
-                // 2-block gap sprint jump
+                // 2-block gap sprint jump (3 blocks distance)
                 if (this.allowSprintJump) {
                     const gap2 = add(land, d);
                     if (!this.safeStand(gap) && !this.safeStand(land) &&
@@ -148,6 +148,36 @@ export class PathSearch {
                         this.air(add(gap2, { x: 0, y: 2, z: 0 })) &&
                         this.safeStand(gap2)) {
                         out.push({ ...gap2, kind: "sprintjump" });
+                    }
+
+                    // 3-BLOCK GAP SPRINT JUMP - ADVANCED MOVEMENT (4 blocks distance)
+                    // Minecraft sprint jump max is 4 blocks, this is 3 gaps -> 4 distance
+                    const gap3 = add(gap2, d);
+                    const underGap2 = this.read(add(gap2, { x: 0, y: -1, z: 0 }));
+                    if (!this.safeStand(gap) && !this.safeStand(land) && !this.safeStand(gap2) &&
+                        underGap && !underGap.hazard &&
+                        this.read(add(land, { x: 0, y: -1, z: 0 })) && !this.read(add(land, { x: 0, y: -1, z: 0 }))?.hazard &&
+                        underGap2 && !underGap2.hazard &&
+                        this.air(gap) && this.air(add(gap, { x: 0, y: 1, z: 0 })) && this.air(add(gap, { x: 0, y: 2, z: 0 })) &&
+                        this.air(land) && this.air(add(land, { x: 0, y: 1, z: 0 })) && this.air(add(land, { x: 0, y: 2, z: 0 })) &&
+                        this.air(gap2) && this.air(add(gap2, { x: 0, y: 1, z: 0 })) && this.air(add(gap2, { x: 0, y: 2, z: 0 })) &&
+                        this.air(add(p, { x: 0, y: 2, z: 0 })) && this.air(add(p, { x: 0, y: 3, z: 0 })) &&
+                        this.air(add(gap3, { x: 0, y: 1, z: 0 })) && this.air(add(gap3, { x: 0, y: 2, z: 0 })) &&
+                        this.safeStand(gap3)) {
+                        out.push({ ...gap3, kind: "sprintjump3" });
+                    }
+
+                    // 3-block jump with 1 up (parkour up over gap)
+                    const upLand3 = add(gap3, { x: 0, y: 1, z: 0 });
+                    if (!this.safeStand(gap) && !this.safeStand(land) && !this.safeStand(gap2) &&
+                        underGap && !underGap.hazard &&
+                        this.air(gap) && this.air(add(gap, { x: 0, y: 1, z: 0 })) && this.air(add(gap, { x: 0, y: 2, z: 0 })) &&
+                        this.air(land) && this.air(add(land, { x: 0, y: 1, z: 0 })) && this.air(add(land, { x: 0, y: 2, z: 0 })) &&
+                        this.air(gap2) && this.air(add(gap2, { x: 0, y: 1, z: 0 })) && this.air(add(gap2, { x: 0, y: 2, z: 0 })) &&
+                        this.air(add(p, { x: 0, y: 2, z: 0 })) && this.air(add(p, { x: 0, y: 3, z: 0 })) &&
+                        this.air(upLand3) && this.air(add(upLand3, { x: 0, y: 1, z: 0 })) &&
+                        this.safeStand(upLand3)) {
+                        out.push({ ...upLand3, kind: "sprintjump_up" });
                     }
                 }
 
@@ -230,9 +260,12 @@ export class PathSearch {
                 let cost = 1;
                 if (q.kind === "jump") cost = 3.5;
                 else if (q.kind === "sprintjump") cost = 5;
+                else if (q.kind === "sprintjump3") cost = 7; // 3-block jump - advanced, higher cost
+                else if (q.kind === "sprintjump_up") cost = 8; // 3-block up jump - advanced
                 else if (q.kind === "jumpup") cost = 3;
                 else if (q.kind === "walk") cost = 1;
                 else if (q.kind === "bridge") cost = 8;
+                else if (q.kind === "pillar") cost = 6; // pillar up - for 100 block tower
                 else if (q.kind === "bigdrop") cost = 2.5;
                 else cost = 1.5;
                 const g = n.g + cost + this.penalty(q), k = key(q);
