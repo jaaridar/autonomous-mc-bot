@@ -95,7 +95,7 @@ export class Drops {
             b.nav.reset();
             b.sim.stopMoving();
             m.standSince = m.standSince ?? tick;
-            if (tick - m.standSince > 30) {
+            if (tick - m.standSince > 10) { // FAST: was 30, now 10 ticks = 0.5 sec
                 m.blocked?.set(key(floor(e.location)), tick + 900);
                 m.pickup = undefined;
                 m.pickupEntity = undefined;
@@ -129,7 +129,7 @@ export class Drops {
             if (e) {
                 m.pickup = floor(e.location);
                 m.pickupEntity = e;
-                m.pickupUntil = tick + 80;
+                m.pickupUntil = tick + 30; // FAST: was 80, now 30 ticks
                 m.loot.delete(c.k);
                 return true;
             }

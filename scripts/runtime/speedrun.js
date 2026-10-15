@@ -515,23 +515,23 @@ export class SpeedrunDirector {
 
     woodPhase(tick, counts) {
         const b = this.bot;
-        // Quick tool priority #1 - never bare hand
+        // ULTRA FAST WOOD: get logs ASAP, no waiting
         const hasWeapon = b.equipment.hasWeapon();
+        const totalLogs = (counts["minecraft:oak_log"] ?? 0) + (counts["minecraft:birch_log"] ?? 0) + (counts["minecraft:spruce_log"] ?? 0) + (counts["minecraft:jungle_log"] ?? 0);
+        if (!hasWeapon && totalLogs < 2) {
+            b.reason = "Speedrun wood FAST: need 2 logs for weapon - mining logs quickly";
+            if (!b.mining || !b.mining.block.endsWith("_log")) b.startMine("minecraft:oak_log", 3);
+            return;
+        }
         if (!hasWeapon) {
-            b.reason = "Speedrun wood: no weapon - quick tool #1 priority never bare-hand";
-            if ((counts["minecraft:oak_log"] ?? 0) < 2) {
-                if (!b.mining || b.mining.block !== "minecraft:oak_log") b.startMine("minecraft:oak_log", 4);
-                return;
-            }
+            b.reason = "Speedrun wood: crafting weapon FAST";
             if (!(counts["minecraft:crafting_table"] > 0)) {
                 b.obtain("minecraft:crafting_table", 1, tick);
                 return;
             }
-            if ((counts["minecraft:stick"] ?? 0) < 4) {
-                b.obtain("minecraft:stick", 4, tick);
-                return;
-            }
-            b.obtain("minecraft:wooden_sword", 1, tick);
+            // Try any wooden sword, not just oak
+            try { b.obtain("minecraft:wooden_sword", 1, tick); return; } catch {}
+            b.obtain("minecraft:wooden_axe", 1, tick);
             return;
         }
 

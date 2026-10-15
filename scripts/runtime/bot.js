@@ -37,6 +37,7 @@ import { needsQuickTool } from "../core/combat.js";
 import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../core/knowledge.js";
 import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
 import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
+import { UI } from "./ui.js";
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -155,6 +156,7 @@ export class Bot {
         this.golem = new GolemDirector(this);
         this.food = new FoodDirector(this);
         this.bucket = new BucketDirector(this);
+        this.ui = new UI(this);
         this.nav.builder = this.builder;
         // Enhanced mining state
         this.obstructionClear = undefined;
@@ -575,6 +577,9 @@ export class Bot {
         const owner = this.owner();
         if (!owner) { this.pause("Owner offline; no unattended world mutation."); return; }
         // ROBUST: Allow Nether and End travel - was previously pausing with "Nether/End travel is not implemented" causing auto shutdown on portal entry
+        // UI update - scoreboard + actionbar for spectating
+        try { this.ui?.tick(tick); } catch {}
+
         // Now supports full-game speedrun Overworld -> Nether -> End
         if (owner.dimension.id !== this.sim.dimension.id) {
             // Owner and bot in different dimensions - pause to avoid unattended mutation, but record
@@ -1141,11 +1146,14 @@ export class Bot {
     }
     idle(tick) {
         if (!this.grab) try { this.sim.stopMoving(); } catch {}
-        // Opportunistic resource gathering while idle
-        if (tick % 40 === 0 && this.settings.hunting) {
+        // FIXED: idle should NOT roam without mission - only pickup drops nearby, no opportunistic wandering
+        // Previously it would roam for resources without clear mission
+        this.reason = "Idle: guarding, waiting for command - use !bot auto or !bot speedrun or !bot follow";
+        // Opportunistic only if very close and not causing roaming
+        if (tick % 100 === 0 && this.settings.hunting) {
             const opp = this.resource.findOpportunistic(tick);
-            if (opp && distance(opp.e.location, this.sim.location) < 6) {
-                this.reason = `Opportunistic: ${opp.type}`;
+            if (opp && distance(opp.e.location, this.sim.location) < 3) {
+                this.reason = `Idle nearby: ${opp.type} within 3 blocks`;
                 const r = this.navTo(opp.e.location, tick, 1);
                 if (r !== "failed") return;
             }
@@ -1304,10 +1312,21 @@ export class Bot {
             met = m.broken >= m.amount;
         }
         if (met && this.bag.container.emptySlotsCount > 0) {
-            if (m.sweepUntil === undefined) m.sweepUntil = tick + 60; // QUICK: 60 not 300
+            // FAST: for tree mode, don't wait for drops if adjacent logs exist
+            if (m.treeMode) {
+                const adj = this.findAdjacentLogs(m, tick);
+                if (adj) {
+                    m.sweepUntil = undefined;
+                    m.target = adj;
+                    m.type = this.terrain.block(adj)?.typeId;
+                    this.reason = `Tree: fast continue to adjacent log ${adj.x},${adj.y},${adj.z}`;
+                    return false;
+                }
+            }
+            if (m.sweepUntil === undefined) m.sweepUntil = tick + 20; // FAST: was 60, now 20 = 1 sec
             if (tick < m.sweepUntil) {
                 const stray = this.drops.near(m, this.sim.location, 10, tick);
-                if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 40; }
+                if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 15; } // FAST: was 40, now 15
                 if (this.drops.run(m, tick)) return false;
             }
         }
@@ -1329,8 +1348,8 @@ export class Bot {
             return false; 
         }
 
-        // QUICK: noTargetSince 200 for wood, 400 for others (was 800) - avoid idle
-        const noTargetThreshold = m.treeMode ? 200 : m.cropMode ? 200 : 400;
+        // ULTRA FAST: noTargetSince 80 for wood, 150 for others - avoid idle watching
+        const noTargetThreshold = m.treeMode ? 80 : m.cropMode ? 80 : 150;
         if (tick - m.noTargetSince > noTargetThreshold && !m.returning) {
             if (m.underground) {
                 if (!this.deepMiner.active) {
@@ -1758,6 +1777,11 @@ export class Bot {
     armed() { const usable = this.bag.usableCounts(); return Object.keys(usable).some((k) => usable[k] > 0 && (k.endsWith("_sword") || k.endsWith("_axe"))); }
     camp(tick) {
         if (!this.settings.camp || !this.canCamp()) { this.campState = undefined; return false; }
+        // SPEEDRUN: don't waste time digging shelter, keep running
+        if (this.mode === "speedrun" && this.settings.speedrun) {
+            this.campState = undefined;
+            return false;
+        }
         if (!this.isNight() || this.threat) { if (this.campState?.sealed) this.parkCamp(); else this.campState = undefined; return false; }
         if (this.terrain.threats(this.sim, this.owner()).length) { this.campState = undefined; return false; }
         const s = this.campState ?? (this.campState = { stage: "seek", since: tick, actionSince: tick, tried: new Set(), announced: false, });
