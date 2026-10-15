@@ -85,6 +85,51 @@ export function cellDanger(world, pos, threats = [], opts = {}) {
     return { score, parts, lethal };
 }
 
+/**
+ * Memoising view of a `world`: each (x,y,z) is read once. Neighbouring cells
+ * share ~90% of their reads (6 neighbours + a 24-deep fall column), so a
+ * search that scores thousands of cells drops from ~30 reads per cell to ~1.
+ */
+export function cachedWorld(world) {
+    if (world && world.__cached) return world;
+    const cells = new Map();
+    const view = {
+        __cached: true,
+        block(x, y, z) {
+            const k = `${x},${y},${z}`;
+            if (cells.has(k)) return cells.get(k);
+            let v;
+            try { v = world.block(x, y, z); } catch { v = null; }
+            cells.set(k, v);
+            return v;
+        },
+        size: () => cells.size,
+    };
+    if (typeof world?.light === "function") view.light = (x, y, z) => world.light(x, y, z);
+    return view;
+}
+
+/**
+ * Precomputed danger map for one planning pass: memoised cell reads plus
+ * memoised per-cell results. Use `penalty(pos)` as an A* cost term instead
+ * of calling pathPenalty() per expanded node.
+ */
+export function dangerMap(world, threats = [], opts = {}) {
+    const w = cachedWorld(world);
+    const results = new Map();
+    const danger = (pos) => {
+        const k = `${Math.floor(pos?.x)},${Math.floor(pos?.y)},${Math.floor(pos?.z)}`;
+        let d = results.get(k);
+        if (!d) { d = cellDanger(w, pos, threats, opts); results.set(k, d); }
+        return d;
+    };
+    return {
+        danger,
+        penalty: (pos) => { const d = danger(pos); return d.lethal ? 1e6 : d.score; },
+        reads: () => w.size(),
+    };
+}
+
 export function pathPenalty(world, pos, threats = [], opts = {}) {
     const d = cellDanger(world, pos, threats, opts);
     return d.lethal ? 1e6 : d.score;

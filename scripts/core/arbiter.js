@@ -24,6 +24,19 @@ export const REASON_CODES = {
     INTERRUPTED: "interrupted"
 };
 
+/**
+ * Sentinel director for behaviours that the bot's main loop runs itself
+ * (missions, combat, escape). The arbiter only *selects* them; it must not
+ * tick them. The old adapters called `bot.follow(tick)` / `combat.tick(tick)`
+ * / `escaper.tick(tick)` with the wrong arguments or on methods that do not
+ * exist: follow() got a number as its goal and reset the navigator, combat
+ * saw no target and reset the navigator, escape threw - every 5 ticks, each
+ * followed by a second full evaluate(). That forced a fresh A* replan
+ * several times a second and was the single largest source of lag.
+ */
+export const DEFERRED = "deferred";
+const deferTo = (reason) => ({ tick: () => DEFERRED, reason, deferred: true });
+
 export class FailureRecord {
     constructor() {
         this.map = new Map(); // id -> {count, lastTick, lastReason, lastPos}
@@ -132,13 +145,13 @@ export class Arbiter {
             }
         } catch (e) { console.warn("[Verdant] food eval "+e); }
 
-        // Combat - if threat and not fleeing (director-style tick(tick) only; fights stay on the main chain)
+        // Combat - if threat and not fleeing
         try {
-            if (threatInfo.nearest && hp > 8 && typeof bot.combat?.tick === "function" && bot.combat.tick.length <= 1) {
+            if (threatInfo.nearest && hp > 8) {
                 const score = threatInfo.count >= 2 ? 85 : 75;
                 candidates.push({
                     id: "combat",
-                    director: bot.combat,
+                    director: deferTo("combat runs in the main loop"),
                     score,
                     reason: `threat ${threatInfo.nearest.typeId} count ${threatInfo.count}`,
                     tags: ["combat"]
@@ -150,10 +163,10 @@ export class Arbiter {
         try {
             const below = bot.terrain.read({ x: Math.floor(bot.sim.location.x), y: Math.floor(bot.sim.location.y)-1, z: Math.floor(bot.sim.location.z) });
             const escapeNeeded = inWater || below?.hazard || bot.nav.stuck;
-            if (escapeNeeded && typeof bot.escaper?.tick === "function" && bot.escaper.tick.length <= 1) {
+            if (escapeNeeded) {
                 candidates.push({
                     id: "escape",
-                    director: bot.escaper,
+                    director: deferTo("escape runs in the main loop"),
                     score: inWater ? 88 : 80,
                     reason: `escape needed: inWater=${inWater} hazard=${below?.hazard} stuck=${bot.nav.stuck}`,
                     tags: ["survival"]
@@ -185,9 +198,7 @@ export class Arbiter {
                 }
                 candidates.push({
                     id: mode,
-                    // Side-effect free claim: the main dispatcher ticks the mission every tick.
-                    // Calling bot[mode](t) here crashed/spammed during mine/speedrun/golem and double-ran others.
-                    director: { tick: () => true, reason: bot.reason },
+                    director: deferTo(`mission ${mode} runs in the main loop`),
                     score,
                     reason: `mission ${mode}`,
                     tags: ["mission"]
@@ -306,23 +317,30 @@ export class Arbiter {
 
             // Tick current director
             let result;
+            const cur = this.current;
             try {
-                result = this.current.director.tick(tick);
+                result = cur.director?.tick ? cur.director.tick(tick) : DEFERRED;
             } catch (e) {
-                console.warn(`[Verdant] director ${this.current.id} threw ${e}`);
-                this.failures.record(this.current.id, tick, String(e).slice(0,200), this.bot.sim.location);
+                // Rate-limited: a throwing director used to log on every tick.
+                const n = this.failures.getFailCount(cur.id);
+                if (n === 0 || n % 50 === 0) console.warn(`[Verdant] director ${cur.id} threw ${e}`);
+                this.failures.record(cur.id, tick, String(e).slice(0,200), this.bot.sim.location);
                 this.current = null;
-                return { code: REASON_CODES.FAILED, reason: `Director ${this.current?.id} threw: ${e}`, error: e };
+                return { code: REASON_CODES.FAILED, reason: `Director ${cur.id} threw: ${e}`, error: e };
             }
 
+            if (result === DEFERRED) {
+                return { code: DEFERRED, reason: cur.reason, id: cur.id };
+            }
             // Interpret result - directors return true if handled, false if not, or reason codes
             if (result === true) {
-                return { code: REASON_CODES.RUNNING, reason: this.current.director.reason || this.current.reason, id: this.current.id };
+                return { code: REASON_CODES.RUNNING, reason: cur.director.reason || cur.reason, id: cur.id };
             } else if (result === false) {
-                // Not handled, try next candidate
-                this.failures.record(this.current.id, tick, "not handled", this.bot.sim.location);
-                const candidates = this.evaluate(tick);
-                const next = candidates.find(c => c.id !== this.current.id);
+                // Nothing to do this tick (most directors self-throttle and
+                // return false between assessments). Fall back to the next
+                // candidate from the evaluation we already have instead of
+                // running a second full evaluate() (entity query + scans).
+                const next = this.evaluations.find(c => c.id !== cur.id);
                 if (next) {
                     this.current = {
                         id: next.id,
@@ -332,12 +350,12 @@ export class Arbiter {
                         reason: next.reason,
                         tags: next.tags
                     };
-                    return { code: REASON_CODES.RUNNING, reason: `Fallback to ${next.id}: ${next.reason}`, id: next.id };
+                    return { code: REASON_CODES.NO_TARGET, reason: `Fallback to ${next.id}: ${next.reason}`, id: next.id };
                 }
-                return { code: REASON_CODES.NO_TARGET, reason: `No handler for ${this.current.id}` };
+                return { code: REASON_CODES.NO_TARGET, reason: `No handler for ${cur.id}` };
             } else {
                 // Assume running
-                return { code: REASON_CODES.RUNNING, reason: this.current.reason, id: this.current.id };
+                return { code: REASON_CODES.RUNNING, reason: cur.reason, id: cur.id };
             }
         } catch (e) {
             console.warn("[Verdant] Arbiter tick failed "+e);

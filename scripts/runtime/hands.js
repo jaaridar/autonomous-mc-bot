@@ -1,5 +1,5 @@
 import { diggable } from "../core/policy.js";
-import { center } from "../core/math.js";
+import { center, add } from "../core/math.js";
 /** Blocks that are cheap to break again without gear, best first for sealing. */
 const SEAL_BLOCKS = [
     "minecraft:dirt",
@@ -95,9 +95,9 @@ export class Hands {
             if (options.sneak)
                 this.sim.isSneaking = true;
             this.sim.lookAtBlock(this.host.relative(center(anchor)));
-            return this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(anchor)), face)
-                ? "placed"
-                : "rejected";
+            const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(anchor)), face);
+            this.bag.invalidate?.();
+            return ok ? "placed" : "rejected";
         }
         catch {
             return "rejected";
@@ -108,9 +108,10 @@ export class Hands {
         const selected = this.bag.select(slot);
         try {
             this.sim.lookAtBlock(this.host.relative(center(ground)));
-            return this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(ground)))
-                ? "placed"
-                : "rejected";
+            const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(ground)));
+            this.bag.invalidate?.();
+            if (ok) this.terrain.invalidate?.(add(ground, { x: 0, y: 1, z: 0 }));
+            return ok ? "placed" : "rejected";
         }
         catch {
             return "rejected";

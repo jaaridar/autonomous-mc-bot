@@ -1,4 +1,4 @@
-import { ItemStack, EntityComponentTypes, } from "@minecraft/server";
+import { ItemStack, EntityComponentTypes, system, } from "@minecraft/server";
 import { counts } from "../core/recipes.js";
 import { FOOD, RAW_MEAT, RISKY_FOOD, toolTier } from "../core/policy.js";
 /** Building blocks usable for bridging, pillaring and blocking, best first. */
@@ -56,24 +56,111 @@ export function foodValue(stack) {
     }
     return { nutrition, always, risky: RISKY_FOOD.has(stack.typeId) };
 }
+/**
+ * Nutrition is a property of the item type, so it is looked up once per type
+ * instead of reading the food component of every slot on every tick.
+ */
+const FOOD_CACHE = new Map();
+export function foodValueCached(stack) {
+    const t = stack.typeId;
+    if (FOOD_CACHE.has(t))
+        return FOOD_CACHE.get(t);
+    const v = foodValue(stack);
+    if (FOOD_CACHE.size < 512)
+        FOOD_CACHE.set(t, v);
+    return v;
+}
+function gameTick() {
+    try {
+        const t = system.currentTick;
+        return typeof t === "number" ? t : NaN;
+    }
+    catch {
+        return NaN;
+    }
+}
+/**
+ * Inventory view with a per-tick slot snapshot.
+ *
+ * Every `get(i)` used to re-resolve the inventory component and every scan
+ * (counts, usableCounts, food, weapon, tool, find...) walked all 36 slots
+ * natively; think() alone did ~5 such scans per tick (~400 native calls).
+ * Now the container is resolved once per tick, the slots are read once per
+ * tick, and derived data (counts, durability) is memoised on that snapshot.
+ * Any write through this class invalidates it; callers that change the
+ * inventory behind its back (placing a block, eating) can call invalidate().
+ * With no numeric clock (offline tests) nothing is cached.
+ */
 export class Bag {
     constructor(player) {
         this.player = player;
+        this.clock = gameTick;
+        this._c = undefined;
+        this._cTick = NaN;
+        this._snap = undefined;
+    }
+    invalidate() {
+        this._snap = undefined;
     }
     get container() {
+        const t = this.clock();
+        if (this._c && t === this._cTick)
+            return this._c;
         const c = this.player.getComponent(EntityComponentTypes.Inventory)?.container;
         if (!c)
             throw Error("Inventory unavailable.");
+        this._c = c;
+        this._cTick = t;
         return c;
     }
+    /** Per-tick slot snapshot, or undefined when there is no usable clock. */
+    snapshot() {
+        const t = this.clock();
+        if (!Number.isFinite(t))
+            return undefined;
+        const s = this._snap;
+        if (s && s.tick === t)
+            return s;
+        const c = this.container;
+        const size = c.size;
+        const items = new Array(size);
+        for (let i = 0; i < size; i++)
+            items[i] = c.getItem(i);
+        return (this._snap = { tick: t, size, items, counts: undefined, dur: new Array(size) });
+    }
     get size() {
-        return this.container.size;
+        const s = this.snapshot();
+        return s ? s.size : this.container.size;
     }
     get(i) {
-        return this.container.getItem(i);
+        const s = this.snapshot();
+        return s ? s.items[i] : this.container.getItem(i);
     }
     set(i, item) {
         this.container.setItem(i, item);
+        this.invalidate();
+    }
+    /** Remaining durability of slot i (Infinity for items without durability). */
+    durabilityLeft(i) {
+        const s = this.snapshot();
+        let v = s ? s.dur[i] : undefined;
+        if (v === undefined) {
+            v = Infinity;
+            const item = s ? s.items[i] : this.get(i);
+            if (item) {
+                try {
+                    const d = item.getComponent("minecraft:durability");
+                    if (d)
+                        v = d.maxDurability - d.damage;
+                }
+                catch {
+                    /* no durability */
+                }
+            }
+            if (s)
+                s.dur[i] = v;
+        }
+        return v;
     }
     clone(item, amount) {
         const s = item.clone();
@@ -87,7 +174,14 @@ export class Bag {
         return a.isStackableWith(b);
     }
     counts() {
-        return counts(this);
+        const s = this.snapshot();
+        if (!s) {
+            const c = this.container;
+            return counts({ size: c.size, get: (i) => c.getItem(i) });
+        }
+        if (!s.counts)
+            s.counts = counts(this);
+        return { ...s.counts };
     }
     find(predicate) {
         for (let i = 0; i < this.size; i++) {
@@ -102,6 +196,7 @@ export class Bag {
             throw Error("Item unavailable.");
         if (slot > 8) {
             this.container.swapItems(slot, 8, this.container);
+            this.invalidate();
             slot = 8;
         }
         this.player.selectedSlotIndex = slot;
@@ -118,7 +213,7 @@ export class Bag {
             const s = this.get(i);
             if (!s)
                 continue;
-            const v = foodValue(s);
+            const v = foodValueCached(s);
             if (!v)
                 continue;
             if (v.risky && !desperate)
@@ -133,7 +228,7 @@ export class Bag {
     }
     /** Any edible item, including risky food, ignoring nutritional preference. */
     hasFood() {
-        return this.find((s) => !!foodValue(s)) >= 0;
+        return this.find((s) => !!foodValueCached(s)) >= 0;
     }
     /** First building block available for bridging/pillaring, or -1. */
     buildBlock() {
@@ -151,8 +246,9 @@ export class Bag {
             const s = this.get(i);
             if (!s)
                 continue;
-            const d = s.getComponent("minecraft:durability");
-            if (d && d.maxDurability - d.damage <= 2)
+            if (!s.typeId.endsWith("_sword") && !s.typeId.endsWith("_axe"))
+                continue;
+            if (this.durabilityLeft(i) <= 2)
                 continue;
             const t = toolTier(s.typeId);
             if (s.typeId.endsWith("_sword") && t > swordScore) {
@@ -176,21 +272,22 @@ export class Bag {
     }
     usableCounts() {
         const stock = this.counts();
-        for (let i = 0; i < this.size; i++) {
-            const s = this.get(i), d = s?.getComponent("minecraft:durability");
-            if (s && d && d.maxDurability - d.damage <= 2)
+        const size = this.size;
+        for (let i = 0; i < size; i++) {
+            const s = this.get(i);
+            if (s && this.durabilityLeft(i) <= 2)
                 stock[s.typeId] -= s.amount;
         }
         return stock;
     }
-    tool(kind, tier = 0) {
+    /** Best usable tool slot of `kind` at `tier`+, or -1. Never touches the hotbar. */
+    findTool(kind, tier = 0) {
         let best = -1, score = -1;
         for (let i = 0; i < this.size; i++) {
             const s = this.get(i);
             if (!s?.typeId.endsWith("_" + kind))
                 continue;
-            const d = s.getComponent("minecraft:durability");
-            if (d && d.maxDurability - d.damage <= 2)
+            if (this.durabilityLeft(i) <= 2)
                 continue;
             const t = toolTier(s.typeId);
             if (t >= tier && t > score) {
@@ -198,6 +295,13 @@ export class Bag {
                 best = i;
             }
         }
+        return best;
+    }
+    hasTool(kind, tier = 0) {
+        return this.findTool(kind, tier) >= 0;
+    }
+    tool(kind, tier = 0) {
+        const best = this.findTool(kind, tier);
         if (best < 0)
             return false;
         this.select(best);

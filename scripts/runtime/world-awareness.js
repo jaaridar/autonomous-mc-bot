@@ -7,6 +7,7 @@ import { floor, add, distance, key, UP, DOWN, CARDINAL, COMPASS } from "../core/
 import { scoreSurrounding, prioritizeGoal, bridgingPlan, parkourPlan, planDeathRecovery } from "../core/world-awareness.js";
 import { detectStructure, retainScore, isCritical, STRUCTURE_SIGS } from "../core/knowledge.js";
 import { isPassable } from "../core/blocks.js";
+import { RollingSweep } from "./world.js";
 
 export class WorldAwareness {
     constructor(bot) {
@@ -29,7 +30,11 @@ export class WorldAwareness {
         this.villageSpots = [];
 
         this.scanRadius = 24;
-        this.scanBudget = 512;
+        this.scanBudget = 400;
+        // One shared, amortised sweep (radius 20, y-6..+6, 400 cached reads per
+        // pass) feeds both this class and the StructureDetector.
+        this.sweep = new RollingSweep(20, -6, 6, this.scanBudget, 24);
+        this.acc = undefined;
     }
 
     reset() {
@@ -46,7 +51,7 @@ export class WorldAwareness {
     }
 
     tick(tick) {
-        if (tick - this.lastScan < 60) return; // scan every 3 sec
+        if (tick - this.lastScan < 30) return; // amortised sweep step every 1.5 sec
         this.lastScan = tick;
         this.scan(tick);
         // Try /locate when permitted every 10 sec
@@ -92,20 +97,16 @@ export class WorldAwareness {
             const hazards = [];
             // Check 5 blocks ahead in movement direction
             for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (let dy = -4; dy <= 2; dy++) {
-                const q = add(p, { x: dx, y: dy, z: dz });
-                const b = this.terrain.block(q);
-                if (!b) continue;
-                if (b.typeId.includes("lava")) hazards.push({ type: "lava", pos: q, distance: distance(q, this.sim.location) });
-                if (b.typeId.includes("water") && b.typeId.includes("flowing")) hazards.push({ type: "water_current", pos: q, distance: distance(q, this.sim.location) });
+                const q = { x: p.x + dx, y: p.y + dy, z: p.z + dz };
+                const c = this.terrain.read(q);
+                if (!c) continue;
+                const t = c.type;
+                if (t.includes("lava")) hazards.push({ type: "lava", pos: q, distance: distance(q, this.sim.location) });
+                if (t.includes("water") && t.includes("flowing")) hazards.push({ type: "water_current", pos: q, distance: distance(q, this.sim.location) });
                 // Cliff detection: air below 3 blocks
                 if (dy === -1) {
-                    const below1 = add(q, DOWN);
-                    const below2 = add(below1, DOWN);
-                    const below3 = add(below2, DOWN);
-                    const b1 = this.terrain.block(below1);
-                    const b2 = this.terrain.block(below2);
-                    const b3 = this.terrain.block(below3);
-                    if ((!b1 || b1.isAir) && (!b2 || b2.isAir) && (!b3 || b3.isAir)) {
+                    const air = (y) => { const b = this.terrain.read({ x: q.x, y, z: q.z }); return !b || b.isAir; };
+                    if (air(q.y - 1) && air(q.y - 2) && air(q.y - 3)) {
                         hazards.push({ type: "cliff", pos: q, distance: distance(q, this.sim.location) });
                     }
                 }
@@ -116,28 +117,25 @@ export class WorldAwareness {
 
     scan(tick) {
         const origin = floor(this.sim.location);
-        const blockCounts = {};
+        const here = this.sim.location;
+        const structures = this.bot.structures;
+        if (!this.acc || this.sweep.needsRestart(here)) {
+            this.acc = { blockCounts: {}, distanceMap: {}, blockPositions: {} };
+            try { structures?.beginSweep?.(origin, tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
+        const acc = this.acc;
+        const blockCounts = acc.blockCounts;
         const entityCounts = {};
-        const distanceMap = {};
-        const blockPositions = {}; // type -> nearest pos
 
-        // Scan blocks in radius
-        let scanned = 0;
-        for (let dx = -this.scanRadius; dx <= this.scanRadius; dx++) {
-            for (let dz = -this.scanRadius; dz <= this.scanRadius; dz++) {
-                if (dx*dx + dz*dz > this.scanRadius*this.scanRadius) continue;
-                for (let dy = -8; dy <= 8; dy++) {
-                    if (scanned++ > this.scanBudget) break;
-                    const p = add(origin, { x: dx, y: dy, z: dz });
-                    const b = this.terrain.block(p);
-                    if (!b || b.isAir) continue;
-                    const type = b.typeId;
+        this.sweep.step(this.terrain, here, (type, p) => {
+                    const distanceMap = acc.distanceMap, blockPositions = acc.blockPositions;
+                    try { structures?.acceptCell?.(type, p, tick); } catch { /* structure bookkeeping is best effort */ }
                     blockCounts[type] = (blockCounts[type] ?? 0) + 1;
                     if (distanceMap[type] === undefined) {
-                        distanceMap[type] = distance(p, this.sim.location);
+                        distanceMap[type] = distance(p, here);
                         blockPositions[type] = { ...p };
                     } else {
-                        const d = distance(p, this.sim.location);
+                        const d = distance(p, here);
                         if (d < distanceMap[type]) {
                             distanceMap[type] = d;
                             blockPositions[type] = { ...p };
@@ -171,13 +169,15 @@ export class WorldAwareness {
                             this.chestSpots.push({ ...p, tick, score: 85, type });
                             this.rememberSpot("chest", p, tick, 85);
                         }
+                        if (this.chestSpots.length > 40) this.chestSpots.shift();
                     }
                     if (type === "minecraft:obsidian" || type === "minecraft:crying_obsidian") {
                         this.rememberSpot("obsidian", p, tick, 95);
                     }
-                }
-            }
-        }
+        });
+        // Per-pass copies: entity distances must not leak into the sweep accumulator.
+        const distanceMap = { ...acc.distanceMap };
+        const blockPositions = { ...acc.blockPositions }; // type -> nearest pos
 
         // Scan entities
         try {

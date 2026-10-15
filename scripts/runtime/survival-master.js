@@ -60,8 +60,11 @@ export class SurvivalMaster {
                 needCover: context.needCover
             });
             if (caps.length > 1) {
-                this.bot.record(`Survival capabilities composed: ${caps.map(c=>c.capability+":"+c.priority).join(", ")} - handles mix of situations`);
-            }
+                const sig = caps.map(c=>c.capability+":"+c.priority).join(", ");
+                // Only journal changes: this fired every second and flushed the 64-entry log.
+                if (sig !== this._lastCapSig) this.bot.record(`Survival capabilities composed: ${sig} - handles mix of situations`);
+                this._lastCapSig = sig;
+            } else this._lastCapSig = "";
         } catch (e) { console.warn("[Verdant] capabilities compose "+e); }
 
         // Adaptive planning: recalculate on discovery
@@ -69,8 +72,9 @@ export class SurvivalMaster {
             const discovery = { type: context.scenarioType || "unknown", count: context.hostileCount, pos: context.pos };
             const recalc = shouldRecalculateAdaptive(discovery, { route: this.currentScenario?.name }, { phase: context.phase, foodLow: context.hunger <= 6 });
             if (recalc.should) {
-                this.bot.record(`Adaptive recalc: ${recalc.reason} priority ${recalc.priority}`);
-            }
+                if (recalc.reason !== this._lastRecalc) this.bot.record(`Adaptive recalc: ${recalc.reason} priority ${recalc.priority}`);
+                this._lastRecalc = recalc.reason;
+            } else this._lastRecalc = "";
         } catch (e) { console.warn("[Verdant] adaptive recalc "+e); }
 
         const detected = detectScenario(context);
@@ -128,7 +132,9 @@ export class SurvivalMaster {
         const hasWater = this.bag.find(s => s.typeId === "minecraft:water_bucket") >= 0;
         const hasBlocks = this.builder?.canBuild ?? false;
         const blockCount = this.builder?.countBlocks() ?? 0;
-        const hasPickaxe = this.bag.tool("pickaxe", 1) >= 0;
+        // hasTool() is read-only: tool() used to SELECT the pickaxe here every
+        // assessment (swapping hotbar slots mid-fight) and always returned >= 0.
+        const hasPickaxe = this.bag.hasTool("pickaxe", 1);
         const pickaxeDurabilityLow = this.isPickaxeLow();
         const inventoryFull = this.bag.container.emptySlotsCount < 2;
         const lowDurability = this.isAnyToolLow();
@@ -1425,18 +1431,18 @@ export class SurvivalMaster {
     }
 
     isForest(p) {
+        // Cached snapshot reads + early exit (was 847 live getBlock() calls every assessment).
         let logs = 0;
         for (let dx = -5; dx <=5; dx++) for (let dz=-5; dz<=5; dz++) for (let dy=-2; dy<=4; dy++) {
-            const b = this.terrain.block(add(p, { x:dx, y:dy, z:dz }));
-            if (b && b.typeId.includes("_log")) logs++;
+            const t = this.terrain.typeAt({ x: p.x + dx, y: p.y + dy, z: p.z + dz });
+            if (t && t.includes("_log") && ++logs >= 5) return true;
         }
-        return logs >= 5;
+        return false;
     }
 
     isRiverNearby(p) {
         for (let dx=-8; dx<=8; dx++) for (let dz=-8; dz<=8; dz++) {
-            const b = this.terrain.block(add(p, { x:dx, y:-1, z:dz }));
-            if (b && b.isLiquid && /water/.test(b.typeId)) return true;
+            if (this.terrain.waterAt({ x: p.x + dx, y: p.y - 1, z: p.z + dz })) return true;
         }
         return false;
     }
