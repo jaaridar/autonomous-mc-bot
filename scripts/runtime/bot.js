@@ -26,6 +26,7 @@ import { ResourceManager } from "./resource.js";
 import { SpeedrunDirector } from "./speedrun.js";
 import { WorldAwareness } from "./world-awareness.js";
 import { StructureDetector } from "./structures.js";
+import { SurvivalMaster } from "./survival-master.js";
 import { isPassable, isUnbreakable, isFalling } from "../core/blocks.js";
 import { needsQuickTool } from "../core/combat.js";
 import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../core/knowledge.js";
@@ -142,6 +143,7 @@ export class Bot {
         this.speedrun = new SpeedrunDirector(this);
         this.awareness = new WorldAwareness(this);
         this.structures = new StructureDetector(this);
+        this.survivalMaster = new SurvivalMaster(this);
         this.nav.builder = this.builder;
         // Enhanced mining state
         this.obstructionClear = undefined;
@@ -154,7 +156,7 @@ export class Bot {
         this.upskillPhase = "wood";
         this.retainCache = new Map();
         sim.addTag("verdant.bot");
-        this.record("spawned advanced bot v1.0 omni-aware");
+        this.record("spawned advanced bot v1.1 survival-master 80 scenarios");
     }
 
     owner() {
@@ -207,6 +209,7 @@ export class Bot {
         this.awareness?.reset();
         this.structures?.reset();
         this.parkour?.reset();
+        this.survivalMaster?.reset();
         this.blocked = undefined;
         this.recoveryAttempts = 0;
         this.mode = "idle";
@@ -307,6 +310,7 @@ export class Bot {
         this.awareness?.reset();
         this.structures?.reset();
         this.parkour?.reset();
+        this.survivalMaster?.reset();
         this.looting.reset();
         this.escapeAttempts = 0;
         this.fleeSince = 0;
@@ -492,6 +496,22 @@ export class Bot {
         if (this.state === "dead") { this.deadTick(tick); return; }
         if (!this.sim.isValid) return;
         try { this.lastKnown = { p: { ...this.sim.location }, dim: this.sim.dimension.id }; } catch {}
+        // Fall detection for survival master
+        try {
+            const curY = this.sim.location.y;
+            const onGround = this.sim.isOnGround;
+            if (!onGround && this.survivalMaster) {
+                if (this.survivalMaster.fallStartY === null || this.survivalMaster.fallStartY === undefined) {
+                    this.survivalMaster.fallStartY = curY;
+                    this.survivalMaster.lastFallTick = tick;
+                }
+            } else if (onGround && this.survivalMaster && this.survivalMaster.fallStartY !== null) {
+                // Landed, keep fallStartY for a bit to handle fall scenarios
+                if (tick - this.survivalMaster.lastFallTick > 60) {
+                    this.survivalMaster.fallStartY = null;
+                }
+            }
+        } catch {}
         try { this.think(tick); this.errors = 0; } catch (e) {
             this.errors++; this.record(`error:${String(e).slice(0, 200)}`); console.warn(`[Verdant] ${e}`);
             try { this.stopActions(); } catch {}
@@ -531,6 +551,11 @@ export class Bot {
                 this.equipment.faultReason = String(error); this.blockTask(this.equipment.faultReason, "manual");
             }
         }
+
+        // WORLD-CLASS SURVIVAL MASTER - handles all 80 scenarios first
+        try {
+            if (this.survivalMaster.tick(tick)) return;
+        } catch {}
 
         // QUICK TOOL PRIORITY #1 - NEVER FIGHT BARE HAND
         if (tick - this.lastQuickToolCheck > 40) {

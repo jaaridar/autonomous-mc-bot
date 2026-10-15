@@ -219,27 +219,53 @@ export class Navigator {
             const canSprint = hunger > 6 && hp > 6;
             const sprint = canSprint && (this.urgent || (this.fast && w.kind === "walk" && horizontal(this.sim.location, w) > 1));
 
-            // Handle special kinds
+            // Handle special kinds - world-class arbitrary bridging
             if (w.kind === "bridge") {
-                // Need to bridge
+                // Need to bridge - horizontal, diagonal, arbitrary
                 if (this.builder && this.builder.canBuild) {
                     const p = floor(this.sim.location);
-                    const dir = { x: Math.sign(w.x - p.x), y: 0, z: Math.sign(w.z - p.z) };
-                    const r = this.builder.bridge(dir, tick);
-                    if (r === "placed") {
-                        this.reason = "Bridging gap";
-                        // Wait for block to appear
+                    // Arbitrary direction: can be diagonal
+                    const dir = { x: Math.sign(w.x - p.x), y: Math.sign(w.y - p.y), z: Math.sign(w.z - p.z) };
+                    let r;
+                    if (dir.x !== 0 && dir.z !== 0) {
+                        // Diagonal bridging
+                        r = this.builder.bridgeDiagonal(dir, tick);
+                    } else {
+                        r = this.builder.bridge(dir, tick);
+                    }
+                    if (r === "placed" || r === "placed_support") {
+                        this.reason = `Bridging ${dir.x !== 0 && dir.z !== 0 ? "diagonal" : "horizontal"} gap`;
                         return "running";
                     } else if (r === "solid") {
                         // Already solid, continue
-                    } else {
-                        // Can't bridge, replan without bridge?
+                    } else if (r === "no-support" || r === "hazard_lava") {
+                        // Try alternative support
+                        const altSupport = this.builder.findSupportFor(add(p, dir));
+                        if (altSupport) {
+                            const r2 = this.builder.placeAt(add(p, dir), altSupport.pos, { sneak: true, autoAnchor: true });
+                            if (r2 === "placed") return "running";
+                        }
                         this.allowBridge = false;
+                        this.replan(tick);
+                        return "running";
+                    } else {
+                        // Can't bridge, replan
                         this.replan(tick);
                         return "running";
                     }
                 } else {
-                    return this.fail("Gap requires bridging but no blocks.");
+                    return this.fail("Gap requires bridging but no blocks - need dirt/cobble.");
+                }
+            }
+
+            // Pillar handling
+            if (w.kind === "pillar") {
+                if (this.builder && this.builder.canBuild) {
+                    const r = this.builder.pillar(tick);
+                    if (r === "placed" || r === "jumping") {
+                        this.reason = "Pillaring up";
+                        return "running";
+                    }
                 }
             }
 
