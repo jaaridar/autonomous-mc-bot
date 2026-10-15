@@ -93,7 +93,9 @@ export class SpeedrunDirector {
             this.lastProgress = tick;
         }
         if (tick - this.lastProgress > 12000) {
-            b.record("No progress for 10m in speedrun, resetting signature robustly"); b.lastProgress = tick; b.signature = ""; return;
+            b.record("No progress for 10m in speedrun, resetting progress tracking");
+            this.lastProgress = tick;
+            this.signature = "";
             return;
         }
 
@@ -378,7 +380,7 @@ export class SpeedrunDirector {
         const b = this.bot;
         const basePos = nearPos ?? floor(b.sim.location);
         // Verify obsidian count
-        const verification = verifyPortalAction("build_portal", counts["minecraft:obsidian"] ?? 0 >= 10 ? "completed" : "failed", counts);
+        const verification = verifyPortalAction("build_portal", (counts["minecraft:obsidian"] ?? 0) >= 10 ? "completed" : "failed", counts);
         if (!verification.success && verification.action === "gather_more_obsidian") {
             b.reason = `Speedrun: ${verification.reason} - have ${counts["minecraft:obsidian"] ?? 0}/10`;
             b.startMine("minecraft:obsidian", 10 - (counts["minecraft:obsidian"] ?? 0));

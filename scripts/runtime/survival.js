@@ -116,7 +116,10 @@ export class SurvivalDirector {
             this.lastProgress = tick;
         }
         if (tick - this.lastProgress > 12000) {
-            b.record("No inventory progress for 10m, resetting taskStart robustly"); b.taskStart = tick; b.lastProgress = tick; return;
+            b.record("No inventory progress for 10m, resetting taskStart and progress tracking");
+            b.taskStart = tick;
+            this.lastProgress = tick;
+            this.signature = "";
             return;
         }
         const hunger = b.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;

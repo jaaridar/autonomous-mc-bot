@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Verdant Bot 1.2.0 • Bedrock 1.21.114 • Nether Speedrun World-Class",
-    "description": "1.2.0 NETHER SPEEDRUN: Primary enter Nether quickly reliably without dying. New: core/nether-strategy ground/cave/ruined/gather scoring chooseNetherRoute verifyPortalAction shouldRecalculate, core/village-strategy village-first distance/loot/danger/time food efficiency hay/bread bed craft, core/golem-strategy GOLEM_STATS 100HP 14dmg 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, core/food-strategy FOOD_VALUES thresholds critical 6 low 14 safe 18 eatBeforeFight avoidCombat escape/cover/survival 10 mob tactics, core/bucket-strategy BUCKET_MILESTONE priority 95 water/lava obsidian portal 10-14, core/flint-steel-strategy ignition prefer before commit ruined loot fire_charge iron for both, core/adaptive-planning recalc on discovery essential vs optional avoid fights reassess safety blocks intelligently, runtime/nether decision orchestrator water placement lava manipulation obsidian portal ignition entry, runtime/village village-first hay beds wool craft, runtime/golem combat execution protected elevated avoid fall damage disengage bucket priority. Updated: bot.js think() food readiness adaptive recalc nether/village/golem, speedrun.js rewrite to use new core, world-awareness.js /locate attempt via runCommand, manifest 1.2.0. 55 modules.",
+    "name": "Verdant Bot 1.2.2 • Bedrock 1.21.114 • Nether Speedrun World-Class",
+    "description": "1.2.2 MINING STRATEGY: cuts safe hand tunnels to distant ores (never walks into rock), clears a front block only when a swing is actually absorbed (no more stopping mid-mine), re-issues absorbed tunnel digs, and skips unreachable vein blocks honestly with a bounded deadline. 1.2.1 ROBUST QUICK: cached block reads and precomputed scan offsets (extreme speed), cadenced per-tick directors, budgeted chest/village/structure/nether scans, no /locate commands, no auto-shutdown (retry + fault auto-resume), obstruction/body-collision workarounds, boat/bridge/swim follow travel, beacon matches manifest. 1.2.0 NETHER SPEEDRUN: Primary enter Nether quickly reliably without dying. New: core/nether-strategy ground/cave/ruined/gather scoring chooseNetherRoute verifyPortalAction shouldRecalculate, core/village-strategy village-first distance/loot/danger/time food efficiency hay/bread bed craft, core/golem-strategy GOLEM_STATS 100HP 14dmg 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, core/food-strategy FOOD_VALUES thresholds critical 6 low 14 safe 18 eatBeforeFight avoidCombat escape/cover/survival 10 mob tactics, core/bucket-strategy BUCKET_MILESTONE priority 95 water/lava obsidian portal 10-14, core/flint-steel-strategy ignition prefer before commit ruined loot fire_charge iron for both, core/adaptive-planning recalc on discovery essential vs optional avoid fights reassess safety blocks intelligently, runtime/nether decision orchestrator water placement lava manipulation obsidian portal ignition entry, runtime/village village-first hay beds wool craft, runtime/golem combat execution protected elevated avoid fall damage disengage bucket priority. Updated: bot.js think() food readiness adaptive recalc nether/village/golem, speedrun.js rewrite to use new core, world-awareness.js and village.js no longer fire /locate commands, manifest 1.2.2. 58 modules.",
     "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
     "version": [
       1,
       2,
-      0
+      2
     ],
     "min_engine_version": [
       1,
@@ -22,7 +22,7 @@
       "version": [
         1,
         2,
-        0
+        2
       ]
     },
     {
@@ -33,7 +33,7 @@
       "version": [
         1,
         2,
-        0
+        2
       ]
     }
   ],

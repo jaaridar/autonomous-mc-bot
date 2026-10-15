@@ -29,7 +29,7 @@ export class WorldAwareness {
         this.villageSpots = [];
 
         this.scanRadius = 24;
-        this.scanBudget = 800;
+        this.scanBudget = 512;
     }
 
     reset() {
@@ -58,26 +58,10 @@ export class WorldAwareness {
     }
 
     tryLocateStructures(tick) {
-        // Use /locate when permitted else legit detection
-        // Identify villages ruined portals lava pools caves ravines early
-        try {
-            const dim = this.sim.dimension;
-            if (!dim.runCommand) return;
-            // Try locate village, ruined portal, etc - best effort, ignore failures
-            const attempts = ["village", "ruined_portal", "lava_pool"];
-            for (const struct of attempts) {
-                try {
-                    const res = dim.runCommand(`locate structure ${struct}`);
-                    // Parse if possible - result format varies by version
-                    // For now just record that locate was attempted
-                    if (res.successCount > 0) {
-                        this.bot.record(`locate ${struct} attempted via /locate`);
-                    }
-                } catch {
-                    // Commands not permitted, fallback to environmental detection already done in scan
-                }
-            }
-        } catch {}
+        // The /locate command's output text is not readable from scripts, so this
+        // never produced coordinates - skipped entirely (it cost 3 commands every
+        // 10 seconds, including an invalid one, for zero information).
+        return;
     }
 
     trackExplored(tick) {

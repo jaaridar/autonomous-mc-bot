@@ -293,22 +293,8 @@ export class VillageDirector {
     }
 
     tryLocateVillage() {
-        // Try /locate command when available and permitted
-        try {
-            const dim = this.sim.dimension;
-            // In Bedrock, /locate village may work if cheats enabled
-            const result = dim.runCommand("locate structure village");
-            // Parse result - format varies, but try to get coordinates
-            // This is best-effort, if fails fallback to environmental
-            if (result.successCount > 0) {
-                // Try to extract coordinates from result - depends on version
-                // For now, return null to use environmental detection
-                // Actual implementation would parse result message
-                return null;
-            }
-        } catch {
-            // Commands not available or not permitted, use environmental exploration
-        }
+        // The /locate result text is not exposed to scripts, so parsing it never
+        // worked - skip the command entirely (it ran on every village scan).
         return null;
     }
 
