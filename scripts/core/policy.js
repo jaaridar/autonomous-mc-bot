@@ -217,6 +217,10 @@ for (const [block, drops] of [
         tier: 0,
     };
 }
+// Speedrun/nether essentials: any-wood pseudo block, gravel (flint source for ignition), obsidian (portal frame)
+MINE["#logs"] = { drops: "#logs", tool: "axe", tier: 0 };
+MINE["minecraft:gravel"] = { drops: "minecraft:gravel", tool: "shovel", tier: 0 };
+MINE["minecraft:obsidian"] = { drops: "minecraft:obsidian", tool: "pickaxe", tier: 4 };
 for (const [block, drops, tier] of [
     ["stone", "cobblestone", 1],
     ["cobblestone", "cobblestone", 1],

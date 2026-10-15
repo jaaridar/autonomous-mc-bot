@@ -43,6 +43,11 @@ export class NetherDirector {
     }
 
     tick(tick) {
+        // Never interfere with an active mining task (director mining runs centrally).
+        if (this.bot.mining) return false;
+        // In speedrun mode, nether prep waits for the iron tier: the speedrun
+        // director owns wood -> stone -> iron (PHASES.IRON = 2).
+        if (this.bot.mode === "speedrun" && (this.bot.speedrun?.phase ?? 0) < 2) return false;
         if (tick - this.lastEval < 40) return false;
         this.lastEval = tick;
 
@@ -65,7 +70,7 @@ export class NetherDirector {
                     const r = this.bot.navTo(center(ironSpot.pos), tick, 2);
                     if (r !== "failed") return true;
                 }
-                this.bot.startMine("minecraft:iron_ore", bucketEval.ironNeeded);
+                this.bot.assignMine("minecraft:iron_ore", bucketEval.ironNeeded);
                 return true;
             }
         }
@@ -96,10 +101,10 @@ export class NetherDirector {
                 } else if (ignitionEval.action === "craft_flint_and_steel") {
                     try { this.bot.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else if (ignitionEval.action === "mine_gravel" || ignitionEval.action === "find_gravel") {
-                    this.bot.startMine("minecraft:gravel", 5);
+                    this.bot.assignMine("minecraft:gravel", 5);
                     return true;
                 } else if (ignitionEval.action === "gather_iron") {
-                    this.bot.startMine("minecraft:iron_ore", 3);
+                    this.bot.assignMine("minecraft:iron_ore", 3);
                     return true;
                 }
             }
@@ -161,7 +166,7 @@ export class NetherDirector {
         const ruinedPortal = this.bot.structures?.found?.find(f => f.name === "ruined_portal");
         const topStruct = this.bot.structures?.getTopPriority();
 
-        const phase = this.bot.speedrun?.phase ?? 0;
+        const phase = this.bot.speedrun?.phaseName?.() ?? "wood";
 
         return {
             hasBucket,
@@ -312,7 +317,7 @@ export class NetherDirector {
             // Check for obsidian nearby
             const obsidianNear = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:obsidian", 200);
             if (obsidianNear.length && (counts["minecraft:obsidian"] ?? 0) < 10) {
-                this.bot.startMine("minecraft:obsidian", 10 - (counts["minecraft:obsidian"] ?? 0));
+                this.bot.assignMine("minecraft:obsidian", 10 - (counts["minecraft:obsidian"] ?? 0));
                 this.bot.reason = `Nether: obsidian nearby ${obsidianNear.length} blocks, mining for portal`;
                 return true;
             }
@@ -379,7 +384,7 @@ export class NetherDirector {
 
         if ((counts["minecraft:obsidian"] ?? 0) < evaluation.missingObsidian) {
             // Need more obsidian
-            this.bot.startMine("minecraft:obsidian", evaluation.missingObsidian);
+            this.bot.assignMine("minecraft:obsidian", evaluation.missingObsidian);
             this.bot.reason = `Nether: ruined portal needs ${evaluation.missingObsidian} obsidian, have ${counts["minecraft:obsidian"] ?? 0}, gathering`;
             return true;
         }
@@ -395,27 +400,21 @@ export class NetherDirector {
     handleGatherIgnition(evaluation, tick, counts, context) {
         const req = evaluation.requirements;
         if (req.needFlint) {
-            if ((counts["minecraft:gravel"] ?? 0) > 0) {
-                // Mine gravel for flint
-                this.bot.startMine("minecraft:gravel", 5);
-                this.bot.reason = "Nether: need flint from gravel, mining gravel 10% drop rate";
-                return true;
-            } else {
-                // Find gravel
-                const gravelPos = this.findGravelNearby(24);
-                if (gravelPos) {
-                    const r = this.bot.navTo(center(gravelPos), tick, 2);
-                    if (r !== "failed") {
-                        this.bot.reason = `Nether: need flint, gravel nearby at ${gravelPos.x},${gravelPos.y},${gravelPos.z}`;
-                        return true;
-                    }
+            // Walk to visible gravel when it is not in reach, then mine it for the flint drop.
+            const gravelPos = this.findGravelNearby(24);
+            if (gravelPos && distance(gravelPos, this.sim.location) > 4) {
+                const r = this.bot.navTo(center(gravelPos), tick, 2);
+                if (r !== "failed") {
+                    this.bot.reason = `Nether: need flint, gravel at ${gravelPos.x},${gravelPos.y},${gravelPos.z} - walking there to mine`;
+                    return true;
                 }
-                this.bot.startMine("minecraft:gravel", 5);
-                return true;
             }
+            this.bot.assignMine("minecraft:gravel", 5);
+            this.bot.reason = "Nether: mining gravel for flint 10% drop rate";
+            return true;
         }
         if (req.needIron) {
-            this.bot.startMine("minecraft:iron_ore", 2);
+            this.bot.assignMine("minecraft:iron_ore", 2);
             this.bot.reason = "Nether: need iron for flint and steel";
             return true;
         }

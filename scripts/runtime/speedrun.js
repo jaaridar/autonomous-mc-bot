@@ -67,9 +67,13 @@ export class SpeedrunDirector {
         this.verified.clear();
     }
 
+    phaseName() {
+        return (Object.keys(PHASES).find((k) => PHASES[k] === this.phase) ?? "WOOD").toLowerCase();
+    }
+
     status() {
         return {
-            phase: Object.keys(PHASES).find(k => PHASES[k] === this.phase),
+            phase: this.phaseName(),
             stage: this.stage,
             subPhase: this.subPhase,
             goal: this.goal,
@@ -110,7 +114,7 @@ export class SpeedrunDirector {
             const discovery = this.checkNewDiscoveries(tick);
             if (discovery && this.currentRoute) {
                 try {
-                    if (shouldRecalculate(discovery, this.currentRoute, { phase: this.phase })) {
+                    if (shouldRecalculate(discovery, this.currentRoute, { phase: this.phaseName() })) {
                         this.adaptiveRecalcCount++;
                         b.record(`speedrun adaptive recalc #${this.adaptiveRecalcCount}: ${discovery.type} - ${discovery.reason}`);
                         this.currentRoute = null; // force re-eval
@@ -120,7 +124,7 @@ export class SpeedrunDirector {
         }
 
         // FIX: Nether entry decision system - delegate to NetherDirector to avoid duplicate planners
-        if (this.phase >= PHASES.STONE && this.bot.nether) {
+        if (this.phase >= PHASES.IRON && this.bot.nether) {
             // If nether director already has a route, let it handle
             if (this.bot.nether.tick(tick)) {
                 this.currentRoute = this.bot.nether.currentRoute;
@@ -134,7 +138,7 @@ export class SpeedrunDirector {
                     if (handled) return;
                 }
             }
-        } else if (this.phase >= PHASES.STONE) {
+        } else if (this.phase >= PHASES.IRON) {
             const netherDecision = this.evaluateNetherRoutes(tick, counts);
             if (netherDecision && netherDecision.route) {
                 this.currentRoute = netherDecision.evaluation;
@@ -297,7 +301,7 @@ export class SpeedrunDirector {
             hasRuinedPortal: !!b.structures?.found?.find(f => f.name === "ruined_portal"),
             hasGravelNearby: this.checkGravelNearby(16),
             distanceToGravel: this.findGravelDistance(24) ?? 50,
-            phase: this.phase,
+            phase: this.phaseName(),
             time: this.getTimeOfDay(),
             hostileCount,
             netherRoute: this.currentRoute,
@@ -319,7 +323,7 @@ export class SpeedrunDirector {
                 } else if (bucketEval.needSmelt) {
                     try { b.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else {
-                    b.startMine("minecraft:iron_ore", bucketEval.ironNeeded);
+                    b.assignMine("minecraft:iron_ore", bucketEval.ironNeeded);
                     return true;
                 }
             }
@@ -342,10 +346,10 @@ export class SpeedrunDirector {
                 if (ignitionEval.action === "craft_flint_and_steel") {
                     try { b.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else if (ignitionEval.action.includes("gravel")) {
-                    b.startMine("minecraft:gravel", 5);
+                    b.assignMine("minecraft:gravel", 5);
                     return true;
                 } else if (ignitionEval.action === "gather_iron") {
-                    b.startMine("minecraft:iron_ore", 3);
+                    b.assignMine("minecraft:iron_ore", 3);
                     return true;
                 }
             }
@@ -362,7 +366,7 @@ export class SpeedrunDirector {
             }
             // At ruined portal, need to repair
             if ((counts["minecraft:obsidian"] ?? 0) < decision.evaluation.missingObsidian) {
-                b.startMine("minecraft:obsidian", decision.evaluation.missingObsidian);
+                b.assignMine("minecraft:obsidian", decision.evaluation.missingObsidian);
                 return true;
             }
         }
@@ -403,7 +407,7 @@ export class SpeedrunDirector {
         const verification = verifyPortalAction("build_portal", (counts["minecraft:obsidian"] ?? 0) >= 10 ? "completed" : "failed", counts);
         if (!verification.success && verification.action === "gather_more_obsidian") {
             b.reason = `Speedrun: ${verification.reason} - have ${counts["minecraft:obsidian"] ?? 0}/10`;
-            b.startMine("minecraft:obsidian", 10 - (counts["minecraft:obsidian"] ?? 0));
+            b.assignMine("minecraft:obsidian", 10 - (counts["minecraft:obsidian"] ?? 0));
             return true;
         }
 
@@ -552,12 +556,12 @@ export class SpeedrunDirector {
                     const anyWood = b.terrain.scanOres(b.sim.location, 16, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem") || type === "minecraft:bamboo" || type === "minecraft:deadbush" || type === "minecraft:dead_bush" || type === "minecraft:cactus", 400);
                     if (anyWood.length > 0) {
                         const t = b.terrain.block(anyWood[0])?.typeId ?? "#logs";
-                        b.startMine(t, 3);
+                        b.assignMine(t, 3);
                     } else {
-                        b.startMine("#logs", 3);
+                        b.assignMine("#logs", 3);
                     }
                 } catch {
-                    b.startMine("#logs", 3);
+                    b.assignMine("#logs", 3);
                 }
             }
             return;
@@ -595,12 +599,12 @@ export class SpeedrunDirector {
                     const anyWood = b.terrain.scanOres(b.sim.location, 20, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem"), 500);
                     if (anyWood.length > 0) {
                         const t = b.terrain.block(anyWood[0])?.typeId ?? "#logs";
-                        b.startMine(t, 8);
+                        b.assignMine(t, 8);
                     } else {
-                        b.startMine("#logs", 8);
+                        b.assignMine("#logs", 8);
                     }
                 } catch {
-                    b.startMine("#logs", 8);
+                    b.assignMine("#logs", 8);
                 }
             }
             return;
@@ -627,7 +631,7 @@ export class SpeedrunDirector {
         if ((counts["minecraft:cobblestone"] ?? 0) < 20) {
             b.reason = "Speedrun: mining cobblestone for stone tools + furnace, essential resource correct order";
             if (!b.mining || !b.mining.bulk) {
-                b.startMine("minecraft:cobblestone", 20);
+                b.assignMine("minecraft:cobblestone", 20);
             }
             return;
         }
@@ -652,7 +656,7 @@ export class SpeedrunDirector {
             const reserves = assessFoodReserves(counts, { hunger: 20, health: 20 });
             if (reserves.status === "low" && !b.village?.findNearestVillage?.(32)) {
                 b.reason = `Speedrun: food low ${reserves.totalHunger}, gather before iron - maintain sufficient for exploration sprinting combat emergency recovery`;
-                b.startMine("minecraft:bread", 3);
+                b.obtain("minecraft:bread", 3, tick);
                 return;
             }
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
@@ -666,7 +670,7 @@ export class SpeedrunDirector {
             if (ironSpot && (counts["minecraft:raw_iron"] ?? 0) < 8 && distance(ironSpot.pos, b.sim.location) < 20) {
                 b.reason = `Speedrun: iron ore remembered at ${ironSpot.pos.x},${ironSpot.pos.y},${ironSpot.pos.z} - mining, track coords explored locations known lava pools safe routes`;
                 if (!b.mining || b.mining.block !== "minecraft:iron_ore") {
-                    b.startMine("minecraft:iron_ore", 8);
+                    b.assignMine("minecraft:iron_ore", 8);
                 }
                 return;
             }
@@ -681,7 +685,7 @@ export class SpeedrunDirector {
             } else if (bucketEval.needSmelt) {
                 try { b.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else {
-                b.startMine("minecraft:iron_ore", bucketEval.ironNeeded);
+                b.assignMine("minecraft:iron_ore", bucketEval.ironNeeded);
                 return;
             }
         }
@@ -691,11 +695,11 @@ export class SpeedrunDirector {
             if (b.settings.deepMining) {
                 b.reason = "Speedrun: deep mining iron for upskilling, gather only required for current stage while collecting useful extras when convenient";
                 if (!b.mining || b.mining.deepItem !== "minecraft:raw_iron") {
-                    b.startMine("minecraft:iron_ore", Math.max(needIron, 6));
+                    b.assignMine("minecraft:iron_ore", Math.max(needIron, 6));
                 }
             } else {
                 b.reason = "Speedrun: searching iron for upskilling";
-                b.startMine("minecraft:iron_ore", needIron);
+                b.assignMine("minecraft:iron_ore", needIron);
             }
             return;
         }
@@ -751,7 +755,7 @@ export class SpeedrunDirector {
             if (diamondSpot && (counts["minecraft:diamond"] ?? 0) < 5 && distance(diamondSpot.pos, b.sim.location) < 24) {
                 b.reason = `Speedrun: diamond remembered at ${diamondSpot.pos.x},${diamondSpot.pos.y},${diamondSpot.pos.z}`;
                 if (!b.mining || b.mining.deepItem !== "minecraft:diamond") {
-                    b.startMine("minecraft:diamond_ore", 5);
+                    b.assignMine("minecraft:diamond_ore", 5);
                 }
                 return;
             }
@@ -760,7 +764,7 @@ export class SpeedrunDirector {
         if ((counts["minecraft:diamond"] ?? 0) < 5) {
             b.reason = "Speedrun: deep mining diamonds for upskilling to portal, but Nether entry main goal";
             if (!b.mining || b.mining.deepItem !== "minecraft:diamond") {
-                b.startMine("minecraft:diamond_ore", 5);
+                b.assignMine("minecraft:diamond_ore", 5);
             }
             return;
         }
@@ -815,7 +819,7 @@ export class SpeedrunDirector {
                         if (hasWaterBucket) {
                             const obsidianNear = b.terrain.scanOres(b.sim.location, 8, (type) => type === "minecraft:obsidian", 200);
                             if (obsidianNear.length) {
-                                b.startMine("minecraft:obsidian", 10 - obsidianHave);
+                                b.assignMine("minecraft:obsidian", 10 - obsidianHave);
                                 return;
                             } else {
                                 b.reason = "Speedrun: placing water on lava to make obsidian - water + lava source = obsidian";
@@ -839,7 +843,7 @@ export class SpeedrunDirector {
             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
             b.reason = `Speedrun: gathering obsidian ${obsidianHave}/10 - ${obsidianVerify.reason}, fastest viable method`;
-            b.startMine("minecraft:obsidian", 10 - obsidianHave);
+            b.assignMine("minecraft:obsidian", 10 - obsidianHave);
             return;
         }
 
@@ -855,17 +859,17 @@ export class SpeedrunDirector {
                     b.obtain("minecraft:flint_and_steel", 1, tick);
                     return;
                 } else if (ignitionEval.action === "mine_gravel" || ignitionEval.action === "find_gravel") {
-                    b.startMine("minecraft:gravel", 5);
+                    b.assignMine("minecraft:gravel", 5);
                     return;
                 } else if (ignitionEval.action === "gather_iron") {
                     // Ensure enough iron remains for flint and steel after bucket unless other ignition available
                     const ironCheck = ensureIronForBothBucketAndFlintSteel(counts, ignitionContext);
                     if (!ironCheck.enough) {
                         b.reason = `Speedrun: ${ironCheck.reason} - need ${ironCheck.need} more iron`;
-                        b.startMine("minecraft:iron_ore", ironCheck.need);
+                        b.assignMine("minecraft:iron_ore", ironCheck.need);
                         return;
                     }
-                    b.startMine("minecraft:iron_ore", 2);
+                    b.assignMine("minecraft:iron_ore", 2);
                     return;
                 }
             }
@@ -873,7 +877,7 @@ export class SpeedrunDirector {
 
         if (!(counts["minecraft:flint_and_steel"] > 0) && !(counts["minecraft:fire_charge"] > 0)) {
             b.reason = "Speedrun: need flint for portal - locate gravel obtain using appropriate mining";
-            b.startMine("minecraft:gravel", 3);
+            b.assignMine("minecraft:gravel", 3);
             return;
         }
         if (!(counts["minecraft:flint_and_steel"] > 0) && (counts["minecraft:flint"] ?? 0) > 0) {

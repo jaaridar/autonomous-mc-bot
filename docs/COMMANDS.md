@@ -32,13 +32,13 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 | `!bot deepmine <ore> [1..64]` | Explicit deep mining: shaft to best Y (diamond -59, iron 16, etc), branch pattern with optimal spacing, vein clustering via flood-fill, torching, then ascend same route. |
 | `!bot craft <item> [1..64]` | Manual craft through recipe adapter. Requires `config crafting on`. |
 | `!bot starter` | Milestone run: stone pickaxe -> stone sword -> furnace. Spawn runs this automatically for unequipped bot, then auto survival. |
-| `!bot auto` | Survival supervisor: food, defence, tools, furnace, iron gear, armour, torches, opportunistic diamonds, village looting, sheep hunting. Requires `config crafting on`. |
-| `!bot speedrun` | **NEW** End-to-end speedrun director: wood (8 logs) -> table -> wooden pick -> cobble 20 -> stone tools -> furnace -> torch -> iron (branch mine 12) -> bucket -> diamond (branch mine 5) -> obsidian 10 -> portal. Uses deepMiner, builder, combat, looting, parkour. |
+| `!bot auto` | Survival supervisor: food, defence, tools, furnace, iron gear, armour, torches, opportunistic diamonds, village looting, sheep hunting. Auto-enables assisted crafting if it is off. |
+| `!bot speedrun` | End-to-end speedrun director: wood (any 8 logs) -> table -> wooden tools -> cobble 20 -> stone tools -> furnace -> torch -> iron -> bucket -> diamond pick -> obsidian 10 (water+lava cast) -> flint&steel -> Nether. Auto-enables crafting and speedrun routing if off. Nether prep waits for the iron tier; directors keep their mode while mining. |
 | `!bot recover` | Walks to recorded death point (up to 256 blocks) and sweeps drops within 12 blocks. Threats interrupt; full inventory stops cleanly. |
 | `!bot collect [6..32]` | Sweeps loose `minecraft:item` drops in radius (default 12) around bot's current spot, reports real inventory delta. Idle bot also auto-picks up within 8 blocks. |
 | `!bot golem` | Iron golem engagement: hit then step out of reach until swing stops, breaks off when hurt, sweeps iron drop. |
 | `!bot hold` | Freezes current task in place (still defends itself). |
-| `!bot stop` | Stops everything; pending task discarded. If camp sealed, resuming opens it first. |
+| `!bot stop` | Stops everything; pending task discarded (bot then guards nearby - use `pause` to hold a task). If camp sealed, resuming opens it first. |
 | `!bot pause` / `!bot resume` | Pause keeps task; resume continues. |
 | `!bot status` | Full status: state, mode, **mission**, HP, threat, position, settings, navigation stats (segments, expansions, blockReads), autonomy phase, speedrun phase, deepMining phase, looting trips, builder status, task block reason. |
 | `!bot mission` | One line: exactly what bot is doing now (also attached to problem messages). |

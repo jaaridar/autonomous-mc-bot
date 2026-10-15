@@ -34,6 +34,8 @@ export class BucketDirector {
     }
 
     tick(tick) {
+        // Never interfere with an active mining task (director mining runs centrally).
+        if (this.bot.mining) return false;
         if (tick - this.lastEval < 60) return false;
         this.lastEval = tick;
 
@@ -54,7 +56,7 @@ export class BucketDirector {
                     const r = this.bot.navTo(center(ironSpot.pos), tick, 2);
                     if (r !== "failed") return true;
                 }
-                this.bot.startMine("minecraft:iron_ore", bucketEval.ironNeeded);
+                this.bot.assignMine("minecraft:iron_ore", bucketEval.ironNeeded);
                 return true;
             }
         }

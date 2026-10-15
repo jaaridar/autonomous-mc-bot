@@ -791,7 +791,7 @@ export class SurvivalMaster {
 
     handleNoWoodLowHungerSunset(ctx, tick) {
         if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0) < 3) {
-            this.bot.startMine("#logs", 5) // any wood acceptable - fixed
+            this.bot.assignMine("#logs", 5) // any wood acceptable - fixed
             this.bot.reason = "Resource 31: no wood low hunger sunset - prioritize safe wood collection";
             return true;
         }
@@ -931,7 +931,7 @@ export class SurvivalMaster {
 
     handleWoolNoWoodForBed(ctx, tick) {
         if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0) < 3) {
-            this.bot.startMine("#logs", 3) // any wood acceptable - fixed
+            this.bot.assignMine("#logs", 3) // any wood acceptable - fixed
             this.bot.reason = "Resource 42: wool no wood for bed - searching wood";
             return true;
         }
@@ -967,7 +967,7 @@ export class SurvivalMaster {
         }
         // Gather blocks if safe
         if (ctx.threats.length === 0) {
-            this.bot.startMine("minecraft:dirt", 10);
+            this.bot.assignMine("minecraft:dirt", 10);
             return true;
         }
         return false;

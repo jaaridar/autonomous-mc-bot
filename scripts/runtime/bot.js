@@ -72,7 +72,7 @@ const VALUABLE = /^minecraft:(diamond|emerald|netherite|.*_ingot|.*enchanted_boo
 const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
 const ANY_WOOD_DROPS = /(_log|_planks|stick|bamboo)/;
 function isAnyWood(type) { return ANY_WOOD.test(type); }
-function isWoodRequest(block) { return block && (block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
+function isWoodRequest(block) { return block && (block === "#logs" || block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
 export class Bot {
     constructor(sim, ownerName, host, memory) {
@@ -429,6 +429,18 @@ export class Bot {
     startMine(block, amount) {
         if (!MINE[block]) throw Error("Unsupported block; see !bot help and docs/COMMANDS.md.");
         this.setMode("mine");
+        this.mineRequest = { block, count: amount };
+        this.mining = this.newMining(amount, block);
+    }
+    /**
+     * Director-style mining: assign a task without leaving the current mode.
+     * The main tick drives it centrally and the owning director (speedrun,
+     * nether, bucket, survival-master) resumes the moment the quota is done.
+     * Never clobbers a task that is already running.
+     */
+    assignMine(block, amount) {
+        if (!MINE[block]) throw Error("Unsupported block; see !bot help and docs/COMMANDS.md.");
+        if (this.mining) return;
         this.mineRequest = { block, count: amount };
         this.mining = this.newMining(amount, block);
     }
@@ -923,7 +935,7 @@ export class Bot {
 
         // BUCKET ACQUISITION & NETHER PREPARATION
         try {
-            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter") && this.bucket && this.bucket.tick(tick)) return;
+            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter") && !this.mining && this.bucket && this.bucket.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
         // Structure loot main priority if found - interrupt current task if high priority
@@ -1044,6 +1056,19 @@ export class Bot {
         // FIX: looting single implementation via arbiter, not 3 times
         // maybeLoot removed - Looting director handles all
         if (this.boatTravel(tick)) return;
+        // DIRECTOR MINING: a task assigned via assignMine() is driven here, in place,
+        // so director modes (speedrun/nether/bucket/survival-master) keep their state
+        // and resume as soon as the quota is complete. startMine() keeps the command
+        // semantics (mode "mine" + stop when finished).
+        if (this.mining && this.mode !== "mine") {
+            try {
+                if (this.mine(this.mining, tick)) {
+                    this.mining = undefined;
+                    this.reason = "Mining quota complete, continuing.";
+                }
+            } catch (error) { this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual"); }
+            return;
+        }
         try {
             switch (this.mode) {
                 case "idle": this.idle(tick); break;
@@ -1061,14 +1086,10 @@ export class Bot {
                     break;
                 case "mine":
                     if (this.mining && this.mine(this.mining, tick)) {
-                        // Don't pause if in auto chain? For mine command, pause is okay but with message to continue
-                        if (this.settings.speedrun || this.mode === "survival" || this.mode === "starter") {
-                            this.mining = undefined;
-                            this.reason = "Mining quota complete, continuing.";
-                        } else {
-                            this.stop("Mining quota complete (blocks broken, drops collected).");
-                            this.tell(this.reason);
-                        }
+                        // Command mining (!bot mine/deepmine): finish, then hold position.
+                        // Directors use assignMine() instead and never enter this mode.
+                        this.stop("Mining quota complete (blocks broken, drops collected).");
+                        this.tell(this.reason);
                     }
                     break;
                 case "survival": this.autonomy.tick(tick); break;
@@ -1688,7 +1709,7 @@ export class Bot {
                     }
                 } catch (_e) { this.fault(_e); }
             }
-            if ((this.mode === "survival" || this.mode === "starter" || this.mode === "mine") && m.failures < 40) {
+            if ((this.mode === "survival" || this.mode === "starter" || this.mode === "mine" || this.mode === "speedrun") && m.failures < 40) {
                 m.failures = (m.failures ?? 0) + 1;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
                 try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }

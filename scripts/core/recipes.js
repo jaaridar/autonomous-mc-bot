@@ -134,6 +134,11 @@ export const RECIPES = [
     recipe("iron_leggings", 1, { iron_ingot: 7 }, true),
     recipe("iron_helmet", 1, { iron_ingot: 5 }, true),
     recipe("iron_boots", 1, { iron_ingot: 4 }, true),
+    // Nether route essentials: bucket, ignition, shield, food
+    recipe("bucket", 1, { iron_ingot: 3 }, true),
+    recipe("flint_and_steel", 1, { iron_ingot: 1, flint: 1 }),
+    recipe("shield", 1, { "#planks": 6, iron_ingot: 1 }, true),
+    recipe("bread", 1, { wheat: 3 }, true),
 ];
 export function counts(inv) {
     const out = {};
