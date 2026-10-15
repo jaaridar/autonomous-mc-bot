@@ -78,7 +78,7 @@ export class StructureDetector {
         const obsidianPositions = [];
         const scanR = 20;
 
-        let budget = 600;
+        let budget = 400;
         for (let dx = -scanR; dx <= scanR && budget > 0; dx++) {
             for (let dz = -scanR; dz <= scanR && budget > 0; dz++) {
                 if (dx*dx + dz*dz > scanR*scanR) continue;

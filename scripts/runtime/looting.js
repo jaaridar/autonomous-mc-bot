@@ -32,6 +32,10 @@ export class Looting {
         this.lastScan = tick;
         const base = floor(this.sim.location);
         const found = [];
+        // Near-field full coverage: the 600-check budget is consumed from one corner
+        // of the sweep, so a large radius leaves most of the ring permanently
+        // unscanned (blind wedge). Radius 8 + step 2 fits the whole budget.
+        radius = Math.min(radius, 8);
         // ROBUST QUICK: budgeted scan max 600 checks per tick to avoid extreme slow
         let checks = 0;
         const maxChecks = 600;

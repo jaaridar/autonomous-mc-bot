@@ -482,7 +482,7 @@ export class Bot {
             if (r === "surface") {
                 const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
                 this.miner.reset();
-                if (why) { this.blockTask(why + " Climbed out; resume to try a new shaft.", "manual"); return "blocked"; }
+                if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
                 return "done";
             }
             if (r === "stalled") { this.record("Miner stalled: " + this.miner.reason + ", retrying"); this.miner.reset(); return "done"; }
@@ -616,6 +616,17 @@ export class Bot {
             }
         }
 
+        // Cached threatInfo for this tick. Declared before first use: referencing
+        // it earlier in the temporal dead zone threw a ReferenceError that was
+        // swallowed by the catch and silently disabled the danger fast-path.
+        let cachedThreatInfo = null;
+        const getCachedThreat = () => {
+            if (!cachedThreatInfo) {
+                try { cachedThreatInfo = this.terrain.threatInfo(this.sim, owner); } catch { cachedThreatInfo = { list: [], count: 0, nearest: null, closest: Infinity, ranged:0, explosive:0, melee:0, bombNear:false, underFire:false }; }
+            }
+            return cachedThreatInfo;
+        };
+
         // WORLD-CLASS SURVIVAL MASTER - handles all 80 scenarios first - ROBUST QUICK: tick every 10 ticks unless danger
         try {
             const shouldTickSurvival = (tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || (this.survivalMaster.fallStartY !== null);
@@ -677,14 +688,7 @@ export class Bot {
             } catch {}
         }
 
-        // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING - ROBUST QUICK: cache threatInfo to avoid double entity scan
-        let cachedThreatInfo = null;
-        const getCachedThreat = () => {
-            if (!cachedThreatInfo) {
-                try { cachedThreatInfo = this.terrain.threatInfo(this.sim, owner); } catch { cachedThreatInfo = { list: [], count: 0, nearest: null, closest: Infinity, ranged:0, explosive:0, melee:0, bombNear:false, underFire:false }; }
-            }
-            return cachedThreatInfo;
-        };
+        // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING
         try {
             const counts = this.bag.counts();
             const curHealth = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 20;
@@ -812,9 +816,10 @@ export class Bot {
             if (this.settings.defend && this.golem && this.golem.tick(tick)) return;
         } catch {}
 
-        // FOOD HEALING COMBAT READINESS
+        // FOOD HEALING COMBAT READINESS (10-tick cadence; it counted the whole
+        // inventory and read components on every single tick before)
         try {
-            if (this.food && this.food.tick(tick)) return;
+            if (this.food && tick % 10 === 0 && this.food.tick(tick)) return;
         } catch {}
 
         // BUCKET ACQUISITION & NETHER PREPARATION
