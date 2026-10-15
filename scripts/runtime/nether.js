@@ -173,7 +173,6 @@ export class NetherDirector {
         const lavaPool = this.bot.awareness?.getLavaPool();
         const waterSource = this.bot.awareness?.getWaterSource();
         const ruinedPortal = this.bot.structures?.found?.find(f => f.name === "ruined_portal");
-        const topStruct = this.bot.structures?.getTopPriority();
 
         const phase = this.bot.speedrun?.phaseName?.() ?? "wood";
 

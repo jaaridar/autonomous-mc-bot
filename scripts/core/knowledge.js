@@ -702,7 +702,6 @@ export function prioritizeGoal(currentInventory, surrounding, structures, hp, hu
     // 4. Lava pool -> portal if have water bucket or bucket
     const hasWaterBucket = (currentInventory["minecraft:water_bucket"] ?? 0) > 0;
     const hasBucket = (currentInventory["minecraft:bucket"] ?? 0) > 0;
-    const hasObsidian = (currentInventory["minecraft:obsidian"] ?? 0);
     const lavaPool = surrounding.find(s => s.type.includes("lava") || s.type === "lava_pool");
     if (lavaPool) {
         if (hasWaterBucket) {

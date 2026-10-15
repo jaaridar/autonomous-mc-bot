@@ -189,7 +189,6 @@ export class Arbiter {
             if (mode && mode !== "idle") {
                 let score = 50;
                 if (mode === "follow" && owner) {
-                    const dist = bot.terrain ? bot.terrain.distance ? 0 : 0 : 0;
                     try { 
                         const d = Math.hypot(bot.sim.location.x - owner.location.x, bot.sim.location.z - owner.location.z);
                         score = d > 12 ? 80 : 60;

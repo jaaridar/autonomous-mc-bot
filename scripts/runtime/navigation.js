@@ -585,8 +585,6 @@ export class Parkour {
     canDiagonal(p, dir) {
         // Diagonal: x and z both non-zero
         if (dir.x === 0 || dir.z === 0) return false;
-        const diag = add(p, dir);
-        const belowDiag = add(diag, DOWN);
         // Need support at x and z steps
         const xStep = add(p, { x: dir.x, y: 0, z: 0 });
         const zStep = add(p, { x: 0, y: 0, z: dir.z });

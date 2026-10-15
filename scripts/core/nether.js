@@ -663,7 +663,6 @@ export function chooseFastestViableMethod(options, context) {
         if (evalCave) methods.push({ ...evalCave, route: "cave_lava", method: "cave_bucket" });
     }
     if (options.ruinedPortal) {
-        const portalPlan = planPortalConstruction(context.obsidianHave, true, options.ruinedPortal, context);
         methods.push({ ...portalPlan, score: options.ruinedPortal.score ?? 70, route: "ruined_portal" });
     }
 

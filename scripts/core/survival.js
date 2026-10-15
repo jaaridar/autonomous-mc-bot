@@ -131,11 +131,9 @@ export function detectScenario(context) {
     const hasSpider = threats.some(t => t.typeId.includes("spider"));
     const hasDrowned = threats.some(t => t.typeId === "minecraft:drowned");
     const hasWitch = threats.some(t => t.typeId === "minecraft:witch");
-    const hasEnderman = threats.some(t => t.typeId === "minecraft:enderman");
     const isSunset = context.time === "sunset";
     const isNight = context.time === "night";
     const isLowHp = hp <= 6;
-    const isVeryLowHp = hp <= 4;
     const isLowHunger = hunger <= 6;
     const noWeapon = !context.hasWeapon;
     const noTorch = !context.hasTorch;

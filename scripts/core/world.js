@@ -559,7 +559,6 @@ export function quarryPattern(width = 8, depth = 8) {
 export function clusterVeins(positions, radius = 4) {
     const clusters = [];
     const visited = new Set();
-    const key = (p) => `${p.x},${p.y},${p.z}`;
     for (let i = 0; i < positions.length; i++) {
         if (visited.has(i)) continue;
         const cluster = [positions[i]];
