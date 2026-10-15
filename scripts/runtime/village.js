@@ -1,3 +1,6 @@
+import { retainScore } from "../core/knowledge.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor, key } from "../core/math.js";
+import { evaluateVillage, evaluateVillageVsNetherRoute, findBestFoodOption, shouldCraftBedIndependently } from "../core/village.js";
 /**
  * Village Runtime - village-first strategy for Nether speedrun.
  * As soon as minimum equipment acquired, evaluate whether nearby village offers better route.
@@ -9,9 +12,8 @@
  * Hunt sheep for wool when necessary, understand wool blocks planks required.
  * Do not assume village always best: compare distance risks against immediate Nether-entry route.
  */
-import { floor, add, distance, center, key, UP, DOWN, CARDINAL, COMPASS } from "../core/math.js";
-import { evaluateVillage, findBestFoodOption, shouldCraftBedIndependently, evaluateVillageVsNetherRoute } from "../core/village-strategy.js";
-import { retainScore } from "../core/knowledge.js";
+
+
 
 export class VillageDirector {
     constructor(bot) {

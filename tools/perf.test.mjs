@@ -1,3 +1,10 @@
+import { Arbiter, DEFERRED } from "../scripts/core/arbiter.js";
+import { cellDanger, dangerMap, pathPenalty } from "../scripts/core/brain/danger.js";
+import { PathSearch } from "../scripts/core/navigation.js";
+import { Navigator } from "../scripts/runtime/navigation.js";
+import { BlockScan, RollingSweep, Terrain } from "../scripts/runtime/world.js";
+import { Bag } from "./load/scripts/runtime/inventory.js";
+import { PathSearch as LegacySearch } from "./perf/legacy-navigation.mjs";
 // Ultra-efficiency regression suite.
 //
 // Proves the lag fixes are real AND behaviour-preserving, offline:
@@ -15,13 +22,12 @@
 //
 // Runtime modules that import @minecraft/* are loaded from tools/load (the
 // stubbed copy rebuilt by run-all.mjs); pure modules from scripts/.
-import { PathSearch } from "../scripts/core/navigation.js";
-import { PathSearch as LegacySearch } from "./perf/legacy-navigation.mjs";
-import { Terrain, RollingSweep, BlockScan } from "../scripts/runtime/world.js";
-import { Navigator } from "../scripts/runtime/navigation.js";
-import { Arbiter, DEFERRED } from "../scripts/core/arbiter.js";
-import { cellDanger, pathPenalty, dangerMap } from "../scripts/core/brain/danger.js";
-import { Bag } from "./load/scripts/runtime/inventory.js";
+
+
+
+
+
+
 
 let pass = 0, fail = 0;
 const ok = (cond, name) => {

@@ -1,3 +1,10 @@
+import { isCritical, retainScore } from "../core/knowledge.js";
+import { center, distance, floor } from "../core/math.js";
+import { chooseFastestViableMethod, chooseNetherRoute, ensureIronForBothBucketAndFlintSteel, evaluateBucketPriority, evaluateIgnitionOptions, evaluateLavaPoolForBucket, shouldObtainFlintAndSteelBeforePortal, shouldRecalculate, verifyPortalAction } from "../core/nether.js";
+import { CHECKLIST, PHASES, currentPhase } from "../core/progression.js";
+import { amountOf } from "../core/recipes.js";
+import { assessFoodReserves } from "../core/survival.js";
+import { evaluateVillage, evaluateVillageVsNetherRoute } from "../core/village.js";
 /**
  * Speedrun Director v2.0 - Nether speedrun overhaul, world-class adaptive.
  * Primary objective: enter Nether as quickly and reliably as possible without dying.
@@ -13,15 +20,14 @@
  * - Adaptive planning: recalculate on village/ruined portal/lava pool/chest/hostile group/obstacle discovery
  * - Verify important actions crafting bucket portal ignition Nether entry
  */
-import { currentPhase, PHASES, CHECKLIST } from "../core/resource.js";
-import { amountOf } from "../core/recipes.js";
-import { distance, center, floor } from "../core/math.js";
-import { retainScore, isCritical } from "../core/knowledge.js";
-import { chooseNetherRoute, verifyPortalAction, shouldRecalculate } from "../core/nether-strategy.js";
-import { evaluateBucketPriority, evaluateLavaPoolForBucket, chooseFastestViableMethod } from "../core/bucket-strategy.js";
-import { evaluateIgnitionOptions, shouldObtainFlintAndSteelBeforePortal, ensureIronForBothBucketAndFlintSteel } from "../core/flint-steel-strategy.js";
-import { evaluateVillage, evaluateVillageVsNetherRoute } from "../core/village-strategy.js";
-import { assessFoodReserves } from "../core/food-strategy.js";
+
+
+
+
+
+
+
+
 
 export class SpeedrunDirector {
     constructor(bot) {

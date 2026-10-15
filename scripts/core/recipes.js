@@ -1,4 +1,12 @@
-import { toolTier } from "./policy.js";
+/**
+ * scripts/core/recipes.js
+ *
+ * Merged from: core/recipes.js, core/survival.js, core/transfer.js
+ */
+import { toolTier } from "./world.js";
+
+// ---------------------------------------------------------------- recipes.js
+
 export const id = (s) => (s.includes(":") ? s : `minecraft:${s}`);
 const recipe = (output, amount, ingredients, table = false) => ({
     output: id(output),
@@ -244,4 +252,86 @@ export function nextStep(target, amount, stock, table, seen = new Set()) {
     }
     for (const [type, n] of Object.entries(r.ingredients)) if (amountOf(stock, type) < n) return nextStep(type, n, stock, table, seen);
     return { kind: "craft", item: target };
+}
+
+// ---------------------------------------------------------------- survival.js
+
+export const RAW_TO_COOKED = Object.fromEntries([
+    ["beef", "cooked_beef"],
+    ["porkchop", "cooked_porkchop"],
+    ["chicken", "cooked_chicken"],
+    ["mutton", "cooked_mutton"],
+    ["rabbit", "cooked_rabbit"],
+    ["cod", "cooked_cod"],
+    ["salmon", "cooked_salmon"],
+].map(([a, b]) => [id(a), id(b)]));
+export const EMERGENCY_FOOD = new Set(["beef", "porkchop", "mutton", "rabbit", "cod", "salmon"].map(id));
+export const PREY = new Set(["cow", "pig", "sheep", "chicken"].map(id));
+export function fuelCount(type, inputs) {
+    const seconds = type === id("coal") || type === id("charcoal")
+        ? 80
+        : type.endsWith("_planks")
+            ? 15
+            : 0;
+    if (!seconds || !Number.isInteger(inputs) || inputs < 1 || inputs > 8)
+        throw Error("Unsupported fuel or batch.");
+    return Math.ceil((inputs * 10) / seconds);
+}
+export function smeltOutput(input) {
+    return (RAW_TO_COOKED[input] ??
+        (input === id("raw_iron")
+            ? id("iron_ingot")
+            : input.endsWith("_log")
+                ? id("charcoal")
+                : undefined));
+}
+
+// ---------------------------------------------------------------- transfer.js
+
+/** Move existing items; no output is fabricated. Synchronous rollback, not crash-atomic. */
+export function transfer(from, slot, to, target, amount) {
+    if (from === to && slot === target)
+        throw Error("Same transfer slot.");
+    const a = from.get(slot), b = to.get(target);
+    if (!a || !Number.isInteger(amount) || amount < 1 || amount > a.amount)
+        throw Error("Invalid transfer amount.");
+    if (b && (!to.stackable(a, b) || b.amount + amount > b.maxAmount))
+        throw Error("Destination cannot accept stack.");
+    if (!b && amount > a.maxAmount)
+        throw Error("Destination capacity exceeded.");
+    const nextA = a.amount === amount ? undefined : from.clone(a, a.amount - amount);
+    const nextB = b ? to.clone(b, b.amount + amount) : to.clone(a, amount);
+    try {
+        from.set(slot, nextA);
+        to.set(target, nextB);
+    }
+    catch (error) {
+        let failed = false;
+        try {
+            from.set(slot, a);
+        }
+        catch {
+            failed = true;
+        }
+        try {
+            to.set(target, b);
+        }
+        catch {
+            failed = true;
+        }
+        if (failed)
+            throw Error("CRITICAL transfer rollback failure; stop and inspect both inventories.");
+        throw error;
+    }
+}
+export function destination(inv, item, amount) {
+    for (let i = 0; i < inv.size; i++) {
+        const s = inv.get(i);
+        if (s && inv.stackable(s, item) && s.amount + amount <= s.maxAmount)
+            return i;
+    }
+    for (let i = 0; i < inv.size; i++)
+        if (!inv.get(i))
+            return i;
+    return -1;
 }

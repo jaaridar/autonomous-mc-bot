@@ -1,14 +1,18 @@
+import { assess, bunkerPlan, chooseCoverDirection, getMobStat, getProfile } from "../core/combat.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, key } from "../core/math.js";
+import { EXPLOSIVE, HAZARDS, RANGED, diggable } from "../core/world.js";
+import { Hands } from "./hands.js";
+import { Direction } from "@minecraft/server";
 /**
  * World-class Escaper - can escape any situation: 16 skeletons, blaze, enderman, warden, lava, water, pit, etc.
  * Phases: ASSESS -> COVER -> BUILD -> RETREAT -> RECOVER
  * Uses builder, parkour, and tactical assessment.
  */
-import { Direction } from "@minecraft/server";
-import { add, floor, center, distance, key, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
-import { diggable, HAZARDS, RANGED, EXPLOSIVE } from "../core/policy.js";
-import { getProfile, assess, bunkerPlan, chooseCoverDirection } from "../core/escape-strategy.js";
-import { getMobStat } from "../core/combat.js";
-import { Hands } from "./hands.js";
+
+
+
+
+
 
 const FACES = new Map([
     ["1,0,0", Direction.East],

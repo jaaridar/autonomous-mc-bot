@@ -1,13 +1,16 @@
+import { STRUCTURE_SIGS, bridgingPlan, detectStructure, isCritical, parkourPlan, planDeathRecovery, prioritizeGoal, retainScore, scoreSurrounding } from "../core/knowledge.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, distance, floor, key } from "../core/math.js";
+import { isPassable } from "../core/world.js";
+import { RollingSweep } from "./world.js";
 /**
  * World Awareness - runtime scanning of surroundings, remembering important stuff.
  * Knows every block/item, retains important, detects structures, lava pools, sheep, iron ore.
  * Main goal upskilling.
  */
-import { floor, add, distance, key, UP, DOWN, CARDINAL, COMPASS } from "../core/math.js";
-import { scoreSurrounding, prioritizeGoal, bridgingPlan, parkourPlan, planDeathRecovery } from "../core/world-awareness.js";
-import { detectStructure, retainScore, isCritical, STRUCTURE_SIGS } from "../core/knowledge.js";
-import { isPassable } from "../core/blocks.js";
-import { RollingSweep } from "./world.js";
+
+
+
+
 
 export class WorldAwareness {
     constructor(bot) {

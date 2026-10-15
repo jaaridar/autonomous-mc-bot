@@ -1,7 +1,7 @@
-import { TaskFault } from "../core/recovery.js";
-import { distance, floor, center } from "../core/math.js";
-import { FOOD } from "../core/policy.js";
-import { PREY, RAW_TO_COOKED } from "../core/survival.js";
+import { TaskFault } from "../core/arbiter.js";
+import { center, distance, floor } from "../core/math.js";
+import { PREY, RAW_TO_COOKED } from "../core/recipes.js";
+import { FOOD } from "../core/world.js";
 import { Explorer } from "./exploration.js";
 export function allowedPrey(e) {
     return (e.isValid &&

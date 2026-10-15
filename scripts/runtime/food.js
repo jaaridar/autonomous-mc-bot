@@ -1,3 +1,4 @@
+import { COMBAT_FOOD_THRESHOLD, HEALTH_THRESHOLDS, adjustTacticForHostile, assessFoodReserves, prioritizeEscapeCoverSurvival, reassessAfterDamage, shouldAvoidCombat, shouldEatBeforeFight } from "../core/survival.js";
 /**
  * Food Runtime - food healing combat readiness.
  * Maintain sufficient food exploration sprinting combat emergency recovery.
@@ -8,7 +9,6 @@
  * Recognize every relevant hostile adjust tactics attack pattern range movement environmental advantages.
  * After damage reassess instead blindly continuing plan.
  */
-import { assessFoodReserves, shouldEatBeforeFight, shouldAvoidCombat, prioritizeEscapeCoverSurvival, adjustTacticForHostile, reassessAfterDamage, COMBAT_FOOD_THRESHOLD, HEALTH_THRESHOLDS } from "../core/food-strategy.js";
 
 export class FoodDirector {
     constructor(bot) {

@@ -1,3 +1,6 @@
+import { CARDINAL, DOWN, UP, add, center, distance, floor } from "../core/math.js";
+import { BUCKET_MILESTONE, chooseFastestViableMethod, evaluateBucketPriority, evaluateLavaPoolForBucket, planObsidianFormation, planPortalConstruction } from "../core/nether.js";
+import { Direction } from "@minecraft/server";
 /**
  * Bucket Runtime - bucket acquisition & Nether preparation.
  * Bucket major milestone enables ground-level lava pools.
@@ -8,9 +11,8 @@
  * Account depth accessibility surrounding terrain water availability hostile mobs escape routes when choosing lava pool.
  * Avoid entering cave solely because contains lava if unnecessary danger excessive travel.
  */
-import { floor, add, distance, center, UP, DOWN, CARDINAL } from "../core/math.js";
-import { evaluateBucketPriority, evaluateLavaPoolForBucket, planObsidianFormation, planPortalConstruction, chooseFastestViableMethod, BUCKET_MILESTONE } from "../core/bucket-strategy.js";
-import { Direction } from "@minecraft/server";
+
+
 
 export class BucketDirector {
     constructor(bot) {

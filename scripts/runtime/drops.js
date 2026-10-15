@@ -1,6 +1,6 @@
-import { floor, key, distance, horizontal, center } from "../core/math.js";
-import { MINE } from "../core/policy.js";
+import { center, distance, floor, horizontal, key } from "../core/math.js";
 import { matches } from "../core/recipes.js";
+import { MINE } from "../core/world.js";
 /**
  * Loose-drop collection: the one place that answers "where did the item go?".
  *

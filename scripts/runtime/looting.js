@@ -1,11 +1,13 @@
+import { JUNK, STRUCTURE_LOOT_MULTIPLIER, chooseLoot, isCritical, isValuable, retainScore, scoreItem, shouldLootChest } from "../core/knowledge.js";
+import { add, center, distance, floor, key } from "../core/math.js";
+import { NativeInventory } from "./inventory.js";
 /**
  * Advanced Looting - chest/barrel looting with scoring, structure priority, village detection.
  * Structure loot main priority, lava pool -> portal, retain important.
  */
-import { floor, distance, center, add, key } from "../core/math.js";
-import { scoreItem, isValuable, shouldLootChest, chooseLoot, JUNK, STRUCTURE_LOOT_MULTIPLIER } from "../core/loot.js";
-import { NativeInventory } from "./inventory.js";
-import { retainScore, isCritical } from "../core/knowledge.js";
+
+
+
 
 export class Looting {
     constructor(bot) {

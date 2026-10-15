@@ -1,11 +1,13 @@
+import { STRUCTURE_SIGS, detectStructure, shouldLootChest } from "../core/knowledge.js";
+import { CARDINAL, DOWN, UP, add, distance, floor, key } from "../core/math.js";
+import { RollingSweep } from "./world.js";
 /**
  * Structure detector - runtime that prioritizes loot from structures.
  * Lava pool -> portal logic included. Main priority if found.
  */
-import { floor, add, distance, key, UP, DOWN, CARDINAL } from "../core/math.js";
-import { STRUCTURE_SIGS, detectStructure } from "../core/knowledge.js";
-import { shouldLootChest } from "../core/loot.js";
-import { RollingSweep } from "./world.js";
+
+
+
 
 export class StructureDetector {
     constructor(bot) {

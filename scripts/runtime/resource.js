@@ -1,9 +1,11 @@
+import { distance } from "../core/math.js";
+import { PHASES, currentPhase, nextNeeded, priorityOf } from "../core/progression.js";
+import { amountOf } from "../core/recipes.js";
 /**
  * Resource Manager - efficient acquisition and inventory management.
  */
-import { amountOf } from "../core/recipes.js";
-import { priorityOf, nextNeeded, currentPhase, PHASES } from "../core/resource.js";
-import { distance } from "../core/math.js";
+
+
 
 export class ResourceManager {
     constructor(bot) {

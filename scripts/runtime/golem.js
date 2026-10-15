@@ -1,3 +1,5 @@
+import { CARDINAL, DOWN, UP, add, center, distance, floor, key } from "../core/math.js";
+import { GOLEM_STATS, chooseBestGolemStrategy, collectIronDropsEfficiently, evaluateGolemFight, shouldDisengageDuringFight } from "../core/village.js";
 /**
  * Iron Golem Combat & Risk Management - runtime.
  * Recognize golem and evaluate whether fighting worthwhile based on iron, equipment, health, terrain, time.
@@ -9,8 +11,7 @@
  * Collect iron drops efficiently and prioritize bucket.
  * Never mandatory if safer faster route available.
  */
-import { floor, add, distance, center, key, UP, DOWN, CARDINAL } from "../core/math.js";
-import { evaluateGolemFight, chooseBestGolemStrategy, shouldDisengageDuringFight, collectIronDropsEfficiently, GOLEM_STATS } from "../core/golem-strategy.js";
+
 
 export class GolemDirector {
     constructor(bot) {

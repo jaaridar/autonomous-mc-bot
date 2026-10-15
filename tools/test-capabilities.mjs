@@ -1,6 +1,5 @@
-import { composeCapabilities, evaluateCapability, CAPABILITIES } from "../scripts/core/survival-capabilities.js";
-import { decomposeMission, analyzeRequirements, isAnyLog } from "../scripts/core/goal-decomposition.js";
-
+import { analyzeRequirements, decomposeMission, isAnyLog } from "../scripts/core/progression.js";
+import { CAPABILITIES, composeCapabilities, evaluateCapability } from "../scripts/core/survival.js";
 let passed = 0, failed = 0;
 function test(name, fn) {
   try { fn(); console.log(`pass ${name}`); passed++; }

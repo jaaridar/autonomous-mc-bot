@@ -1,13 +1,14 @@
+import { DOWN, UP, add, center, distance, floor, horizontal } from "../core/math.js";
+import { MINE, bulkLevel, isBulk, isUnbreakable, oreLevel } from "../core/world.js";
 /**
  * Miner v2 - REWRITTEN UNBREAKABLE with front block fix
  * - Front block: direct break without nav
  * - Torching, drop collection
  * - Tool awareness
  */
-import { add, floor, center, horizontal, distance, UP, DOWN } from "../core/math.js";
-import { oreLevel, isBulk, bulkLevel } from "../core/ores.js";
-import { MINE } from "../core/policy.js";
-import { isUnbreakable } from "../core/blocks.js";
+
+
+
 
 const STEP_LIMIT = 250;
 const RUN_LENGTH = 16;

@@ -1,11 +1,11 @@
-import { world, system, Player, EntityComponentTypes, EquipmentSlot, } from "@minecraft/server";
-import { Host } from "./runtime/host.js";
+import { coordinates, integer, tokens } from "./core/commands.js";
+import { distance, floor } from "./core/math.js";
+import { id } from "./core/recipes.js";
 import { Bot } from "./runtime/bot.js";
+import { Host } from "./runtime/host.js";
 import { Bag } from "./runtime/inventory.js";
 import { Memory } from "./runtime/memory.js";
-import { tokens, integer, coordinates } from "./core/commands.js";
-import { id } from "./core/recipes.js";
-import { distance, floor } from "./core/math.js";
+import { EntityComponentTypes, EquipmentSlot, Player, system, world } from "@minecraft/server";
 const host = new Host();
 const memory = new Memory();
 let bot;

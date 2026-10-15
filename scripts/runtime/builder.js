@@ -1,14 +1,17 @@
+import { bestFor, bridgingPlan, getBlockInfo, retainScore } from "../core/knowledge.js";
+import { DOWN, UP, add, center, distance, floor, key } from "../core/math.js";
+import { isFalling, isHazard, isLiquid, isPassable, isSolid, isUnbreakable } from "../core/world.js";
+import { Direction } from "@minecraft/server";
 /**
  * World-class Builder: arbitrary bridging (horizontal, diagonal, up, down, any direction)
  * depends on terrain and goal. Never fails due to obstructing blocks without detection.
  * Handles: scaffold, pillar, bridge, wall, bunker, low-roof for enderman, portal frame.
  * Knows every block and best use in situation.
  */
-import { floor, center, add, distance, key, UP, DOWN } from "../core/math.js";
-import { Direction } from "@minecraft/server";
-import { isPassable, isSolid, isFalling, isLiquid, isHazard, isUnbreakable } from "../core/blocks.js";
-import { getBlockInfo, bestFor, retainScore } from "../core/knowledge.js";
-import { bridgingPlan } from "../core/world-awareness.js";
+
+
+
+
 
 const FACES = new Map([
     ["1,0,0", Direction.East],

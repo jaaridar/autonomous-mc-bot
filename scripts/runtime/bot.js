@@ -1,46 +1,64 @@
-import { system, world, EntityComponentTypes, Direction, } from "@minecraft/server";
-import { add, floor, key, distance, away, horizontal, CARDINAL, COMPASS, UP, DOWN, center, } from "../core/math.js";
-import { MINE, priority, toolTier, diggable, RANGED, EXPLOSIVE, HOSTILES as MOB_DEFENCE, } from "../core/policy.js";
-import { RECIPES, craft, id, nextStep, matches, amountOf, bedTarget, } from "../core/recipes.js";
-import { isUndergroundOre, isBulk } from "../core/ores.js";
+import { Arbiter, REASON_CODES, TaskFault, blockedTask } from "../core/arbiter.js";
+import { needsQuickTool } from "../core/combat.js";
+import { QUICK_TOOL_CHAIN, SITUATION_USE, isCritical, planDeathRecovery, prioritizeGoal, retainScore } from "../core/knowledge.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, horizontal, key } from "../core/math.js";
 import { sanitizePrefs } from "../core/memory.js";
-import { Bag, NativeInventory } from "./inventory.js";
-import { Hands } from "./hands.js";
-import { Terrain, BlockScan } from "./world.js";
-import { Explorer } from "./exploration.js";
-import { SurvivalDirector } from "./survival.js";
-import { Equipment } from "./equipment.js";
-import { Escaper } from "./escape.js";
-import { Miner } from "./mining.js";
-import { Drops } from "./drops.js";
-import { Scout } from "./scouting.js";
-import { TaskFault, blockedTask, } from "../core/recovery.js";
-import { Navigator } from "./navigation.js";
-// New advanced modules
+import { HIERARCHY, analyzeRequirements, decomposeMission, isAnyLog } from "../core/progression.js";
+import { RECIPES, amountOf, bedTarget, craft, id, matches, nextStep } from "../core/recipes.js";
+import { assessFoodReserves, handlePlanFailure, preserveEmergencyResources, reassessAfterDamage, shouldAvoidCombat, shouldEatBeforeFight, shouldRecalculateAdaptive, verifyAction } from "../core/survival.js";
+import { EXPLOSIVE, HOSTILES as MOB_DEFENCE, MINE, RANGED, diggable, isBulk, isFalling, isPassable, isUnbreakable, isUndergroundOre, priority, toolTier } from "../core/world.js";
+import { BucketDirector } from "./bucket.js";
 import { Builder } from "./builder.js";
 import { Combat } from "./combat.js";
-import { Looting } from "./looting.js";
-import { Parkour } from "./parkour.js";
 import { DeepMiner } from "./deepminer.js";
+import { Drops } from "./drops.js";
+import { Equipment } from "./equipment.js";
+import { Escaper } from "./escape.js";
+import { Explorer } from "./exploration.js";
+import { FoodDirector } from "./food.js";
+import { GolemDirector } from "./golem.js";
+import { Hands } from "./hands.js";
+import { Bag, NativeInventory } from "./inventory.js";
+import { Looting } from "./looting.js";
+import { Miner } from "./mining.js";
+import { Navigator } from "./navigation.js";
+import { NetherDirector } from "./nether.js";
+import { Parkour } from "./parkour.js";
 import { ResourceManager } from "./resource.js";
+import { Scout } from "./scouting.js";
 import { SpeedrunDirector } from "./speedrun.js";
-import { WorldAwareness } from "./world-awareness.js";
 import { StructureDetector } from "./structures.js";
 import { SurvivalMaster } from "./survival-master.js";
-import { NetherDirector } from "./nether.js";
-import { VillageDirector } from "./village.js";
-import { GolemDirector } from "./golem.js";
-import { FoodDirector } from "./food.js";
-import { BucketDirector } from "./bucket.js";
-import { isPassable, isUnbreakable, isFalling } from "../core/blocks.js";
-import { needsQuickTool } from "../core/combat.js";
-import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../core/knowledge.js";
-import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
-import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
+import { SurvivalDirector } from "./survival.js";
 import { UI } from "./ui.js";
-import { Arbiter, REASON_CODES } from "../core/arbiter.js";
-import { decomposeMission, analyzeRequirements, isAnyLog, HIERARCHY } from "../core/goal-decomposition.js";
-import { shouldRecalculateAdaptive, verifyAction, handlePlanFailure, preserveEmergencyResources } from "../core/adaptive-planning.js";
+import { VillageDirector } from "./village.js";
+import { WorldAwareness } from "./world-awareness.js";
+import { BlockScan, Terrain } from "./world.js";
+import { Direction, EntityComponentTypes, system, world } from "@minecraft/server";
+// New advanced modules
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([

@@ -1,7 +1,6 @@
-import { add, floor, distance, key, UP, DOWN, CARDINAL, COMPASS } from "../core/math.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, distance, floor, key } from "../core/math.js";
 import { standable } from "../core/navigation.js";
-import { HAZARDS, HOSTILES, RANGED, EXPLOSIVE, threatRank } from "../core/policy.js";
-
+import { EXPLOSIVE, HAZARDS, HOSTILES, RANGED, threatRank } from "../core/world.js";
 const THREAT_RADIUS = 18;
 const NEAR6 = [UP, DOWN, ...CARDINAL];
 const TABLE_OFFSETS = [];

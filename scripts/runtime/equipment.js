@@ -1,7 +1,6 @@
-import { EquipmentSlot, EntityComponentTypes, } from "@minecraft/server";
-import { TaskFault } from "../core/recovery.js";
-import { QUICK_TOOL_CHAIN, retainScore, isCritical } from "../core/knowledge.js";
-
+import { TaskFault } from "../core/arbiter.js";
+import { QUICK_TOOL_CHAIN, isCritical, retainScore } from "../core/knowledge.js";
+import { EntityComponentTypes, EquipmentSlot } from "@minecraft/server";
 export const ARMOR = [
     { slot: EquipmentSlot.Chest, suffix: "chestplate", iron: 8 },
     { slot: EquipmentSlot.Legs, suffix: "leggings", iron: 7 },

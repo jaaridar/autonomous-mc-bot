@@ -1,9 +1,8 @@
-import { TaskFault } from "../core/recovery.js";
-import { ItemStack } from "@minecraft/server";
-import { CARDINAL, add, floor, center, distance } from "../core/math.js";
-import { smeltOutput, fuelCount } from "../core/survival.js";
-import { transfer, destination } from "../core/transfer.js";
+import { TaskFault } from "../core/arbiter.js";
+import { CARDINAL, add, center, distance, floor } from "../core/math.js";
+import { destination, fuelCount, smeltOutput, transfer } from "../core/recipes.js";
 import { NativeInventory } from "./inventory.js";
+import { ItemStack } from "@minecraft/server";
 /** Uses a real placed furnace: 0=input, 1=fuel, 2=output. Engine does the cooking. */
 export class Furnace {
     constructor(sim, bag, terrain, nav, host) {

@@ -1,9 +1,8 @@
-import { Furnace } from "./furnace.js";
-import { Forager } from "./foraging.js";
-import { FOOD, RAW_MEAT, RISKY_FOOD } from "../core/policy.js";
-import { RAW_TO_COOKED, fuelCount } from "../core/survival.js";
-import { amountOf, id, matches, bedTarget } from "../core/recipes.js";
 import { distance } from "../core/math.js";
+import { RAW_TO_COOKED, amountOf, bedTarget, fuelCount, id, matches } from "../core/recipes.js";
+import { FOOD, RAW_MEAT, RISKY_FOOD } from "../core/world.js";
+import { Forager } from "./foraging.js";
+import { Furnace } from "./furnace.js";
 /** Observation-driven survival loop. No fabricated items or claimed speedrun completion. */
 export class SurvivalDirector {
     constructor(bot) {

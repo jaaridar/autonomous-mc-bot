@@ -1,4 +1,13 @@
 /**
+ * scripts/core/knowledge.js
+ *
+ * Merged from: core/knowledge.js, core/loot.js, core/world-awareness.js
+ */
+
+
+// ---------------------------------------------------------------- knowledge.js
+
+/**
  * Omni-knowledge registry - every Bedrock block/item mapped to its best use.
  * Pure logic, no engine imports. Exhaustive Bedrock 1.21.114 knowledge.
  * The bot uses this to decide what to keep, craft, and how to use in any situation.
@@ -432,4 +441,395 @@ export function adaptTactic(mobType, hp, resources, count) {
     if (isFast) return { action: "pillar_or_water", reason: "fast mob pillar up", need: "blocks" };
     // Default melee
     return { action: "kite", reason: "melee kite", need: "weapon" };
+}
+
+// ---------------------------------------------------------------- loot.js
+
+/**
+ * Loot evaluation - pure logic for chest looting decisions.
+ * Scores items by speedrun value. Structure loot main priority.
+ * Knows every block/item and best use in situation.
+ */
+
+export const LOOT_VALUE = {
+    // Critical - always take
+    "minecraft:diamond": 1000,
+    "minecraft:netherite_ingot": 1000,
+    "minecraft:ancient_debris": 1000,
+    "minecraft:totem_of_undying": 1000,
+    "minecraft:enchanted_golden_apple": 1000,
+    "minecraft:obsidian": 950,
+    "minecraft:diamond_sword": 900,
+    "minecraft:diamond_pickaxe": 950,
+    "minecraft:netherite_sword": 1000,
+    "minecraft:netherite_pickaxe": 1000,
+    "minecraft:iron_ingot": 400,
+    "minecraft:raw_iron": 380,
+    "minecraft:iron_sword": 350,
+    "minecraft:iron_pickaxe": 380,
+    "minecraft:shield": 400,
+    "minecraft:bucket": 380,
+    "minecraft:water_bucket": 420,
+    "minecraft:lava_bucket": 400,
+    "minecraft:flint_and_steel": 380,
+    "minecraft:gold_ingot": 200,
+    "minecraft:emerald": 300,
+    "minecraft:golden_apple": 600,
+    "minecraft:saddle": 250,
+    "minecraft:iron_horse_armor": 150,
+    "minecraft:diamond_horse_armor": 300,
+    "minecraft:name_tag": 100,
+    "minecraft:ender_pearl": 700,
+    "minecraft:blaze_rod": 800,
+    "minecraft:ender_eye": 800,
+    "minecraft:netherite_scrap": 850,
+    "minecraft:cooked_beef": 120,
+    "minecraft:cooked_porkchop": 120,
+    "minecraft:bread": 100,
+    "minecraft:torch": 80,
+    "minecraft:coal": 90,
+    "minecraft:oak_log": 70,
+    "minecraft:oak_planks": 60,
+    "minecraft:stick": 50,
+    "minecraft:string": 110,
+    "minecraft:feather": 90,
+    "minecraft:flint": 80,
+    "minecraft:leather": 70,
+    "minecraft:iron_chestplate": 320,
+    "minecraft:iron_leggings": 300,
+    "minecraft:iron_helmet": 280,
+    "minecraft:iron_boots": 260,
+    "minecraft:chainmail_chestplate": 200,
+    "minecraft:boat": 120,
+    "minecraft:oak_boat": 120,
+    "minecraft:white_bed": 150,
+    "minecraft:bed": 150,
+    "minecraft:furnace": 100,
+    "minecraft:crafting_table": 80,
+    "minecraft:iron_axe": 300,
+    "minecraft:stone_sword": 200,
+    "minecraft:stone_pickaxe": 200,
+    "minecraft:wooden_sword": 150,
+    "minecraft:bow": 250,
+    "minecraft:arrow": 80,
+    "minecraft:enchanted_book": 400,
+    "minecraft:fire_charge": 200,
+    "minecraft:gold_block": 300,
+    "minecraft:crying_obsidian": 300,
+    "minecraft:hay_block": 90,
+    "minecraft:wheat": 60,
+    "minecraft:apple": 70,
+};
+
+export const JUNK = new Set([
+    "minecraft:rotten_flesh","minecraft:poisonous_potato","minecraft:spider_eye",
+    "minecraft:gunpowder","minecraft:wheat_seeds","minecraft:beetroot_seeds",
+    "minecraft:dead_bush","minecraft:coarse_dirt","minecraft:gravel",
+    "minecraft:dirt","minecraft:sand","minecraft:flint","minecraft:stick"
+]);
+
+// Structure loot priority multiplier
+export const STRUCTURE_LOOT_MULTIPLIER = {
+    village: 1.5,
+    desert_temple: 2.0,
+    jungle_temple: 1.8,
+    shipwreck: 1.7,
+    ruined_portal: 2.5, // free obsidian
+    igloo: 1.5,
+    woodland_mansion: 2.2,
+    nether_fortress: 2.0,
+    bastion: 2.3,
+    mineshaft: 1.8,
+    lava_pool: 2.5, // portal opportunity
+    amethyst_geode: 1.2,
+};
+
+export function scoreItem(typeId, amount = 1, structure = null) {
+    if (JUNK.has(typeId) && !isCritical(typeId)) return 1 * amount;
+    const base = LOOT_VALUE[typeId] ?? retainScore(typeId) ?? 10;
+    let multiplier = 1;
+    if (structure && STRUCTURE_LOOT_MULTIPLIER[structure]) {
+        multiplier = STRUCTURE_LOOT_MULTIPLIER[structure];
+    }
+    // Critical always high
+    if (isCritical(typeId)) multiplier = Math.max(multiplier, 1.5);
+    return base * amount * multiplier;
+}
+
+export function isValuable(typeId) {
+    return (LOOT_VALUE[typeId] ?? retainScore(typeId) ?? 0) >= 200 || isCritical(typeId);
+}
+
+export function isUpgrade(currentType, candidateType) {
+    const cur = LOOT_VALUE[currentType] ?? retainScore(currentType) ?? 0;
+    const cand = LOOT_VALUE[candidateType] ?? retainScore(candidateType) ?? 0;
+    return cand > cur * 1.2;
+}
+
+/**
+ * Decide which items to take from a chest given current inventory.
+ * Structure loot main priority.
+ */
+export function chooseLoot(chestItems, bagCounts, freeSlots, structure = null) {
+    const scored = chestItems.map((item, idx) => ({
+        idx,
+        type: item.typeId,
+        amount: item.amount,
+        score: scoreItem(item.typeId, item.amount, structure),
+        valuable: isValuable(item.typeId),
+        critical: isCritical(item.typeId)
+    })).filter(s => !JUNK.has(s.type) || s.critical);
+
+    // Sort critical first, valuable second, then by score desc
+    scored.sort((a,b) => (b.critical - a.critical) || (b.valuable - a.valuable) || (b.score - a.score));
+
+    const toTake = [];
+    let used = 0;
+    for (const s of scored) {
+        if (s.critical) {
+            toTake.push(s.idx);
+            used++;
+            if (used >= freeSlots + 3) break;
+        } else if (s.valuable) {
+            toTake.push(s.idx);
+            used++;
+            if (used >= freeSlots + 2) break;
+        } else if (s.score > 50 && freeSlots > 3) {
+            toTake.push(s.idx);
+            used++;
+        }
+    }
+    return toTake;
+}
+
+export function shouldLootChest(distance, homeDistance, freeSlots, structure = null) {
+    if (freeSlots < 1 && !structure) return false;
+    // Structure loot main priority - always loot if structure, even if low slots
+    if (structure) {
+        const mult = STRUCTURE_LOOT_MULTIPLIER[structure] ?? 1;
+        if (mult >= 2.0) return true; // ruined portal, lava pool always
+        if (mult >= 1.5 && freeSlots >= 1) return true;
+    }
+    if (homeDistance < 32) return false; // likely player base, but allow if structure high priority
+    if (distance > 20) return false;
+    if (freeSlots < 1) return false;
+    return true;
+}
+
+// For lava pool portal
+export function shouldMakePortal(inventory, hasLavaPool, hasWaterBucket) {
+    const obsidian = inventory["minecraft:obsidian"] ?? 0;
+    if (obsidian >= 10) return false;
+    if (hasLavaPool && hasWaterBucket) return true;
+    if (hasLavaPool && (inventory["minecraft:bucket"] ?? 0) > 0) return true; // need water
+    return false;
+}
+
+// ---------------------------------------------------------------- world-awareness.js
+
+/**
+ * World awareness - pure logic for scanning surroundings, remembering important stuff,
+ * and prioritizing goals. The bot's main goal is upskilling itself.
+ */
+
+export const IMPORTANT = {
+    IRON_ORE: { type: "iron_ore", score: 95, retain: true, reason: "critical for tools/armor/bucket/shield" },
+    DIAMOND_ORE: { type: "diamond_ore", score: 100, retain: true, reason: "critical for obsidian/endgame" },
+    COAL_ORE: { type: "coal_ore", score: 80, retain: true, reason: "torches/fuel" },
+    GOLD_ORE: { type: "gold_ore", score: 75, retain: true, reason: "golden apple/barter" },
+    LAPIS_ORE: { type: "lapis_ore", score: 70, retain: true, reason: "enchanting" },
+    SHEEP: { type: "sheep", score: 85, retain: true, reason: "wool for bed, food" },
+    COW: { type: "cow", score: 80, retain: true, reason: "leather, beef" },
+    PIG: { type: "pig", score: 60, retain: false, reason: "food" },
+    CHICKEN: { type: "chicken", score: 70, retain: true, reason: "feather for arrows, food" },
+    HORSE: { type: "horse", score: 75, retain: true, reason: "transport if saddle" },
+    VILLAGE: { type: "village", score: 95, retain: true, reason: "loot, beds, food, iron" },
+    TEMPLE: { type: "temple", score: 90, retain: true, reason: "chests, treasure" },
+    LAVA_POOL: { type: "lava_pool", score: 100, retain: true, reason: "portal if have water bucket" },
+    RUINED_PORTAL: { type: "ruined_portal", score: 100, retain: true, reason: "free obsidian" },
+    CHEST: { type: "chest", score: 85, retain: true, reason: "loot" },
+    WATER: { type: "water", score: 80, retain: true, reason: "farming, obsidian, clutch" },
+    OBSIDIAN: { type: "obsidian", score: 95, retain: true, reason: "portal" },
+    DIAMOND: { type: "diamond", score: 100, retain: true, reason: "endgame" },
+    ANCIENT_DEBRIS: { type: "ancient_debris", score: 100, retain: true, reason: "netherite" },
+};
+
+export function scoreSurrounding(blockCounts, entityCounts, distanceMap) {
+    const scored = [];
+    // Blocks
+    for (const [block, count] of Object.entries(blockCounts)) {
+        if (count <= 0) continue;
+        const base = retainScore(block);
+        if (base < 30) continue;
+        const dist = distanceMap[block] ?? 10;
+        const score = base - dist * 0.5 + count * 2;
+        if (score > 40) scored.push({ type: block, kind: "block", count, score, dist, retain: isCritical(block) });
+    }
+    // Entities
+    for (const [entity, count] of Object.entries(entityCounts)) {
+        if (count <= 0) continue;
+        const info = IMPORTANT[entity.toUpperCase()] ?? { score: 30, retain: false };
+        const dist = distanceMap[entity] ?? 10;
+        const score = (info.score ?? 30) - dist * 0.8 + count * 5;
+        if (score > 40) scored.push({ type: entity, kind: "entity", count, score, dist, retain: info.retain ?? false, reason: info.reason });
+    }
+    scored.sort((a,b) => b.score - a.score);
+    return scored;
+}
+
+export function prioritizeGoal(currentInventory, surrounding, structures, hp, hunger, hasWeapon, phase) {
+    // Main goal is upskilling, but adapt to surroundings
+    const goals = [];
+
+    // 1. Survival first
+    if (hp <= 6) goals.push({ goal: "escape_heal", priority: 1000, reason: "low hp" });
+    if (hunger <= 6) goals.push({ goal: "find_food", priority: 900, reason: "starving" });
+
+    // 2. Quick tool priority - NEVER bare hand
+    if (!hasWeapon) {
+        goals.push({ goal: "quick_tool", priority: 950, reason: "no weapon - craft quick tool #1 priority" });
+    }
+
+    // 3. Structure loot main priority if found
+    for (const s of structures) {
+        if (s.priority >= 90) {
+            goals.push({ goal: `loot_${s.name}`, priority: s.priority + 50, reason: s.reason ?? `structure ${s.name}`, pos: s.pos, structure: s });
+        } else if (s.priority >= 80) {
+            goals.push({ goal: `loot_${s.name}`, priority: s.priority, reason: s.reason, pos: s.pos, structure: s });
+        }
+    }
+
+    // 4. Lava pool -> portal if have water bucket or bucket
+    const hasWaterBucket = (currentInventory["minecraft:water_bucket"] ?? 0) > 0;
+    const hasBucket = (currentInventory["minecraft:bucket"] ?? 0) > 0;
+    const hasObsidian = (currentInventory["minecraft:obsidian"] ?? 0);
+    const lavaPool = surrounding.find(s => s.type.includes("lava") || s.type === "lava_pool");
+    if (lavaPool) {
+        if (hasWaterBucket) {
+            goals.push({ goal: "make_obsidian_portal", priority: 980, reason: "lava pool + water bucket = portal", pos: lavaPool.pos ?? null });
+        } else if (hasBucket) {
+            goals.push({ goal: "get_water_for_portal", priority: 850, reason: "lava pool found but need water", pos: lavaPool.pos });
+        } else {
+            goals.push({ goal: "remember_lava_pool", priority: 800, reason: "lava pool for later portal", pos: lavaPool.pos, remember: true });
+        }
+    }
+
+    // 5. Important ores / sheep retain
+    for (const s of surrounding) {
+        if (s.retain && s.score > 80) {
+            if (s.type.includes("iron_ore") || s.type.includes("raw_iron")) {
+                goals.push({ goal: "mine_iron", priority: 900, reason: "iron critical for tools/armor/bucket/shield", pos: s.pos });
+            } else if (s.type.includes("diamond")) {
+                goals.push({ goal: "mine_diamond", priority: 1000, reason: "diamond critical", pos: s.pos });
+            } else if (s.type.includes("sheep")) {
+                goals.push({ goal: "get_wool", priority: 800, reason: "sheep = bed + food", pos: s.pos });
+            } else if (s.type.includes("coal")) {
+                goals.push({ goal: "mine_coal", priority: 750, reason: "torch fuel", pos: s.pos });
+            }
+        }
+    }
+
+    // 6. Upskilling main goal based on phase
+    const phaseGoals = {
+        wood: { goal: "gather_wood", priority: 700, reason: "upskill wood->stone" },
+        stone: { goal: "gather_stone", priority: 700, reason: "upskill stone->iron" },
+        iron: { goal: "gather_iron", priority: 800, reason: "upskill iron->diamond" },
+        diamond: { goal: "gather_diamond", priority: 900, reason: "upskill diamond->portal" },
+        portal: { goal: "build_portal", priority: 950, reason: "upskill portal->nether" },
+    };
+    if (phaseGoals[phase]) goals.push(phaseGoals[phase]);
+
+    goals.sort((a,b) => b.priority - a.priority);
+    return goals[0] ?? { goal: "explore", priority: 100, reason: "no urgent goal, explore to upskill" };
+}
+
+export function shouldRemember(typeId, distance, inventory, freeSlots) {
+    const score = retainScore(typeId);
+    if (score >= 90) return true;
+    if (score >= 80 && distance < 32) return true;
+    if (score >= 70 && freeSlots > 2) return true;
+    return false;
+}
+
+export function filterRetain(inventory, freeSlots) {
+    // Returns list of items to keep vs drop when full
+    const entries = Object.entries(inventory).map(([type, count]) => ({ type, count, score: retainScore(type) }));
+    entries.sort((a,b) => b.score - a.score);
+    const keep = [];
+    const drop = [];
+    let slotsUsed = 0;
+    for (const e of entries) {
+        if (e.score >= 70 || slotsUsed < 20) {
+            keep.push(e);
+            slotsUsed++;
+        } else {
+            drop.push(e);
+        }
+    }
+    return { keep, drop };
+}
+
+// ===== DEATH RECOVERY =====
+export function planDeathRecovery(deathPos, currentPos, inventory, lastItems) {
+    // If died, remember position and important items lost
+    const criticalLost = Object.entries(lastItems ?? {}).filter(([type]) => isCritical(type));
+    const distance = Math.hypot(deathPos.x - currentPos.x, deathPos.y - currentPos.y, deathPos.z - currentPos.z);
+    return {
+        goal: "recover_death",
+        priority: criticalLost.length > 0 ? 950 : 700,
+        reason: `died at ${deathPos.x},${deathPos.y},${deathPos.z}, lost ${criticalLost.length} critical items, distance ${distance.toFixed(0)}`,
+        pos: deathPos,
+        criticalLost,
+        distance
+    };
+}
+
+// ===== BRIDGING / PARKOUR DECISION =====
+export function bridgingPlan(from, to, terrainInfo) {
+    // Arbitrary bridging: horizontal, diagonal, up, down depending on terrain and goal
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const dist = Math.hypot(dx, dy, dz);
+    const horizontalDist = Math.hypot(dx, dz);
+
+    if (dy > 2) {
+        return { type: "pillar_up", blocks: Math.ceil(dy), tactic: "jump_place_sneak", need: "blocks", diagonal: false };
+    }
+    if (dy < -3) {
+        return { type: "descend", blocks: 0, tactic: "safe_drop_or_ladder", need: "check_fall", diagonal: false };
+    }
+    if (horizontalDist > 1) {
+        const isDiagonal = Math.abs(dx) > 0.5 && Math.abs(dz) > 0.5;
+        if (isDiagonal) {
+            return { type: "bridge_diagonal", blocks: Math.ceil(horizontalDist), tactic: "arbitrary_support_check_diagonal", need: "blocks", diagonal: true, dx, dz };
+        } else {
+            return { type: "bridge_horizontal", blocks: Math.ceil(horizontalDist), tactic: "arbitrary_support_check_horizontal", need: "blocks", diagonal: false, dx, dz };
+        }
+    }
+    return { type: "walk", blocks: 0, tactic: "walk", need: "none" };
+}
+
+export function parkourPlan(from, to, terrainInfo) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const hDist = Math.hypot(dx, dz);
+
+    if (dy === 1 && hDist <= 1.5) {
+        return { type: "step_up", tactic: "jump", need: "headroom_2" };
+    }
+    if (dy === 0 && hDist > 1 && hDist <= 2.5) {
+        return { type: "gap_1", tactic: "sprint_jump", need: "runup_2" };
+    }
+    if (dy === 0 && hDist > 2.5 && hDist <= 4) {
+        return { type: "gap_2", tactic: "sprint_jump_bridge", need: "runup_3+blocks" };
+    }
+    if (dy === 1 && hDist > 1 && hDist <= 3) {
+        return { type: "ascend_gap", tactic: "sprint_jump_up", need: "runup" };
+    }
+    if (dy < 0 && hDist <= 2) {
+        return { type: "drop", tactic: "safe_fall_or_water_clutch", need: "water_bucket_or_3_blocks_drop" };
+    }
+    return { type: "walk", tactic: "walk" };
 }

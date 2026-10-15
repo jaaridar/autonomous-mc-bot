@@ -1,8 +1,8 @@
-import { system } from "@minecraft/server";
-import { add, floor, distance, center, CARDINAL, UP } from "../core/math.js";
+import { CARDINAL, UP, add, center, distance, floor } from "../core/math.js";
 import { amountOf } from "../core/recipes.js";
-import { BlockScan } from "./world.js";
 import { allowedPrey } from "./foraging.js";
+import { BlockScan } from "./world.js";
+import { system } from "@minecraft/server";
 /**
  * Roaming duties: villages worth looting, fresh ground worth scouting, and
  * opportunistic foraging on the way (a trunk for logs, a sheep for wool).

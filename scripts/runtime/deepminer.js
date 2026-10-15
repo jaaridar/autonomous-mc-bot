@@ -1,3 +1,5 @@
+import { CARDINAL, DOWN, UP, add, center, distance, floor, horizontal, key } from "../core/math.js";
+import { MINE, bestYFor, branchPattern, clusterVeins, isUnbreakable, optimalSpacing } from "../core/world.js";
 /**
  * DeepMiner v2 - REWRITTEN UNBREAKABLE DEEP MINING
  * - Front block fix: direct break without nav failure
@@ -6,11 +8,10 @@
  * - Torching, drop collection, tool awareness
  * - Never stops on front block
  */
-import { floor, add, center, distance, key, horizontal } from "../core/math.js";
-import { bestYFor, clusterVeins, branchPattern, optimalSpacing } from "../core/mining-strategy.js";
-import { MINE } from "../core/policy.js";
-import { UP, DOWN, CARDINAL } from "../core/math.js";
-import { isUnbreakable } from "../core/blocks.js";
+
+
+
+
 
 const STEP_LIMIT = 400;
 const BLOCKED_TTL = 1800;

@@ -1,5 +1,5 @@
-import { diggable } from "../core/policy.js";
-import { center, add } from "../core/math.js";
+import { add, center } from "../core/math.js";
+import { diggable } from "../core/world.js";
 /** Blocks that are cheap to break again without gear, best first for sealing. */
 const SEAL_BLOCKS = [
     "minecraft:dirt",

@@ -1,14 +1,16 @@
+import { CARDINAL, DOWN, UP, add, center, distance, floor, key } from "../core/math.js";
+import { chooseFastestViableMethod, chooseNetherRoute, ensureIronForBothBucketAndFlintSteel, evaluateBucketPriority, evaluateCaveLava, evaluateGroundLava, evaluateIgnitionOptions, evaluateLavaPoolForBucket, evaluateRuinedPortal, evaluateRuinedPortalForIgnitionAndObsidian, planObsidianFormation, planPortalConstruction, planShortestSafeRouteToIgnition, shouldNotWasteTimeSearchingFlintSteel, shouldObtainFlintAndSteelBeforePortal, shouldRecalculate, verifyPortalAction } from "../core/nether.js";
+import { Direction } from "@minecraft/server";
 /**
  * Nether Runtime - world-class Nether entry decision system.
  * Continuously compares ground-level lava pool, cave lava pool, ruined portal, alternative resources.
  * Chooses fastest viable route with best balance time, feasibility, resource requirements, survival probability.
  * Handles bucket milestone, water placement, lava manipulation, portal frame construction, obsidian formation, ignition.
  */
-import { floor, add, distance, center, key, UP, DOWN, CARDINAL } from "../core/math.js";
-import { chooseNetherRoute, evaluateGroundLava, evaluateCaveLava, evaluateRuinedPortal, shouldRecalculate, verifyPortalAction } from "../core/nether-strategy.js";
-import { evaluateBucketPriority, evaluateLavaPoolForBucket, planObsidianFormation, planPortalConstruction, chooseFastestViableMethod } from "../core/bucket-strategy.js";
-import { evaluateIgnitionOptions, shouldObtainFlintAndSteelBeforePortal, evaluateRuinedPortalForIgnitionAndObsidian, ensureIronForBothBucketAndFlintSteel, planShortestSafeRouteToIgnition, shouldNotWasteTimeSearchingFlintSteel } from "../core/flint-steel-strategy.js";
-import { Direction } from "@minecraft/server";
+
+
+
+
 
 export class NetherDirector {
     constructor(bot) {

@@ -1,6 +1,6 @@
-import { ItemStack, EntityComponentTypes, system, } from "@minecraft/server";
 import { counts } from "../core/recipes.js";
-import { FOOD, RAW_MEAT, RISKY_FOOD, toolTier } from "../core/policy.js";
+import { FOOD, RAW_MEAT, RISKY_FOOD, toolTier } from "../core/world.js";
+import { EntityComponentTypes, ItemStack, system } from "@minecraft/server";
 /** Building blocks usable for bridging, pillaring and blocking, best first. */
 const BUILD_BLOCKS = [
     "minecraft:cobblestone",

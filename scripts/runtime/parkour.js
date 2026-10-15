@@ -1,12 +1,14 @@
+import { bridgingPlan, parkourPlan } from "../core/knowledge.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor, horizontal, key } from "../core/math.js";
+import { isPassable } from "../core/world.js";
 /**
  * World-class Parkour - amazing parkour, bridging up horizontal diagonal arbitrary
  * depends on terrain and goal. Handles 1-gap, 2-gap, 3-gap, jump-up, drop, ladder, vine, scaffold.
  * Integrates with builder for arbitrary bridging.
  */
-import { floor, add, center, distance, key, horizontal } from "../core/math.js";
-import { CARDINAL, UP, DOWN, COMPASS } from "../core/math.js";
-import { parkourPlan, bridgingPlan } from "../core/world-awareness.js";
-import { isPassable } from "../core/blocks.js";
+
+
+
 
 export class Parkour {
     constructor(bot) {
