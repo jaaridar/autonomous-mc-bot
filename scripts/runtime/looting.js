@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/looting.js
- *
- * Merged from: runtime/looting.js, runtime/drops.js
- */
+// One module now: runtime/looting.js + runtime/drops.js (see docs/ARCHITECTURE.md).
 import { chooseLoot, shouldLootChest } from "../core/knowledge.js";
 import { add, center, distance, floor, horizontal, key } from "../core/math.js";
 import { matches } from "../core/recipes.js";

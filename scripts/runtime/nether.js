@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/nether.js
- *
- * Merged from: runtime/nether.js, runtime/bucket.js
- */
+// One module now: runtime/nether.js + runtime/bucket.js (see docs/ARCHITECTURE.md).
 import { CARDINAL, UP, add, center, distance, floor } from "../core/math.js";
 import { chooseFastestViableMethod, chooseNetherRoute, evaluateBucketPriority, evaluateIgnitionOptions, evaluateLavaPoolForBucket, planObsidianFormation, shouldNotWasteTimeSearchingFlintSteel, shouldObtainFlintAndSteelBeforePortal, shouldRecalculate, verifyPortalAction } from "../core/nether.js";
 import { timeOfDay } from "./world.js";

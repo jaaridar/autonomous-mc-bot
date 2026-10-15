@@ -5,11 +5,7 @@ import { adjustTacticForHostile, assessFoodReserves, prioritizeEscapeCoverSurviv
 import { FOOD, RAW_MEAT, RISKY_FOOD } from "../core/world.js";
 import { Furnace } from "./equipment.js";
 import { Explorer } from "./scouting.js";
-/**
- * scripts/runtime/survival.js
- *
- * Merged from: runtime/survival.js, runtime/foraging.js, runtime/food.js
- */
+// One module now: runtime/survival.js + runtime/foraging.js + runtime/food.js (see docs/ARCHITECTURE.md).
 
 
 

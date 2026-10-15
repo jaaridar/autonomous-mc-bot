@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/equipment.js
- *
- * Merged from: runtime/equipment.js, runtime/furnace.js
- */
+// One module now: runtime/equipment.js + runtime/furnace.js (see docs/ARCHITECTURE.md).
 import { TaskFault } from "../core/arbiter.js";
 import { QUICK_TOOL_CHAIN } from "../core/knowledge.js";
 import { CARDINAL, add, center, distance, floor } from "../core/math.js";

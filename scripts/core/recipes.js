@@ -1,8 +1,4 @@
-/**
- * scripts/core/recipes.js
- *
- * Merged from: core/recipes.js, core/survival.js, core/transfer.js
- */
+// One module now: core/recipes.js + core/survival.js + core/transfer.js (see docs/ARCHITECTURE.md).
 import { toolTier } from "./world.js";
 
 // ---------------------------------------------------------------- recipes.js

@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/scouting.js
- *
- * Merged from: runtime/scouting.js, runtime/exploration.js
- */
+// One module now: runtime/scouting.js + runtime/exploration.js (see docs/ARCHITECTURE.md).
 import { CARDINAL, UP, add, center, distance, floor, key } from "../core/math.js";
 import { amountOf } from "../core/recipes.js";
 import { allowedPrey } from "./survival.js";

@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/village.js
- *
- * Merged from: runtime/village.js, runtime/golem.js
- */
+// One module now: runtime/village.js + runtime/golem.js (see docs/ARCHITECTURE.md).
 import { CARDINAL, DOWN, add, center, distance, floor } from "../core/math.js";
 import { GOLEM_STATS, chooseBestGolemStrategy, evaluateGolemFight, evaluateVillage, evaluateVillageVsNetherRoute, shouldCraftBedIndependently, shouldDisengageDuringFight } from "../core/village.js";
 import { timeOfDay, weaponTierLoose } from "./world.js";

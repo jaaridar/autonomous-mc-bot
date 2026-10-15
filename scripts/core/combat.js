@@ -1,8 +1,4 @@
-/**
- * scripts/core/combat.js
- *
- * Merged from: core/combat.js, core/escape-strategy.js
- */
+// One module now: core/combat.js + core/escape-strategy.js (see docs/ARCHITECTURE.md).
 import { MOB_ADAPTIVE, adaptTactic } from "./knowledge.js";
 
 // ---------------------------------------------------------------- combat.js

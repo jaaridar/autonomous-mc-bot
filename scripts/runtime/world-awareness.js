@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/world-awareness.js
- *
- * Merged from: runtime/world-awareness.js, runtime/structures.js
- */
+// One module now: runtime/world-awareness.js + runtime/structures.js (see docs/ARCHITECTURE.md).
 import { STRUCTURE_SIGS, bridgingPlan, detectStructure, parkourPlan, prioritizeGoal, retainScore, scoreSurrounding, shouldLootChest } from "../core/knowledge.js";
 import { add, distance, floor, key } from "../core/math.js";
 import { RollingSweep } from "./world.js";

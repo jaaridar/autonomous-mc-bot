@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/builder.js
- *
- * Merged from: runtime/builder.js, runtime/hands.js
- */
+// One module now: runtime/builder.js + runtime/hands.js (see docs/ARCHITECTURE.md).
 import { bridgingPlan, getBlockInfo } from "../core/knowledge.js";
 import { DOWN, add, center, floor } from "../core/math.js";
 import { diggable, isFalling, isHazard, isLiquid, isPassable, isSolid, isUnbreakable } from "../core/world.js";

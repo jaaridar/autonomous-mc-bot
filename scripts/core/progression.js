@@ -1,8 +1,4 @@
-/**
- * scripts/core/progression.js
- *
- * Merged from: core/goal-decomposition.js, core/resource.js
- */
+// One module now: core/goal-decomposition.js + core/resource.js (see docs/ARCHITECTURE.md).
 import { isCritical, retainScore } from "./knowledge.js";
 import { amountOf } from "./recipes.js";
 

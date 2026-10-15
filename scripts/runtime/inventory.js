@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/inventory.js
- *
- * Merged from: runtime/inventory.js, runtime/resource.js
- */
+// One module now: runtime/inventory.js + runtime/resource.js (see docs/ARCHITECTURE.md).
 import { distance } from "../core/math.js";
 import { currentPhase, nextNeeded, priorityOf } from "../core/progression.js";
 import { counts } from "../core/recipes.js";

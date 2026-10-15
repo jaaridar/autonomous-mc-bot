@@ -1,8 +1,4 @@
-/**
- * scripts/core/nether.js
- *
- * Merged from: core/nether-strategy.js, core/bucket-strategy.js, core/flint-steel-strategy.js
- */
+// One module now: core/nether-strategy.js + core/bucket-strategy.js + core/flint-steel-strategy.js (see docs/ARCHITECTURE.md).
 import { isCritical, retainScore } from "./knowledge.js";
 
 // ---------------------------------------------------------------- nether-strategy.js

@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/navigation.js
- *
- * Merged from: runtime/navigation.js, runtime/parkour.js
- */
+// One module now: runtime/navigation.js + runtime/parkour.js (see docs/ARCHITECTURE.md).
 import { bridgingPlan, parkourPlan } from "../core/knowledge.js";
 import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor, horizontal, key } from "../core/math.js";
 import { PathSearch } from "../core/navigation.js";

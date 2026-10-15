@@ -1,8 +1,4 @@
-/**
- * scripts/runtime/mining.js
- *
- * Merged from: runtime/mining.js, runtime/deepminer.js
- */
+// One module now: runtime/mining.js + runtime/deepminer.js (see docs/ARCHITECTURE.md).
 import { DOWN, UP, add, center, distance, floor, horizontal, key } from "../core/math.js";
 import { MINE, bestYFor, branchPattern, bulkLevel, clusterVeins, isBulk, isUnbreakable, optimalSpacing, oreLevel } from "../core/world.js";
 
