@@ -1,8 +1,4 @@
-/**
- * scripts/core/survival.js
- *
- * Merged from: core/survival-scenarios.js, core/survival-capabilities.js, core/food-strategy.js, core/adaptive-planning.js
- */
+// One module now: core/survival-scenarios.js + core/survival-capabilities.js + core/food-strategy.js + core/adaptive-planning.js (see docs/ARCHITECTURE.md).
 
 
 // ---------------------------------------------------------------- survival-scenarios.js

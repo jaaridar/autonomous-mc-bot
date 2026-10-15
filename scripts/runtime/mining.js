@@ -220,7 +220,7 @@ export class Miner {
             this.dug++;
             this.turns = 0;
             this.refills = 0;
-            this.maybeTorch();
+            maybeTorch(this);
             return "arrived";
         }
         this.goTo(cell, 0);
@@ -235,11 +235,6 @@ export class Miner {
         this.refills = 0;
     }
 
-    maybeTorch() {
-        if (this.dug % 8 !== 0 || this.route.length < 2) return;
-        const behind = this.route[this.route.length - 2];
-        try { this.bot.placeTorch(add(behind, DOWN)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-    }
 
     descendStep(tick) {
         const b = this.bot, p = floor(b.sim.location);
@@ -642,7 +637,7 @@ export class DeepMiner {
             this.dug++;
             this.turns = 0;
             this.refills = 0;
-            this.maybeTorch();
+            maybeTorch(this);
             return "arrived";
         }
         this.goTo(cell, 0);
@@ -657,11 +652,6 @@ export class DeepMiner {
         this.refills = 0;
     }
 
-    maybeTorch() {
-        if (this.dug % 8 !== 0 || this.route.length < 2) return;
-        const behind = this.route[this.route.length - 2];
-        try { this.bot.placeTorch(add(behind, DOWN)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-    }
 
     descendStep(tick) {
         const b = this.bot, p = floor(b.sim.location);
@@ -990,5 +980,17 @@ export class DeepMiner {
             default:
                 return "blocked";
         }
+    }
+}
+/** Shared by Miner and DeepMiner: torch every 8th block, behind the digger. */
+function maybeTorch(m) {
+    if (m.dug % 8 !== 0 || m.route.length < 2)
+        return;
+    const behind = m.route[m.route.length - 2];
+    try {
+        m.bot.placeTorch(add(behind, DOWN));
+    }
+    catch (e) {
+        console.warn("[Verdant] " + String(e?.message || e).slice(0, 300));
     }
 }

@@ -3,7 +3,7 @@ import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, key } 
 import { HAZARDS, RANGED, diggable } from "../core/world.js";
 import { Hands } from "./builder.js";
 import { Direction } from "@minecraft/server";
-import { weaponTierLoose } from "./world.js";
+import { findBoat, weaponTierLoose } from "./world.js";
 /**
  * World-class Escaper - can escape any situation: 16 skeletons, blaze, enderman, warden, lava, water, pit, etc.
  * Phases: ASSESS -> COVER -> BUILD -> RETREAT -> RECOVER
@@ -674,10 +674,6 @@ export class Escaper {
         return "running";
     }
 
-    findBoat() {
-        try { return this.sim.dimension.getEntities({ type: "minecraft:boat", location: this.sim.location, maxDistance: 8 })[0]; } catch { return undefined; }
-    }
-
     mount(boat) {
         try { const rideable = boat.getComponent("minecraft:rideable"); if (rideable?.addRider?.(this.sim)) return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         try { if (typeof this.sim.interactWithEntity === "function" && this.sim.interactWithEntity(boat)) return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
@@ -703,7 +699,7 @@ export class Escaper {
             if (tick - this.boatSince < 120) return undefined;
             this.boatTries = 0;
         }
-        const existing = this.findBoat();
+        const existing = findBoat(this.sim);
         if (existing) {
             if (this.mount(existing)) {
                 this.riding = true;

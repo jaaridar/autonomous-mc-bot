@@ -1,8 +1,4 @@
-/**
- * scripts/core/knowledge.js
- *
- * Merged from: core/knowledge.js, core/loot.js, core/world-awareness.js
- */
+// One module now: core/knowledge.js + core/loot.js + core/world-awareness.js (see docs/ARCHITECTURE.md).
 
 
 // ---------------------------------------------------------------- knowledge.js

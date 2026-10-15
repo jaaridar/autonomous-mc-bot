@@ -1,8 +1,4 @@
-/**
- * scripts/core/village.js
- *
- * Merged from: core/village-strategy.js, core/golem-strategy.js
- */
+// One module now: core/village-strategy.js + core/golem-strategy.js (see docs/ARCHITECTURE.md).
 
 
 // ---------------------------------------------------------------- village-strategy.js

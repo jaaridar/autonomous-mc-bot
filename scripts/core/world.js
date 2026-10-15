@@ -1,8 +1,4 @@
-/**
- * scripts/core/world.js
- *
- * Merged from: core/blocks.js, core/ores.js, core/policy.js, core/mining-strategy.js
- */
+// One module now: core/blocks.js + core/ores.js + core/policy.js + core/mining-strategy.js (see docs/ARCHITECTURE.md).
 
 
 // ---------------------------------------------------------------- blocks.js

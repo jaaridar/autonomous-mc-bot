@@ -2,6 +2,7 @@
 import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor } from "../core/math.js";
 import { assessFallDepth, composeCapabilities, detectScenario, multiRiskPriority, shouldRecalculateAdaptive } from "../core/survival.js";
 import { Direction } from "@minecraft/server";
+import { findBoat } from "./world.js";
 /**
  * Survival Master - world-class handler for all 80 bedrock.dev scenarios.
  * Integrates fall assessment, night combat, resource shortage, shelter failures, multi-risk.
@@ -1117,7 +1118,7 @@ export class SurvivalMaster {
     }
 
     handleTrappedRiverHostile(ctx, tick) {
-        const boat = this.findBoat();
+        const boat = findBoat(this.sim);
         if (boat) {
             this.bot.boatTravel(tick);
             this.bot.reason = "Shelter 53: trapped river hostile - boat crossing";
@@ -1985,7 +1986,4 @@ export class SurvivalMaster {
         return false;
     }
 
-    findBoat() {
-        try { return this.sim.dimension.getEntities({ type: "minecraft:boat", location: this.sim.location, maxDistance: 8 })[0]; } catch { return undefined; }
-    }
 }

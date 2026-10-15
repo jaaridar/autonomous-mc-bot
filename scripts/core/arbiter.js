@@ -1,8 +1,4 @@
-/**
- * scripts/core/arbiter.js
- *
- * Merged from: core/arbiter.js, core/recovery.js
- */
+// One module now: core/arbiter.js + core/recovery.js (see docs/ARCHITECTURE.md).
 
 
 // ---------------------------------------------------------------- arbiter.js

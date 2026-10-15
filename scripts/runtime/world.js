@@ -576,3 +576,12 @@ export function weaponTierLoose(bag) {
     }
     return 0;
 }
+/** Nearest boat within 8 blocks, or undefined (shared by escape + survival). */
+export function findBoat(sim) {
+    try {
+        return sim.dimension.getEntities({ type: "minecraft:boat", location: sim.location, maxDistance: 8 })[0];
+    }
+    catch {
+        return undefined;
+    }
+}
