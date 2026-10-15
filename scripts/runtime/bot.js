@@ -271,6 +271,11 @@ export class Bot {
         return false;
     }
     blockTask(reason, recovery = "retry") {
+        // ULTRA AUTONOMY: never block on log acquisition - fallback to #logs
+        if (String(reason).includes("No acquisition skill") && (String(reason).includes("_log") || String(reason).includes("_stem") || String(reason).includes("bamboo"))) {
+            this.record("Auto-fix: log type blocked, falling back to #logs for autonomy");
+            try { this.obtain("#logs", 8, system.currentTick); return; } catch (_e) { this.fault(_e); }
+        }
         if (this.paused || this.mode === "idle") { this.pause(reason); return; }
         if (this.blocked) { this.stopActions(); this.state = "blocked"; return; }
         this.stopActions();
@@ -696,8 +701,8 @@ export class Bot {
         this.observe(tick);
 
         // World-class awareness: scan surroundings, remember important (iron ore, sheep, lava pools, structures)
-        try { this.awareness.tick(tick); } catch (_e) { this.fault(_e); }
-        try { this.structures.tick(tick); } catch (_e) { this.fault(_e); }
+        if (tick % 10 === 0) { try { this.awareness.tick(tick); } catch (_e) { this.fault(_e); } }
+        if (tick % 20 === 0) { try { this.structures.tick(tick); } catch (_e) { this.fault(_e); } }
 
         const hp = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 0;
         if (hp <= 0) { this.recordDeath(); this.save(); this.state = "dead"; this.deadSince = tick; this.respawnTried = false; return; }
@@ -1105,11 +1110,17 @@ export class Bot {
             return;
         }
 
-        // LAG FIX: cache heavy scans, throttle to 40 ticks
-        if (!this._followCache) this._followCache = { tick: 0, blocks: [], water: null, lastPos: null };
-        const needsScan = tick - this._followCache.tick > 40;
+        // ULTRA EFFICIENT: cache heavy scans, throttle to 60 ticks, ultra low cost
+        if (!this._followCache) this._followCache = { tick: 0, blocks: [], water: null, lastPos: null, waterNear: false, waterNearTick: 0 };
+        const needsScan = tick - this._followCache.tick > 60;
         const inWater = this.sim.isInWater;
-        const waterNear = (() => { try { return this.terrain.waterNear ? this.terrain.waterNear(selfFloor) : false; } catch (_e) { this.fault(_e); return false; } })();
+        // Ultra efficient: cache waterNear 80 ticks
+        let waterNear = this._followCache.waterNear;
+        if (tick - (this._followCache.waterNearTick ?? 0) > 80) {
+            waterNear = (() => { try { return this.terrain.waterNear ? this.terrain.waterNear(selfFloor) : false; } catch (_e) { this.fault(_e); return false; } })();
+            this._followCache.waterNear = waterNear;
+            this._followCache.waterNearTick = tick;
+        }
 
         // PRECISE TOWER 100: if owner >12 above, pillar directly under owner's column - precise, no 128 radius A*
         if (verticalDiff > 12) {
@@ -1182,7 +1193,7 @@ export class Bot {
         const r = this.navTo(goal, tick, leash);
         if (r === "blocked") {
             this.followBlocked = this.followBlocked || tick;
-            if (this.builder && this.builder.canBuild && tick % 30 === 0) {
+            if (this.builder && this.builder.canBuild && tick % 60 === 0) {
                 try {
                     const p = floor(this.sim.location);
                     const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
@@ -1244,6 +1255,18 @@ export class Bot {
 
 
     idle(tick) {
+        // ULTRA AUTONOMY: if idle too long, auto-start survival instead of staying idle
+        if (tick % 100 === 0 && this.mode === "idle" && !this.paused) {
+            const owner = this.owner();
+            if (!owner || distance(owner.location, this.sim.location) > 100) {
+                // No owner nearby, auto-start survival for true autonomy
+                if (this.settings.autoSurvival !== false) {
+                    this.record("Ultra autonomy: idle -> auto survival");
+                    this.setMode("survival");
+                    return;
+                }
+            }
+        }
         // ANTI-IDLE: never stay idle unless compulsory - always active guarding/patrolling/collecting
         const owner = this.owner();
         const home = this.home();
@@ -1278,7 +1301,7 @@ export class Bot {
         }
 
         // Always look for nearby drops to collect - never idle
-        if (this.settings.pickup && this.bag.container.emptySlotsCount > 0 && tick % 20 === 0) {
+        if (this.settings.pickup && this.bag.container.emptySlotsCount > 0 && tick % 40 === 0) {
             if (this.grabIgnore.size > 64) for (const [entityId, until] of this.grabIgnore) if (until < tick) this.grabIgnore.delete(entityId);
             const near = this.sim.dimension.getEntities({ type: "minecraft:item", location: this.sim.location, maxDistance: 10, })
                 .filter((e) => e.isValid && (this.grabIgnore.get(e.id) ?? 0) < tick && this.terrain.safe(e.location))
@@ -1956,14 +1979,14 @@ export class Bot {
 
 
     findAdjacentLogs(m, tick) {
-        // FIX: any log + short TTL + larger search for tree logs
+        // ULTRA EFFICIENT: any log + longer TTL 400 + smaller search 5x4x5=100 not 294
         if (!m.target) return null;
         const centerPos = m.target;
-        for (let dx = -3; dx <= 3; dx++) for (let dy = -1; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) {
+        for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 2; dy++) for (let dz = -2; dz <= 2; dz++) {
             if (dx===0 && dy===0 && dz===0) continue;
             const p = { x: centerPos.x + dx, y: centerPos.y + dy, z: centerPos.z + dz };
             const blockedUntil = m.blocked.get(key(p)) ?? 0;
-            if (blockedUntil > tick && blockedUntil - tick > 200) continue; // allow retry after short block
+            if (blockedUntil > tick && blockedUntil - tick > 400) continue; // ultra efficient: longer TTL 400
             const b = this.terrain.block(p);
             if (!b) continue;
             // Any log acceptable - fixes oak-only waste
@@ -2619,6 +2642,14 @@ export class Bot {
     }
     home() { return this.memory?.home() ?? this.anchor ?? this.sim.location; }
     cancelWork() { this.stopActions(); this.mining = undefined; this.workKey = ""; this.explorer.reset(); }
+    // Ultra efficient counts cache per tick
+    getCountsCached(tick) {
+        if (this._countsCacheTick !== tick) {
+            this._countsCache = this.bag.usableCounts();
+            this._countsCacheTick = tick;
+        }
+        return this._countsCache;
+    }
     obtain(target, amount, tick) {
         if (!this.settings.assistedCrafting) { this.blockTask("Assisted crafting must be enabled for autonomous dependencies."); return false; }
         const work = target + ":" + amount;
@@ -2628,7 +2659,7 @@ export class Bot {
             else if (tick - this.pendingTable.tick > 30) { this.pendingTable = undefined; this.blockTask("Table placement not observed. Inspect location/item before resuming."); }
             return false;
         }
-        if (amountOf(this.bag.usableCounts(), target) >= amount) { this.cancelWork(); return true; }
+        if (amountOf(this.getCountsCached(tick), target) >= amount) { this.cancelWork(); return true; }
         if (this.mining) { if (this.mine(this.mining, tick)) { this.mining = undefined; this.stopActions(); } return false; }
 
         // GOAL DECOMPOSITION: structured hierarchy with tagged requirements
@@ -2646,7 +2677,7 @@ export class Bot {
         const nearTable = this.terrain.tableNear(this.sim.location);
         const tableBlock = this.tablePosition ? this.terrain.block(this.tablePosition) : undefined;
         if (tableBlock && tableBlock.typeId !== id("crafting_table")) this.tablePosition = undefined;
-        const step = nextStep(target, amount, this.bag.usableCounts(), nearTable || !!this.tablePosition);
+        const step = nextStep(target, amount, this.getCountsCached(tick), nearTable || !!this.tablePosition);
         if (step.kind === "craft" && RECIPES.find((r) => r.output === step.item)?.table && !nearTable && this.tablePosition) {
             const spots = CARDINAL.map((d) => add(this.tablePosition, d));
             const chosen = spots.find((p) => this.terrain.safe(p)) ?? spots[0];
