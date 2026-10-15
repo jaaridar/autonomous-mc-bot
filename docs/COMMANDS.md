@@ -1,4 +1,4 @@
-# Verdant Bot — command reference v0.9.0 Advanced
+# Verdant Bot — command reference
 
 All commands are chat messages starting with `!bot`. The sender needs `/tag @s add verdant.admin` (one-time). The bot is owned by whoever spawned it; only the owner can command it. Commands are rate-limited to one per 4 ticks (`stop` is exempt). `!bot help` prints this list in-game.
 

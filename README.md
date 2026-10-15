@@ -127,11 +127,14 @@ manifest.json                  pack manifest (script entry: scripts/main.js)
 structures/verdant/host.mcstructure   GameTest host structure
 scripts/
   main.js                      chat commands, event wiring, tick loop
-  core/                        engine-free logic (unit-testable)
-    math, commands, policy, recipes, ores, navigation, survival, recovery, transfer, memory
-  runtime/                     engine-bound components
-    bot, drops, scouting, host, navigation, mining, world, inventory, equipment,
-    escape, furnace, foraging, exploration, survival, hands, memory
+  core/                        engine-free logic, 12 modules (unit-testable)
+    math, world, knowledge, recipes, navigation, arbiter,
+    progression, survival, nether, village, combat, memory
+  runtime/                     engine-bound components, 20 modules
+    bot, world, inventory, navigation, builder, combat, escape,
+    survival-master, survival, scouting, world-awareness, looting,
+    mining, nether, village, speedrun, equipment, memory, ui, host
+docs/ARCHITECTURE.md           layer map, rules, roadmap
 docs/COMMANDS.md               full command reference
 tools/                         self-contained verification suite (node tools/run-all.mjs)
 LICENSE (MIT), THIRD_PARTY_NOTICES.txt
@@ -146,13 +149,14 @@ dependencies (`@minecraft/*` is stubbed locally). One command runs everything:
 node tools/run-all.mjs
 ```
 
-In order: module-goal parse of every file (`parse.mjs` — one invalid line can
-silently kill the whole pack in-game, so files are parsed exactly how the engine
-parses them), link + evaluate against the stubs (`linkcheck.mjs` — catches
-missing exports, import cycles and top-level throws), the no-undef gate
-(`undef.mjs` — flags calls to names that were never imported and `this.<field>`
-reads that are never assigned; both classes were real shipped crashes), an
-import scan (`imports.mjs`), core unit tests (`test.mjs`), the walkable-block
-regex guard (`walkable.mjs`) and the drop-flush tests (`flush.mjs`).
+In order: the four gates in `gates.mjs` — module-goal parse of every file (one
+invalid line can silently kill the whole pack in-game, so files are parsed
+exactly how the engine parses them), link + evaluate against the stubs (catches
+missing exports, import cycles and top-level throws), the no-undef gate (flags
+calls to names that were never imported and `this.<field>` reads that are never
+assigned; both classes were real shipped crashes) and a missing-import scan — then
+`tests.mjs` (persistent-memory schema, capabilities and goal decomposition, the
+walkable-block regex guard, drop-flush tests) and `perf.test.mjs` (native-call
+and A* budgets, equivalence against the frozen v1.2.4 search).
 `tools/selftest/` holds deliberately broken fixtures; the run requires those to
 fail, proving the no-undef gate still catches bugs.
