@@ -423,6 +423,6 @@ world.afterEvents.playerLeave.subscribe((e) => {
 });
 system.runInterval(() => bot?.tick(), 1);
 world.afterEvents.worldLoad.subscribe(() => {
-    console.warn("[Verdant 0.8.9] Persistent memory, night camping, death recovery and inventory merging active. Back up the world; deposit before world exit.");
-    world.sendMessage("§a[Verdant] v0.8.9 scripts loaded - !bot spawn to begin.");
+    console.warn("[Verdant 0.8.10] Persistent memory, night camping, death recovery and inventory merging active. Back up the world; deposit before world exit.");
+    world.sendMessage("§a[Verdant] v0.8.10 scripts loaded - !bot spawn to begin.");
 });

@@ -21,7 +21,7 @@ If you are adding a feature, find its layer here first.
 | `drops.js` | Loose-drop collection. `near()` finds matching item entities, `run()` walks to (and waits on) one, `pushToward()` is the bounded last-resort straight line. |
 | `scouting.js` | `Scout`: everything about roaming voluntarily — village detection, frontier scouting, opportunistic foraging (logs, sheep). Runs only in the survival maintain stage. |
 | `mining.js` | `Miner`: staircase shafts, corridors, torch placement, cavity bookkeeping. Called by mine-mode; never moves the bot itself. |
-| `escape.js` | `Escaper`: water/lava/being-stuck handling, pillaring, bridging, tunneling. Uses nav.lastGoal so escapes aim at the real goal. |
+| `escape.js` | `Escaper`: water/lava/being-stuck handling. A stuck escape probes all four directions (goal-ward first) and picks tunnel/bridge/climb/drop/pillar to fit the terrain; it never digs beside lava. Uses nav.lastGoal so escapes aim at the real goal. |
 | `survival.js` | `SurvivalDirector`: the gear ladder (stone → iron → armour → extras → maintain) and the food hook. |
 | `foraging.js` | `Forager`: hunger-driven animal hunting (physical attacks only). |
 | `world.js` | `Terrain` (block reads, danger rules, threats, entity helpers) + `BlockScan` (chunked nearest-first block sweeps). |
@@ -60,6 +60,9 @@ A surface resource task never silently roams. In order:
 
 - Long-distance movement is `Navigator`'s. Call `nav.reset()` when you take
   over, or the next caller inherits a stale plan.
+- `Navigator` flags two failure modes: a stall (no movement for ~2 s) and a
+  loop (movement that never closes the gap, or 5+ re-entries of one cell in
+  6 s). Both set `nav.stuck` for exactly one tick; the brain then escalates.
 - `navTo(goal, tick, leash)` targets walkable cells *around* a point (drops on
   leaves, owner on a ledge) instead of demanding the exact cell.
 - `Drops.pushToward()` is the only sanctioned straight-line movement: short

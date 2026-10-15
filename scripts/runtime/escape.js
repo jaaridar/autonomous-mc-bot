@@ -13,9 +13,11 @@ const FACES = new Map([
 const dirFace = (d) => FACES.get(`${d.x},${d.y},${d.z}`);
 /**
  * Last-resort mobility. Swims to shore, tunnels through a wall, bridges a gap,
- * or pillars up out of a pit. Every block placement is verified against the
- * world before the bot commits, and a failure becomes a blocked task rather
- * than a silent stall. Block placing only runs when `bridge` is enabled.
+ * or pillars up out of a pit. When trapped it probes the goal-ward direction
+ * first and then the other three before giving up, so one sealed wall cannot
+ * strand the bot. Every block placement is verified against the world before
+ * the bot commits, and a failure becomes a blocked task rather than a silent
+ * stall. Block placing only runs when `bridge` is enabled.
  */
 export class Escaper {
     constructor(bot) {
@@ -41,6 +43,10 @@ export class Escaper {
         this.boatSince = 0;
         this.drowning = undefined;
         this.swimming = false;
+        /** Direction the current escape committed to; sticky across calls. */
+        this.escapeDir = undefined;
+        /** Directions probed dead this escape session (lava, unbreakable, no tool). */
+        this.deadDirs = [];
     }
     get active() {
         return !!this.mode;
@@ -59,6 +65,8 @@ export class Escaper {
         this.boatTries = 0;
         this.drowning = undefined;
         this.swimming = false;
+        this.escapeDir = undefined;
+        this.deadDirs = [];
         this.sim.stopBreakingBlock();
         this.sim.isSneaking = false;
     }
@@ -310,7 +318,71 @@ export class Escaper {
         }
         return CARDINAL[0];
     }
-    /** General unstick: step off hazard, tunnel a wall, bridge a gap, pillar up. */
+    /** Compass order for probing: committed direction first, then goal-ward, the sides, the back. */
+    candidateDirs() {
+        const pref = this.escapeDirection();
+        const side = { x: -pref.z, y: 0, z: pref.x };
+        const order = [pref, side, { x: -side.x, y: 0, z: -side.z }, { x: -pref.x, y: 0, z: -pref.z }];
+        if (this.escapeDir) {
+            const at = order.findIndex((d) => d.x === this.escapeDir.x && d.z === this.escapeDir.z);
+            if (at > 0) {
+                order.splice(at, 1);
+                order.unshift(this.escapeDir);
+            }
+        }
+        return order.filter((d) => !this.deadDirs.some((q) => q.x === d.x && q.z === d.z));
+    }
+    /**
+     * What, if anything, a direction offers. Pure: reads the world, commits to
+     * nothing. Kinds: climb, tunnel, bridge, drop, walk, dead (with a reason).
+     */
+    probe(dir, p) {
+        const foot = add(p, dir), head = add(foot, UP), floorCell = add(foot, DOWN);
+        if (this.terrain.solid(foot)) {
+            // A clean one-block step up: no digging needed.
+            if (this.terrain.empty(head) && this.terrain.empty(add(head, UP)))
+                return { kind: "climb" };
+            const footType = this.terrain.block(foot)?.typeId ?? "";
+            const rule = diggable(footType);
+            if (this.terrain.lavaNear(foot))
+                return { kind: "dead", why: "lava beside the wall" };
+            if (rule && (rule.tier === 0 || this.bag.tool("pickaxe", rule.tier)))
+                return { kind: "tunnel" };
+            if (!this.terrain.empty(head))
+                return { kind: "dead", why: rule
+                    ? `need a ${rule.tool} tier ${rule.tier} to break ${footType}`
+                    : `${footType} is unbreakable` };
+            return { kind: "dead", why: "no headroom to climb over" };
+        }
+        if (this.terrain.solid(head)) {
+            // A one-high passage: open the ceiling cell so it becomes walkable.
+            const headType = this.terrain.block(head)?.typeId ?? "";
+            const rule = diggable(headType);
+            if (this.terrain.lavaNear(head))
+                return { kind: "dead", why: "lava beside the low ceiling" };
+            if (rule && (rule.tier === 0 || this.bag.tool("pickaxe", rule.tier)))
+                return { kind: "tunnel" };
+            return { kind: "dead", why: rule
+                ? `need a ${rule.tool} tier ${rule.tier} to break ${headType}`
+                : `${headType} is unbreakable` };
+        }
+        const floorBlock = this.terrain.block(floorCell);
+        if (!floorBlock || floorBlock.isLiquid || !floorBlock.isSolid) {
+            if (this.bot.settings.bridge && this.bag.buildBlock() >= 0 && !this.terrain.dangerous(floorCell))
+                return { kind: "bridge" };
+            const drop = this.terrain.groundNear(foot.x, foot.z, foot.y - 1, 5);
+            if (drop && !this.terrain.dangerous(drop))
+                return { kind: "drop" };
+            return { kind: "dead", why: "a gap with nothing safe to bridge or drop onto" };
+        }
+        return { kind: "walk" };
+    }
+    /**
+     * General unstick: step off hazard, then probe directions in order -
+     * goal-ward first, the sides and back if it is sealed - to dig through,
+     * bridge over, climb or drop. Pillaring up and an honest give-up are the
+     * last resorts, so a single bad wall cannot strand the bot.
+     */
     trapped(tick) {
         const sim = this.sim;
         const p = floor(sim.location);
@@ -324,52 +396,62 @@ export class Escaper {
                 return this.walkTo(center(spot));
             }
         }
-        const dir = this.escapeDirection();
-        const foot = add(p, dir), head = add(foot, UP), floorCell = add(foot, DOWN);
-        const climbable = this.terrain.solid(foot) &&
-            this.terrain.empty(head) &&
-            this.terrain.empty(add(head, UP));
-        if (climbable) {
-            if (sim.isOnGround)
-                sim.jump();
-            this.lastReason = "Climbing out.";
-            return this.walkTo(center(head));
-        }
-        if (this.terrain.solid(foot) && this.terrain.solid(head)) {
-            const cellType = this.terrain.block(foot)?.typeId ?? "";
-            const rule = diggable(cellType);
-            const canDig = !!rule && (rule.tier === 0 || this.bag.tool("pickaxe", rule.tier));
-            if (canDig)
-                return this.tunnel(dir, tick);
-            // Cannot dig through: get above the obstruction instead.
-            if (this.bot.settings.bridge && this.bag.buildBlock() >= 0)
-                return this.pillar(tick);
-            return this.giveUp(rule
-                ? `Need a ${rule.tool} tier ${rule.tier} to tunnel out.`
-                : "Walled in by unbreakable blocks.");
-        }
-        const blocks = this.bag.buildBlock() >= 0;
-        const floorBlock = this.terrain.block(floorCell);
-        if (!floorBlock || floorBlock.isLiquid || !floorBlock.isSolid) {
-            if (this.bot.settings.bridge && blocks && !this.terrain.dangerous(floorCell))
+        const preferred = this.escapeDirection();
+        const goalward = (d) => d.x === preferred.x && d.z === preferred.z;
+        const why = [];
+        for (const dir of this.candidateDirs()) {
+            const plan = this.probe(dir, p);
+            if (plan.kind === "dead") {
+                if (!this.deadDirs.some((d) => d.x === dir.x && d.z === dir.z))
+                    this.deadDirs.push(dir);
+                const committed = this.escapeDir && this.escapeDir.x === dir.x && this.escapeDir.z === dir.z;
+                if (committed)
+                    this.escapeDir = undefined;
+                if (goalward(dir))
+                    why.unshift(plan.why);
+                else
+                    why.push(plan.why);
+                continue;
+            }
+            const committed = this.escapeDir && this.escapeDir.x === dir.x && this.escapeDir.z === dir.z;
+            // Side and back directions exist to break through or over; plain
+            // walking belongs to the pathfinder, not the escape module.
+            if (!committed && !goalward(dir) && (plan.kind === "walk" || plan.kind === "drop"))
+                continue;
+            this.escapeDir = dir;
+            if (plan.kind === "tunnel") {
+                const r = this.tunnel(dir, tick);
+                if (r === "failed")
+                    this.escapeDir = undefined;
+                return r;
+            }
+            if (plan.kind === "bridge")
                 return this.bridge(dir, tick);
-            const drop = this.terrain.groundNear(foot.x, foot.z, foot.y - 1, 5);
-            if (drop && !this.terrain.dangerous(drop)) {
+            if (plan.kind === "climb") {
+                if (sim.isOnGround)
+                    sim.jump();
+                this.lastReason = "Climbing out.";
+                return this.walkTo(center(add(add(p, dir), UP)));
+            }
+            if (plan.kind === "drop") {
+                const drop = this.terrain.groundNear(p.x + dir.x, p.z + dir.z, p.y - 1, 5);
+                if (!drop || this.terrain.dangerous(drop))
+                    continue;
                 sim.isSprinting = true;
                 this.lastReason = "Dropping to lower ground.";
                 return this.walkTo(center(drop));
             }
-        }
-        const walk = this.terrain.groundNear(foot.x, foot.z, p.y, 2);
-        if (walk && !this.terrain.dangerous(walk)) {
+            const walk = this.terrain.groundNear(p.x + dir.x, p.z + dir.z, p.y, 2);
+            if (!walk || this.terrain.dangerous(walk))
+                continue;
             sim.isSprinting = true;
             this.lastReason = "Walking out.";
             return this.walkTo(center(walk));
         }
-        if (this.bot.settings.bridge && blocks)
+        if (this.bot.settings.bridge && this.bag.buildBlock() >= 0)
             return this.pillar(tick);
-        return this.giveUp(blocks
-            ? "No escape route from here."
+        return this.giveUp(why.length
+            ? "No way out: " + why[0] + "."
             : "No escape route and no building blocks; give me dirt or cobblestone to bridge or pillar out.");
     }
     /** Break the blocking cell(s) directly ahead so a path can be carved. */
@@ -390,6 +472,8 @@ export class Escaper {
         if (tick - this.since > 400)
             return this.giveUp("Tunnel escape timed out.");
         const cell = cells[0], type = this.terrain.block(cell)?.typeId;
+        if (this.terrain.lavaNear(cell))
+            return this.giveUp("Refusing to tunnel beside lava.");
         const rule = diggable(type);
         if (!rule)
             return this.giveUp(`Cannot break ${type} to escape.`);
@@ -432,7 +516,7 @@ export class Escaper {
                     // Keep extending while the gap continues toward the goal;
                     // returning "done" on every single block would hand the
                     // whole span back to the pathfinder one cell at a time.
-                    const n = this.escapeDirection();
+                    const n = this.escapeDir ?? this.escapeDirection();
                     const q = floor(sim.location);
                     const t = add(add(q, DOWN), n);
                     const tb = this.terrain.block(t);

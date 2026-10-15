@@ -28,6 +28,9 @@ export class Navigator {
         this.lastGoal = undefined;
         /** True after the last go() gave up, so the brain can escalate to escape. */
         this.stuck = false;
+        /** Rolling position/approach samples used to catch circling (a loop with movement). */
+        this.trail = [];
+        this.lastSample = 0;
     }
     reset() {
         this.sim.stopMoving();
@@ -41,6 +44,7 @@ export class Navigator {
         this.endpoints.clear();
         this.urgent = false;
         this.avoid = [];
+        this.trail = [];
     }
     replan(tick) {
         this.search = new PathSearch(this.terrain.read, floor(this.sim.location), floor(this.target), 0.5, this.parkour, 2600, 32, horizontal(this.sim.location, this.target) > 20, this.avoid);
@@ -60,6 +64,51 @@ export class Navigator {
         this.reset();
         return "failed";
     }
+    /**
+     * Circling detector. The stall timer only fires when the bot STOPS moving,
+     * but a wedged bot often keeps travelling while never closing the gap
+     * (bumping a wall, re-routing around the same corner). Two signals:
+     *  - it re-enters one cell 5+ times within 6 s (an oscillation), or
+     *  - a full 8-11 s window of travel bought less than 1.5 blocks of approach.
+     * Either means: stop re-pathing, escalate to the escape module.
+     */
+    detectLoop(tick) {
+        if (!this.target)
+            return false;
+        // Following a moving target legitimately keeps the distance flat.
+        if (tick - this.lastRetarget < 120) {
+            this.trail = [];
+            return false;
+        }
+        if (tick - this.lastSample < 10)
+            return false;
+        this.lastSample = tick;
+        const p = this.sim.location;
+        const here = key(floor(p));
+        this.trail.push({ tick, x: p.x, z: p.z, d: horizontal(p, this.target), k: here });
+        while (this.trail.length && tick - this.trail[0].tick > 220)
+            this.trail.shift();
+        const first = this.trail[0];
+        if (!first || tick - first.tick < 160)
+            return false;
+        const visits = this.trail.filter((s) => tick - s.tick <= 120 && s.k === here).length;
+        if (visits >= 5) {
+            this.trail = [];
+            return true;
+        }
+        let travelled = 0;
+        for (let i = 1; i < this.trail.length; i++)
+            travelled += Math.hypot(this.trail[i].x - this.trail[i - 1].x, this.trail[i].z - this.trail[i - 1].z);
+        if (travelled < 8)
+            return false; // barely moving: the stall timer owns this case
+        const best = this.trail.reduce((m, s) => Math.min(m, s.d), Infinity);
+        if (best <= first.d - 1.5) {
+            this.trail = this.trail.slice(-4); // real progress; keep a short tail
+            return false;
+        }
+        this.trail = [];
+        return true;
+    }
     go(goal, tick) {
         if (horizontal(this.sim.location, goal) < 0.65 &&
             Math.abs(this.sim.location.y - goal.y) < 1.1) {
@@ -78,6 +127,7 @@ export class Navigator {
             this.lastRetarget = tick;
             this.retries = 0;
             this.endpoints.clear();
+            this.trail = [];
             this.replan(tick);
         }
         if (tick - this.segmentStart > 600)
@@ -138,6 +188,8 @@ export class Navigator {
             this.replan(tick);
             return "running";
         }
+        if (this.detectLoop(tick))
+            return this.fail("Circling without closing on the waypoint; treating the terrain as blocking.");
         if (this.lastIssued !== this.waypoint) {
             // Combine collinear ground steps so the engine does not stop at every block.
             const first = this.waypoint;
