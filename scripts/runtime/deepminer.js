@@ -46,6 +46,9 @@ export class DeepMiner {
         this.branchIndex = 0;
         this.veins = [];
         this.currentVein = undefined;
+        this.veinKey = undefined;
+        this.veinSince = 0;
+        this.veinDugAt = -1;
         this.reason = "No deep mine active.";
         this.torchTimer = 0;
     }
@@ -105,6 +108,13 @@ export class DeepMiner {
                 this.dig = undefined;
                 this.reason = "Digging stalled; turning.";
                 return "stalled";
+            } else if (tick - (this.dig.retryAt ?? this.dig.since) >= 90) {
+                // One absorbed swing must not freeze the tunnel: re-issue the dig.
+                this.dig.retryAt = tick;
+                const rr = b.digCell(this.dig.cell, tick);
+                if (rr === "open") { this.dig = undefined; return "open"; }
+                if (rr !== "digging") { this.dig = undefined; this.reason = b.lastDigReason; return rr; }
+                return "digging";
             } else {
                 return "digging";
             }
@@ -310,8 +320,19 @@ export class DeepMiner {
         return "working";
     }
 
+    /** Drop one ore block from the current vein with an honest reason. */
+    skipOre(ore, why) {
+        this.currentVein = (this.currentVein ?? []).filter((o) => !(o.x === ore.x && o.y === ore.y && o.z === ore.z));
+        this.veinKey = undefined;
+        this.reason = why;
+    }
+
     /**
-     * Vein mining: mine all blocks in current vein cluster.
+     * Vein mining: mine every block of the found cluster. Blocks beyond reach
+     * are reached by CUTTING A SAFE TUNNEL one cell at a time - the bot never
+     * walks into solid ore (that used to push at the rock face forever). Each
+     * ore block gets a bounded progress deadline and is skipped honestly when
+     * nothing changes for 45s, so a vein can never stall the run.
      */
     veinStep(tick) {
         if (!this.currentVein || !this.currentVein.length) {
@@ -340,29 +361,63 @@ export class DeepMiner {
             // Vein exhausted
             this.veins.shift();
             this.currentVein = this.veins[0];
+            this.veinKey = undefined;
             if (!this.currentVein) {
                 this.phase = "branch";
                 return "done";
             }
             return "working";
         }
-        // Need to approach
-        if (distance(b.sim.location, center(nearest)) > 4.5) {
-            const r = b.nav.go(center(nearest), tick);
-            if (r === "failed") {
-                // Try direct
-                this.goTo(nearest, tick);
+        // Bounded progress deadline per ore: skip it honestly when stuck.
+        const oreKey = `${nearest.x},${nearest.y},${nearest.z}`;
+        if (this.veinKey !== oreKey || this.veinDugAt !== this.dug) {
+            this.veinKey = oreKey;
+            this.veinSince = tick;
+            this.veinDugAt = this.dug;
+        } else if (tick - this.veinSince > 900) {
+            this.skipOre(nearest, `Ore at ${nearest.x},${nearest.y},${nearest.z} is unreachable; skipping it.`);
+            return "working";
+        }
+        b.terrain.invalidate(nearest);
+        // Within reach with a clear line: mine it directly.
+        if (distance(b.sim.getHeadLocation(), center(nearest)) <= 4.5 &&
+            b.terrain.line(b.sim.getHeadLocation(), center(nearest), nearest)) {
+            const r = b.digCell(nearest, tick);
+            if (r === "digging" || r === "open") {
+                this.reason = `Mining vein block at ${nearest.x},${nearest.y},${nearest.z}`;
+                return "working";
             }
+            this.reason = b.lastDigReason ?? "Cannot break vein block right now.";
+            return "working"; // the deadline above keeps this bounded
+        }
+        // Out of reach: cut a safe tunnel toward it, one cell at a time.
+        const delta = { x: nearest.x - p.x, y: nearest.y - p.y, z: nearest.z - p.z };
+        let step;
+        if (Math.abs(delta.x) <= 1 && Math.abs(delta.z) <= 1 && delta.y < -1) {
+            step = { x: p.x, y: p.y - 1, z: p.z }; // directly above it: go straight down
+        } else if (Math.abs(delta.x) > Math.abs(delta.z)) {
+            step = { x: p.x + Math.sign(delta.x), y: p.y, z: p.z };
+        } else if (delta.z !== 0) {
+            step = { x: p.x, y: p.y, z: p.z + Math.sign(delta.z) };
+        } else {
+            step = { x: p.x, y: p.y - 1, z: p.z };
+        }
+        if (!b.terrain.solid(add(step, DOWN))) {
+            this.skipOre(nearest, `No floor toward ore at ${nearest.x},${nearest.y},${nearest.z}; skipping it.`);
             return "working";
         }
-        // Break it
-        const r = b.digCell(nearest, tick);
+        if (b.terrain.lavaNear(step) || b.terrain.waterNear(step)) {
+            this.skipOre(nearest, `Fluid between bot and ore at ${nearest.x},${nearest.y},${nearest.z}; skipping it.`);
+            return "working";
+        }
+        const r = this.open(step.y < p.y ? [step] : [add(step, UP), step], tick);
         if (r === "digging") return "working";
-        if (r === "open") {
-            // Already broken, remove from list
-            this.currentVein = this.currentVein.filter(o => !(o.x === nearest.x && o.y === nearest.y && o.z === nearest.z));
+        if (r !== "open") {
+            this.skipOre(nearest, `Tunnel blocked (${r}); skipping ore at ${nearest.x},${nearest.y},${nearest.z}.`);
             return "working";
         }
+        this.reason = `Cutting a tunnel toward ore at ${nearest.x},${nearest.y},${nearest.z}`;
+        this.goTo(step, tick);
         return "working";
     }
 

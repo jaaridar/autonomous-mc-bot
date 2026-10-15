@@ -186,18 +186,10 @@ export class Terrain {
                     obstruct.push(cell);
                 }
             }
-            // ROBUST: check block in front of head that gets in between when going down - critical fix for mining down obstruction
-            // When mining below, bot looks down, but block at head level in front can block LOS or movement
-            for (const d of [{x:1,y:0,z:0},{x:-1,y:0,z:0},{x:0,y:0,z:1},{x:0,y:0,z:-1},{x:1,y:1,z:0},{x:-1,y:1,z:0},{x:0,y:1,z:1},{x:0,y:1,z:-1}]) {
-                const headFront = { x: bp.x + d.x, y: bp.y + d.y, z: bp.z + d.z };
-                const b = this.block(headFront);
-                if (b && !b.isAir && b.isSolid && !WALKABLE.test(b.typeId)) {
-                    // Only add if it blocks line of sight to below target (check if it's in front and at head level)
-                    if (d.y >= 0) {
-                        obstruct.push(headFront);
-                    }
-                }
-            }
+            // Head-front side cells are deliberately NOT listed here: when mining
+            // straight down they are just the shaft walls, and listing them made
+            // the clear phase dig sideways forever. breakThrough() clears a real
+            // swing blocker only after a dig actually fails.
         }
         return obstruct;
     }

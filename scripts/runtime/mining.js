@@ -129,6 +129,14 @@ export class Miner {
                 this.reason = "Digging stalled; turning the tunnel.";
                 return "stalled";
             }
+            else if (tick - (this.dig.retryAt ?? this.dig.since) >= 90) {
+                // One absorbed swing must not freeze the tunnel: re-issue the dig.
+                this.dig.retryAt = tick;
+                const rr = b.digCell(this.dig.cell, tick);
+                if (rr === "open") { this.dig = undefined; return "open"; }
+                if (rr !== "digging") { this.dig = undefined; this.reason = b.lastDigReason; return rr; }
+                return "digging";
+            }
             else {
                 return "digging";
             }
