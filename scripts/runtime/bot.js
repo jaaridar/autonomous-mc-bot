@@ -249,13 +249,16 @@ export class Bot {
         this.blocked = undefined;
         this.recoveryAttempts = 0;
         this.mode = "idle";
-        this.paused = true;
+        // ACTIVE IDLE: a finished task hands over to the guard/patrol watchdog instead of standing still.
+        // Only a still-sealed emergency shelter keeps the bot held (resume opens it).
+        this.paused = !!this.escapeSeal;
+        this.pausedReason = this.escapeSeal ? "Shelter sealed; !bot resume opens it first." : "";
         this.mining = undefined;
         this.pendingTable = undefined;
         this.goal = undefined;
         this.recoverTarget = undefined;
         this.deathRecovery = undefined;
-        this.state = "paused";
+        this.state = this.paused ? "paused" : "idle";
         this.reason = reason;
         this.record(reason);
         this.save();
@@ -271,7 +274,19 @@ export class Bot {
         return false;
     }
     blockTask(reason, recovery = "retry") {
-        if (this.paused || this.mode === "idle") { this.pause(reason); return; }
+        if (this.paused) { this.record("problem while paused: " + reason); return; }
+        if (this.mode === "idle") {
+            // No mission to hold: report honestly and stay watchful instead of freezing the watchdog.
+            this.record("problem (idle): " + reason);
+            const now = system.currentTick;
+            const text = `Problem: ${reason} (idle) - staying watchful; defence stays active.`;
+            const last = this.lastBlockedTell;
+            if (!last || last.text !== text || now - last.tick > 12000) {
+                this.lastBlockedTell = { text, tick: now };
+                this.tell(text);
+            }
+            return;
+        }
         if (this.blocked) { this.stopActions(); this.state = "blocked"; return; }
         this.stopActions();
         this.blocked = blockedTask(reason, recovery, ++this.recoveryAttempts, system.currentTick);
@@ -279,7 +294,10 @@ export class Bot {
         this.reason = reason;
         this.record("task blocked: " + reason);
         const retrying = this.blocked.retryAt !== undefined;
-        const text = `Problem: ${reason} (while ${this.mission()}). ` + (retrying ? "Retrying shortly; defence stays active." : "Task needs attention; defence stays active.");
+        const soon = (this.blocked.attempt ?? 1) <= 3;
+        const text = `Problem: ${reason} (while ${this.mission()}). ` + (retrying
+            ? (soon ? "Retrying shortly; defence stays active." : "Retrying periodically (about a minute); defence stays active.")
+            : "Task needs attention; defence stays active.");
         const last = this.lastBlockedTell;
         const now = system.currentTick;
         if (!last || last.text !== text || now - last.tick > 12000) {
@@ -315,6 +333,7 @@ export class Bot {
         if (this.parkCamp()) this.tell("Shelter is sealed; !bot resume opens it first.");
         this.escaper.reset();
         this.paused = true;
+        this.pausedReason = reason;
         this.state = "paused";
         this.reason = reason;
         this.record(reason);
@@ -327,6 +346,7 @@ export class Bot {
         this.recoveryAttempts = 0;
         this.equipment.faultReason = "";
         this.paused = false;
+        this.pausedReason = "";
         this.taskStart = system.currentTick;
         this.lastBranch = "";
         this.reason = "Resumed";
@@ -372,6 +392,7 @@ export class Bot {
         this.equipment.faultReason = "";
         this.progressSignature = JSON.stringify(this.bag.counts());
         this.paused = false;
+        this.pausedReason = "";
         this.stage = 0;
         this.workKey = "";
         this.autonomy.reset(system.currentTick);
@@ -640,6 +661,7 @@ export class Bot {
         if (this.state === "fault" && this.faultResumeAt && tick >= this.faultResumeAt) {
             this.record("Auto-resuming from fault for robustness");
             this.paused = false;
+            this.pausedReason = "";
             this.state = "recovering";
             this.errors = 0;
             this.faultResumeAt = 0;
@@ -648,7 +670,14 @@ export class Bot {
         }
     }
     think(tick) {
-        if (this.paused) return;
+        if (this.paused) {
+            // Owner-availability pauses end automatically once the owner is back; owner-commanded pauses stay.
+            const ownerPause = this.pausedReason === "Owner disconnected." || (this.pausedReason || "").startsWith("Owner offline");
+            if (ownerPause && this.owner()) {
+                this.record("Owner returned; resuming automatically.");
+                this.resume();
+            } else return;
+        }
         const owner = this.owner();
         if (!owner) { this.pause("Owner offline; no unattended world mutation."); return; }
         // ROBUST: Allow Nether and End travel - was previously pausing with "Nether/End travel is not implemented" causing auto shutdown on portal entry
@@ -735,8 +764,10 @@ export class Bot {
             if (tick % 5 === 0 || !this.arbiter.current || this.arbiter.current.id === "survival_master" || this.sim.isInWater) {
                 const arbResult = this.arbiter.tick(tick);
                 if (arbResult.code === "running") {
-                    // If arbiter says running for survival/escape/combat/food, honor it
-                    if (["survival_master","escape","combat","food","bucket","golem","village","nether"].includes(arbResult.id)) {
+                    // If arbiter says running for survival/escape/combat/food, honor it.
+                    // Mission-mode ids (mine, follow, golem, ...) must fall through to the dispatcher below,
+                    // so no mode name may appear in this list.
+                    if (["survival_master","escape","combat","food","bucket","village","nether"].includes(arbResult.id)) {
                         return;
                     }
                 } else if (arbResult.code === "failed") {

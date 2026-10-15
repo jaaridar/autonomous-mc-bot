@@ -132,9 +132,9 @@ export class Arbiter {
             }
         } catch (e) { console.warn("[Verdant] food eval "+e); }
 
-        // Combat - if threat and not fleeing
+        // Combat - if threat and not fleeing (director-style tick(tick) only; fights stay on the main chain)
         try {
-            if (threatInfo.nearest && hp > 8) {
+            if (threatInfo.nearest && hp > 8 && typeof bot.combat?.tick === "function" && bot.combat.tick.length <= 1) {
                 const score = threatInfo.count >= 2 ? 85 : 75;
                 candidates.push({
                     id: "combat",
@@ -150,7 +150,7 @@ export class Arbiter {
         try {
             const below = bot.terrain.read({ x: Math.floor(bot.sim.location.x), y: Math.floor(bot.sim.location.y)-1, z: Math.floor(bot.sim.location.z) });
             const escapeNeeded = inWater || below?.hazard || bot.nav.stuck;
-            if (escapeNeeded) {
+            if (escapeNeeded && typeof bot.escaper?.tick === "function" && bot.escaper.tick.length <= 1) {
                 candidates.push({
                     id: "escape",
                     director: bot.escaper,
@@ -185,7 +185,9 @@ export class Arbiter {
                 }
                 candidates.push({
                     id: mode,
-                    director: { tick: (t) => { bot[mode]?.(t); return false; }, reason: bot.reason },
+                    // Side-effect free claim: the main dispatcher ticks the mission every tick.
+                    // Calling bot[mode](t) here crashed/spammed during mine/speedrun/golem and double-ran others.
+                    director: { tick: () => true, reason: bot.reason },
                     score,
                     reason: `mission ${mode}`,
                     tags: ["mission"]
