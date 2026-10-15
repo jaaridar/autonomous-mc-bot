@@ -501,6 +501,10 @@ export class Bot {
             if (this.sim.isInWater) escapeKind = "water";
             else if (below?.hazard) escapeKind = "trapped";
             else if (justStuck && this.mode !== "idle") escapeKind = "trapped";
+            // World-class: extreme combat situations need dedicated escape
+            else if (info.count >= 8 || info.bombNear || (info.ranged >= 6) || (info.list.some(e => e.typeId === "minecraft:ender_man") && (this.sim.getComponent("minecraft:health")?.currentValue ?? 20) <= 12)) {
+                escapeKind = "combat_escape";
+            }
         }
         const usable = this.bag.usableCounts();
         const hasWeapon = Object.keys(usable).some((k) => usable[k] > 0 && (k.endsWith("_sword") || k.endsWith("_axe")));
