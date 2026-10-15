@@ -62,6 +62,34 @@ function strip(src) {
             i += 2;
             continue;
         }
+        // Regex literal: avoid treating /.../.test as division + name
+        if (c === "/" && !/[A-Za-z0-9_$)]/.test(out.trimEnd().slice(-1))) {
+            let j = i + 1;
+            let esc = false;
+            let inClass = false;
+            while (j < n) {
+                const ch = src[j];
+                if (!esc) {
+                    if (ch === "[" ) inClass = true;
+                    else if (ch === "]") inClass = false;
+                    else if (ch === "/" && !inClass) break;
+                    else if (ch === "\n") break;
+                }
+                esc = !esc && ch === "\\";
+                if (ch !== "\\") esc = ch === "\\" ? !esc : false;
+                // simpler escape tracking
+                if (src[j] === "\\") { j++; if (j < n) j++; continue; }
+                j++;
+            }
+            if (j < n && src[j] === "/") {
+                // consume flags
+                j++;
+                while (j < n && /[gimsuy]/.test(src[j])) j++;
+                out += '""';
+                i = j;
+                continue;
+            }
+        }
         if (c === '"' || c === "'") {
             i++;
             while (i < n && src[i] !== c) {
@@ -132,7 +160,7 @@ function collect(file, src) {
     for (const m of src.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*=>/g))
         defined.add(m[1]);
     // method definitions: name(...) {  /  get name() {  /  async name(...) {
-    for (const m of src.matchAll(/(?:^|[;{}(,]|\n)\s*(?:async\s+|get\s+|set\s+|static\s+)*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g)) {
+    for (const m of src.matchAll(/(?:^|[;{}(,]|\\n)\s*(?:async\s+|get\s+|set\s+|static\s+)*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g)) {
         defined.add(m[1]);
         addIdentifiers(defined, m[2]);
     }

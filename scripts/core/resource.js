@@ -16,7 +16,7 @@ export const PHASES = {
 
 export const CHECKLIST = {
     [PHASES.WOOD]: [
-        { item: "minecraft:oak_log", count: 8, reason: "planks, table, tools - quick tool priority #1" },
+        { item: "#logs", count: 8, reason: "any logs: oak/birch/spruce/jungle/acacia/dark/mangrove/cherry/pale/crimson/warped/bamboo - quick tool #1" },
         { item: "minecraft:crafting_table", count: 1, reason: "crafting - critical" },
         { item: "minecraft:stick", count: 8, reason: "tool handles" },
         { item: "minecraft:wooden_pickaxe", count: 1, reason: "mine stone - upskill" },

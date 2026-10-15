@@ -61,7 +61,7 @@ export class Miner {
 
         if (this.breakTarget && this.breakTarget.x === cell.x && this.breakTarget.y === cell.y && this.breakTarget.z === cell.z) {
             if (tick - this.breakingSince > 200) {
-                try { bot.sim.stopBreakingBlock(); } catch {}
+                try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.breakTarget = null;
                 this.breakingSince = 0;
                 this.blocked.set(`${cell.x},${cell.y},${cell.z}`, tick + BLOCKED_TTL);
@@ -70,7 +70,7 @@ export class Miner {
             return true;
         }
 
-        try { bot.sim.stopBreakingBlock(); } catch {}
+        try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         if (bot.breakThrough(cell) !== "digging") return false;
         this.breakTarget = { ...cell };
         this.breakingSince = tick;
@@ -152,7 +152,7 @@ export class Miner {
                 this.breakTarget = null;
                 this.breakingSince = 0;
             } else if (tick - this.breakingSince > 200) {
-                try { b.sim.stopBreakingBlock(); } catch {}
+                try { b.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.blocked.set(`${this.breakTarget.x},${this.breakTarget.y},${this.breakTarget.z}`, tick + BLOCKED_TTL);
                 this.breakTarget = null;
                 this.breakingSince = 0;
@@ -229,7 +229,7 @@ export class Miner {
     maybeTorch() {
         if (this.dug % 8 !== 0 || this.route.length < 2) return;
         const behind = this.route[this.route.length - 2];
-        try { this.bot.placeTorch(add(behind, DOWN)); } catch {}
+        try { this.bot.placeTorch(add(behind, DOWN)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     descendStep(tick) {

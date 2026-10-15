@@ -27,7 +27,7 @@ export class UI {
             // Set display slot sidebar if not already
             try {
                 sb.setObjectiveAtDisplaySlot("sidebar", { objective: obj });
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         } catch (e) {
             console.warn("[Verdant UI] Scoreboard init failed: " + e);
         }
@@ -53,7 +53,7 @@ export class UI {
                 obj = sb.getObjective("verdant");
                 if (!obj) obj = sb.addObjective("verdant", "Verdant Bot");
                 this.objective = obj;
-                try { sb.setObjectiveAtDisplaySlot("sidebar", { objective: obj }); } catch {}
+                try { sb.setObjectiveAtDisplaySlot("sidebar", { objective: obj }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if (!obj) return;
 
@@ -144,10 +144,10 @@ export class UI {
                 for (const p of participants) {
                     const name = p.displayName;
                     if (!lines.some(l => l.name === name)) {
-                        try { obj.removeParticipant(name); } catch {}
+                        try { obj.removeParticipant(name); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                     }
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
             // Set new scores
             for (const line of lines) {
@@ -158,7 +158,7 @@ export class UI {
                     try {
                         const safeName = line.name.replace(/[^a-zA-Z0-9 :.,_-]/g, "").slice(0, 30);
                         obj.setScore(safeName, line.score);
-                    } catch {}
+                    } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 }
             }
 
@@ -188,7 +188,7 @@ export class UI {
                 // Fallback to title for older versions
                 try {
                     b.sim.dimension.runCommand(`titleraw @a[name="${b.ownerName}"] actionbar {"rawtext":[{"text":"${actionBar.replace(/"/g, '\\"')}"}]}`);
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
 
             // If reason changed significantly, also tell in chat every 200 ticks for spectating
@@ -205,7 +205,7 @@ export class UI {
                 }
             }
 
-        } catch (e) {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     // Enhanced status for !bot status command - also show scoreboard

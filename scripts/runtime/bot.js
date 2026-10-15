@@ -22,7 +22,6 @@ import { Combat } from "./combat.js";
 import { Looting } from "./looting.js";
 import { Parkour } from "./parkour.js";
 import { DeepMiner } from "./deepminer.js";
-import { AdvancedMiner } from "./advanced-miner.js";
 import { ResourceManager } from "./resource.js";
 import { SpeedrunDirector } from "./speedrun.js";
 import { WorldAwareness } from "./world-awareness.js";
@@ -39,6 +38,9 @@ import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../cor
 import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
 import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
 import { UI } from "./ui.js";
+import { Arbiter, REASON_CODES } from "../core/arbiter.js";
+import { decomposeMission, analyzeRequirements, isAnyLog, HIERARCHY } from "../core/goal-decomposition.js";
+import { shouldRecalculateAdaptive, verifyAction, handlePlanFailure, preserveEmergencyResources } from "../core/adaptive-planning.js";
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -152,7 +154,6 @@ export class Bot {
         this.looting = new Looting(this);
         this.parkour = new Parkour(this);
         this.deepMiner = new DeepMiner(this);
-        this.advancedMiner = new AdvancedMiner(this);
         this.resource = new ResourceManager(this);
         this.speedrun = new SpeedrunDirector(this);
         this.awareness = new WorldAwareness(this);
@@ -164,6 +165,9 @@ export class Bot {
         this.food = new FoodDirector(this);
         this.bucket = new BucketDirector(this);
         this.ui = new UI(this);
+        this.arbiter = new Arbiter(this);
+        this.goalTree = null;
+        this.currentGoal = null;
         this.nav.builder = this.builder;
         // Enhanced mining state
         this.obstructionClear = undefined;
@@ -195,10 +199,10 @@ export class Bot {
     tell(msg) { this.owner()?.sendMessage(`§a[Verdant] §r${msg}`); }
     stopActions() {
         this.nav.reset();
-        try { this.sim.stopBreakingBlock(); } catch {}
-        try { this.sim.stopUsingItem(); } catch {}
-        try { this.sim.stopInteracting(); } catch {}
-        try { this.sim.isSneaking = false; } catch {}
+        try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+        try { this.sim.stopUsingItem(); } catch (_e) { this.fault(_e); }
+        try { this.sim.stopInteracting(); } catch (_e) { this.fault(_e); }
+        try { this.sim.isSneaking = false; } catch (_e) { this.fault(_e); }
         this.swingCell = undefined;
         this.grab = undefined;
         this.obstructionClear = undefined;
@@ -229,10 +233,10 @@ export class Bot {
         this.escaper.reset();
         this.miner.reset();
         this.deepMiner.reset();
-        this.advancedMiner?.reset();
         this.builder.resetPillar?.();
         this.combat.reset();
         this.looting.reset();
+        this.arbiter?.reset();
         this.awareness?.reset();
         this.structures?.reset();
         this.parkour?.reset();
@@ -337,9 +341,9 @@ export class Bot {
         this.escaper.reset();
         this.miner.reset();
         this.deepMiner.reset();
-        this.advancedMiner?.reset();
         this.combat.reset();
         this.builder.resetPillar?.();
+        this.arbiter?.reset();
         this.awareness?.reset();
         this.structures?.reset();
         this.parkour?.reset();
@@ -389,11 +393,16 @@ export class Bot {
         this.mining = this.newMining(amount, block);
     }
     newMining(amount, block, item) {
+        // FIX: any log support - #logs means any tree log, fixes oak-only waste
+        if (block === "#logs" || block === "minecraft:oak_log" || block === "minecraft:birch_log") {
+            block = "#logs";
+            item = "#logs";
+        }
         const drop = item ?? (block ? MINE[block]?.drops : undefined);
         const bulk = !!drop && isBulk(drop);
         if (bulk && !item) item = drop;
-        const underground = !!drop && (isUndergroundOre(drop) || bulk) && this.settings.deepMining;
-        const isWoodReq = block && (block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem"));
+        const underground = !!drop && (isUndergroundOre(drop) || bulk) && this.settings.deepMining && block !== "#logs";
+        const isWoodReq = block && (block === "#logs" || block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem"));
         return {
             amount, block, item, bulk, deepItem: drop, underground,
             startCount: amountOf(this.bag.counts(), drop),
@@ -401,7 +410,7 @@ export class Bot {
             scan: new BlockScan(this.sim.location, underground ? 8 : 12),
             blocked: new Map(), loot: new Map(), lootSince: system.currentTick,
             noTargetSince: system.currentTick, failures: 0,
-            treeMode: /(_log|_wood|_stem|_hyphae)$/.test(block ?? ""),
+            treeMode: block === "#logs" || /(_log|_wood|_stem|_hyphae)$/.test(block ?? ""),
             cropMode: /(wheat|carrot|potato|beetroot|berry|melon|pumpkin|cactus|sugar_cane|kelp|bamboo|deadbush|dead_bush)/.test(block ?? ""),
             anyWood: isWoodReq, // UNBREAKABLE: accept any wood type
             desertFallback: isWoodReq, // also try dead bushes in desert
@@ -454,7 +463,7 @@ export class Bot {
                             this.lastDigReason = `Cleared ${bb.typeId} blocking the swing.`;
                             return "digging";
                         }
-                    } catch {}
+                    } catch (_e) { this.fault(_e); }
                 }
             }
         }
@@ -565,11 +574,32 @@ export class Bot {
         craft(this.bag, r, batches, this.terrain.tableNear(this.sim.location));
         this.record(`craft:${item} x${r.amount * batches}`);
     }
+    /**
+     * Record an error that used to be swallowed by an empty catch. The bot still keeps running
+     * (these are optional directors), but the fault is counted, kept in a bounded table, and
+     * surfaced in the journal on first occurrence and every 100th repeat.
+     */
+    fault(e) {
+        const msg = String(e?.stack ?? e).split("\n").slice(0, 2).join(" @ ").slice(0, 160);
+        const f = (this.faults ??= new Map());
+        const rec = f.get(msg) ?? { n: 0, first: system.currentTick };
+        rec.n++;
+        rec.last = system.currentTick;
+        if (!f.has(msg) && f.size >= 40) f.delete(f.keys().next().value);
+        f.set(msg, rec);
+        if (rec.n === 1 || rec.n % 100 === 0) {
+            this.record(`fault x${rec.n}: ${msg}`);
+            console.warn(`[Verdant] fault x${rec.n}: ${msg}`);
+        }
+    }
+    faultReport() {
+        return [...(this.faults ?? new Map()).entries()].map(([msg, r]) => ({ msg, count: r.n, last: r.last })).sort((x, y) => y.count - x.count).slice(0, 10);
+    }
     tick() {
         const tick = system.currentTick;
         if (this.state === "dead") { this.deadTick(tick); return; }
         if (!this.sim.isValid) return;
-        try { this.lastKnown = { p: { ...this.sim.location }, dim: this.sim.dimension.id }; } catch {}
+        try { this.lastKnown = { p: { ...this.sim.location }, dim: this.sim.dimension.id }; } catch (_e) { this.fault(_e); }
         // Fall detection for survival master
         try {
             const curY = this.sim.location.y;
@@ -585,7 +615,7 @@ export class Bot {
                     this.survivalMaster.fallStartY = null;
                 }
             }
-        } catch {}
+        } catch (_e) { this.fault(_e); }
         try { 
             this.think(tick); 
             this.errors = 0; 
@@ -594,7 +624,7 @@ export class Bot {
             this.errors++; 
             this.record(`error:${String(e).slice(0, 200)} (count ${this.errors})`); 
             console.warn(`[Verdant] ${e}`);
-            try { this.stopActions(); } catch {}
+            try { this.stopActions(); } catch (_e) { this.fault(_e); }
             // ROBUST: Circuit breaker now retries after 200 ticks instead of permanent shutdown
             if (this.errors >= 5) { 
                 this.record(`Circuit breaker: ${e} - pausing 10 sec then retrying robustly`);
@@ -623,7 +653,7 @@ export class Bot {
         if (!owner) { this.pause("Owner offline; no unattended world mutation."); return; }
         // ROBUST: Allow Nether and End travel - was previously pausing with "Nether/End travel is not implemented" causing auto shutdown on portal entry
         // UI update - scoreboard + actionbar for spectating
-        try { this.ui?.tick(tick); } catch {}
+        try { this.ui?.tick(tick); } catch (_e) { this.fault(_e); }
 
         // Now supports full-game speedrun Overworld -> Nether -> End
         if (owner.dimension.id !== this.sim.dimension.id) {
@@ -644,30 +674,30 @@ export class Bot {
         if (this.sim.isInWater) {
             // Force swimming behavior - jump every tick to stay at surface
             if (tick % 5 === 0) {
-                try { this.sim.jump(); } catch {}
+                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
             }
             // If head in water, urgent surface
             try {
                 if (this.terrain.headInWater(this.sim)) {
                     this.reason = "In water head submerged - urgent surfacing - anti-drown swimming fix";
-                    try { this.sim.jump(); } catch {}
+                    try { this.sim.jump(); } catch (_e) { this.fault(_e); }
                     const cur = this.sim.location;
                     try {
                         this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
-                    } catch {}
+                    } catch (_e) { this.fault(_e); }
                     // Try boat immediately when drowning
                     const boatRes = this.escaper.boat(tick);
                     if (boatRes) return;
                 }
-            } catch {}
+            } catch (_e) { this.fault(_e); }
         }
         this.nav.parkour = this.settings.parkour;
         this.nav.allowBridge = this.settings.bridge;
         this.observe(tick);
 
         // World-class awareness: scan surroundings, remember important (iron ore, sheep, lava pools, structures)
-        try { this.awareness.tick(tick); } catch {}
-        try { this.structures.tick(tick); } catch {}
+        try { this.awareness.tick(tick); } catch (_e) { this.fault(_e); }
+        try { this.structures.tick(tick); } catch (_e) { this.fault(_e); }
 
         const hp = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 0;
         if (hp <= 0) { this.recordDeath(); this.save(); this.state = "dead"; this.deadSince = tick; this.respawnTried = false; return; }
@@ -675,9 +705,9 @@ export class Bot {
         const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
 
         // Auto organize if needed - retain important stuff
-        if (tick % 200 === 0) { try { this.resource.organizeIfNeeded(); } catch {} }
+        if (tick % 200 === 0) { try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); } }
         // Retain important items logic - never drop critical
-        if (tick % 100 === 0) { try { this.retainImportant(); } catch {} }
+        if (tick % 100 === 0) { try { this.retainImportant(); } catch (_e) { this.fault(_e); } }
 
         if (this.settings.armor && !this.equipment.faultReason && tick - this.lastEquipmentCheck >= 20) {
             this.lastEquipmentCheck = tick;
@@ -699,11 +729,27 @@ export class Bot {
             return cachedThreatInfo;
         };
 
-        // WORLD-CLASS SURVIVAL MASTER - handles all 80 scenarios first - ROBUST QUICK: tick every 10 ticks unless danger
+        // ARBITER: replaces 430-line chain of if (director.tick()) return;
+        // Keeps current behavior until finishes or clearly better appears, returns reason codes
+        try {
+            if (tick % 5 === 0 || !this.arbiter.current || this.arbiter.current.id === "survival_master" || this.sim.isInWater) {
+                const arbResult = this.arbiter.tick(tick);
+                if (arbResult.code === "running") {
+                    // If arbiter says running for survival/escape/combat/food, honor it
+                    if (["survival_master","escape","combat","food","bucket","golem","village","nether"].includes(arbResult.id)) {
+                        return;
+                    }
+                } else if (arbResult.code === "failed") {
+                    this.record(`Arbiter failed: ${arbResult.reason}`);
+                }
+            }
+        } catch (_e) { this.fault(_e); }
+
+        // WORLD-CLASS SURVIVAL MASTER - now via arbiter, but keep direct call for fall fast path
         try {
             const shouldTickSurvival = (tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || (this.survivalMaster.fallStartY !== null);
             if (shouldTickSurvival && this.survivalMaster.tick(tick)) return;
-        } catch {}
+        } catch (_e) { this.fault(_e); }
 
         // QUICK TOOL PRIORITY #1 - NEVER FIGHT BARE HAND
         if (tick - this.lastQuickToolCheck > 40) {
@@ -719,7 +765,7 @@ export class Bot {
                         try {
                             this.obtain(quickNeed.need, 1, tick);
                             return;
-                        } catch {}
+                        } catch (_e) { this.fault(_e); }
                     }
                 }
                 // Also check generic needsQuickTool from core/combat
@@ -727,10 +773,10 @@ export class Bot {
                 if (need && !hasWeapon) {
                     this.reason = `No weapon - ${need.reason} #1 priority`;
                     if (this.settings.assistedCrafting) {
-                        try { this.obtain(need.craft, 1, tick); return; } catch {}
+                        try { this.obtain(need.craft, 1, tick); return; } catch (_e) { this.fault(_e); }
                     }
                 }
-            } catch {}
+            } catch (_e) { this.fault(_e); }
         }
 
         // Death recovery - pick items if died
@@ -753,11 +799,11 @@ export class Bot {
                                     const r = this.navTo(nearest.location, tick, 1);
                                     if (r !== "failed") return;
                                 }
-                            } catch {}
+                            } catch (_e) { this.fault(_e); }
                         }
                     }
                 }
-            } catch {}
+            } catch (_e) { this.fault(_e); }
         }
 
         // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING
@@ -772,7 +818,7 @@ export class Bot {
                     if (reassess.priority >= 80) {
                         this.reason = `Food: ${reassess.reason} - reassess after damage`;
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
             }
             this.previousHealth = curHealth;
 
@@ -789,7 +835,7 @@ export class Bot {
                         // Reset nether lastRecalc to force re-eval
                         if (this.nether) this.nether.lastRecalc = 0;
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
             }
 
             // Food reserves assessment
@@ -800,104 +846,31 @@ export class Bot {
                     if (reserves.status === "critical" && this.mode !== "idle") {
                         this.reason = `Food critical ${reserves.totalHunger} hunger, ${reserves.status} - prioritizing food`;
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
             }
-        } catch {}
+        } catch (_e) { this.fault(_e); }
 
-        // VILLAGE-FIRST PRIORITY WHEN FOOD LOW - should head to village if can't find food
-        try {
-            const foodCritical = hunger <= 6 || (this.bag.counts && (() => {
-                try {
-                    const counts = this.bag.counts();
-                    const foodCount = Object.entries(counts).filter(([k]) => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot") || k.includes("apple") || k.includes("hay_block")).reduce((s,[,v])=>s+v,0);
-                    return foodCount < 3;
-                } catch { return false; }
-            })());
-            if (foodCritical && this.village) {
-                if (this.village.tick(tick)) {
-                    this.record("Food low, heading to village priority");
-                    return;
-                }
-            }
-        } catch {}
+        // VILLAGE-FIRST via arbiter - single call, not duplicate
 
-        // STRUCTURE LOOTING ANY STRUCTURE - ruined portal, village, any chest should be priority, able to loot any structure
-        try {
-            const topStruct = this.structures?.getTopPriority();
-            const lootTarget = this.structures?.getLootTarget();
-            if (topStruct && lootTarget) {
-                const distToLoot = distance(lootTarget.pos, this.sim.location);
-                // Lower threshold to 60 for any structure, not just 90, and prioritize if within 32 blocks
-                if (distToLoot < 32 && topStruct.priority >= 60) {
-                    this.reason = `Structure priority: ${topStruct.name} (${topStruct.reason}) at ${topStruct.pos.x},${topStruct.pos.y},${topStruct.pos.z} priority ${topStruct.priority} - looting any structure`;
-                    const r = this.navTo(center(lootTarget.pos), tick, 2);
-                    if (r !== "failed") {
-                        this.record(`Looting structure ${topStruct.name} priority ${topStruct.priority}`);
-                        return;
-                    }
-                }
-            }
-            // Also check awareness chestSpots and villageSpots for any nearby structure
-            try {
-                const chestSpot = this.awareness?.chestSpots?.[0];
-                if (chestSpot && distance(chestSpot, this.sim.location) < 16) {
-                    const r = this.navTo(center(chestSpot), tick, 2);
-                    if (r !== "failed") {
-                        this.reason = `Chest spotted at ${chestSpot.x},${chestSpot.y},${chestSpot.z} - looting any structure`;
-                        return;
-                    }
-                }
-                const villageSpot = this.awareness?.villageSpots?.[0];
-                if (villageSpot && distance(villageSpot, this.sim.location) < 48 && hunger <= 14) {
-                    const r = this.navTo(center(villageSpot), tick, 4);
-                    if (r !== "failed") {
-                        this.reason = `Village spotted at ${villageSpot.x},${villageSpot.y},${villageSpot.z} - heading for food`;
-                        return;
-                    }
-                }
-                const lavaPool = this.awareness?.getLavaPool();
-                if (lavaPool && distance(lavaPool, this.sim.location) < 24) {
-                    const hasWater = (this.bag.counts()["minecraft:water_bucket"] ?? 0) > 0 || (this.bag.counts()["minecraft:bucket"] ?? 0) > 0;
-                    if (hasWater) {
-                        const r = this.navTo(center(lavaPool), tick, 4);
-                        if (r !== "failed") {
-                            this.reason = `Lava pool portal opportunity at ${lavaPool.x},${lavaPool.y},${lavaPool.z} - any structure priority`;
-                            return;
-                        }
-                    }
-                }
-            } catch {}
-        } catch {}
+        // STRUCTURE LOOTING via arbiter + looting director - single implementation
 
-        // NETHER ENTRY DECISION SYSTEM - primary objective enter Nether quickly reliably without dying
-        try {
-            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter" || this.mode === "idle") && this.settings.speedrun !== false) {
-                if (this.nether && this.nether.tick(tick)) return;
-            }
-        } catch {}
-
-        // VILLAGE-FIRST STRATEGY - general village handling when not food critical
-        try {
-            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter" || this.mode === "idle") && this.village) {
-                if (this.village.tick(tick)) return;
-            }
-        } catch {}
+        // NETHER + VILLAGE via arbiter - merged speedrun into nether, single call
 
         // IRON GOLEM COMBAT & RISK MANAGEMENT
         try {
             if (this.settings.defend && this.golem && this.golem.tick(tick)) return;
-        } catch {}
+        } catch (_e) { this.fault(_e); }
 
         // FOOD HEALING COMBAT READINESS (10-tick cadence; it counted the whole
         // inventory and read components on every single tick before)
         try {
             if (this.food && tick % 10 === 0 && this.food.tick(tick)) return;
-        } catch {}
+        } catch (_e) { this.fault(_e); }
 
         // BUCKET ACQUISITION & NETHER PREPARATION
         try {
             if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter") && this.bucket && this.bucket.tick(tick)) return;
-        } catch {}
+        } catch (_e) { this.fault(_e); }
 
         // Structure loot main priority if found - interrupt current task if high priority
         try {
@@ -927,7 +900,7 @@ export class Bot {
                     }
                 }
             }
-        } catch {}
+        } catch (_e) { this.fault(_e); }
 
         // Enhanced threat evaluation with combat module - use cached threatInfo for speed
         const info = this.settings.defend ? (cachedThreatInfo ?? this.terrain.threatInfo(this.sim, owner)) : { list: [], nearest: undefined, count: 0, ranged: 0, explosive: 0, melee: 0, closest: Infinity, bombNear: false, underFire: false };
@@ -1011,9 +984,8 @@ export class Bot {
             return;
         }
         if (this.camp(tick)) return;
-        // Enhanced looting - runs in all modes
-        if (this.settings.loot && this.looting.tick(tick)) return;
-        if (this.maybeLoot(tick)) return;
+        // FIX: looting single implementation via arbiter, not 3 times
+        // maybeLoot removed - Looting director handles all
         if (this.boatTravel(tick)) return;
         try {
             switch (this.mode) {
@@ -1086,7 +1058,7 @@ export class Bot {
                         }
                     }
                 }
-            } catch {}
+            } catch (_e) { this.fault(_e); }
             return "blocked";
         }
         candidates.sort((a, b) => (distance(a, goal) - distance(b, goal)) || (distance(this.sim.location, a) - distance(this.sim.location, b)));
@@ -1114,267 +1086,156 @@ export class Bot {
                         if (r === "open") continue;
                     }
                 }
-            } catch {}
+            } catch (_e) { this.fault(_e); }
         }
         return result;
     }
     follow(goal, tick, leash) {
-        // UNBREAKABLE FOLLOW V2: handles 100 block tower + deep water + boat crafting
+        // UNBREAKABLE FOLLOW V3: precise + no lag - wherever you are, find way to reach you
         const selfFloor = floor(this.sim.location);
         const goalFloor = floor(goal);
         const verticalDiff = goal.y - this.sim.location.y;
         const horizDist = horizontal(this.sim.location, goal);
         const totalDist = distance(this.sim.location, goal);
 
-        // === DEEP WATER HANDLING: always try boat if water ===
-        const inWater = this.sim.isInWater;
-        const waterNear = this.terrain.waterNear ? this.terrain.waterNear(selfFloor) : false;
-        const goalInWater = (() => { try { const b = this.terrain.block(goalFloor); return b && b.isLiquid; } catch { return false; } })();
-        const waterBetween = this.waterAhead ? this.waterAhead(goal) : undefined;
-
-        if (inWater || waterNear || goalInWater || waterBetween) {
-            // If far in water, need boat
-            if (totalDist > 4) {
-                const boatRes = this.escaper.boat(tick);
-                if (boatRes) {
-                    this.reason = `Deep water follow: making/using boat to reach you ${Math.round(totalDist)}b away - water traversal`;
-                    return;
-                }
-                // If boat failed, try to craft boat from any wood
-                if (this.settings.assistedCrafting && this.bag.find(s => s.typeId.endsWith("_boat")) < 0) {
-                    try {
-                        const counts = this.bag.counts();
-                        const hasPlanks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
-                        const hasLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0);
-                        if (hasPlanks >= 5) {
-                            this.reason = "Deep water: crafting boat from planks to follow you";
-                            this.obtain("minecraft:oak_boat", 1, tick);
-                            return;
-                        } else if (hasLogs >= 1) {
-                            // Need planks
-                            const logType = Object.keys(counts).find(k => k.endsWith("_log") || k.endsWith("_wood"));
-                            if (logType) {
-                                const plankType = logType.replace("_log","_planks").replace("_wood","_planks");
-                                this.reason = "Deep water: crafting planks for boat to follow you";
-                                this.obtain(plankType, 4, tick);
-                                return;
-                            }
-                        } else {
-                            // Need to mine logs for boat - unbreakable
-                            this.reason = "Deep water: no wood for boat, mining ANY wood to craft boat and follow you - unbreakable";
-                            const near = this.terrain.scanOres(this.sim.location, 12, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem"), 300);
-                            if (near.length) {
-                                const r = this.nav.go(center(near[0]), tick);
-                                if (r !== "failed") return;
-                            }
-                        }
-                    } catch {}
-                }
-                // If boat crafting not possible, try swim + bridge
-                this.reason = "Deep water: boat not available, swimming/bridging to you - unbreakable";
-            }
+        // FAST PATH: close enough, stop moving, no scans
+        if (totalDist <= leash) {
+            this.nav.reset();
+            try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+            return;
         }
 
-        // === 100 BLOCK TOWER HANDLING: pillar up ===
+        // LAG FIX: cache heavy scans, throttle to 40 ticks
+        if (!this._followCache) this._followCache = { tick: 0, blocks: [], water: null, lastPos: null };
+        const needsScan = tick - this._followCache.tick > 40;
+        const inWater = this.sim.isInWater;
+        const waterNear = (() => { try { return this.terrain.waterNear ? this.terrain.waterNear(selfFloor) : false; } catch (_e) { this.fault(_e); return false; } })();
+
+        // PRECISE TOWER 100: if owner >12 above, pillar directly under owner's column - precise, no 128 radius A*
         if (verticalDiff > 12) {
-            // Owner is high up - need to pillar
-            const blocks = this.builder ? this.builder.countBlocks() : 0;
-            const hasBlocks = this.bag.buildBlock() >= 0 || blocks > 0;
-            
-            if (!hasBlocks) {
-                // Need to mine blocks for pillaring - unbreakable
-                if (tick % 20 === 0) {
-                    this.reason = `You are ${Math.round(verticalDiff)} blocks above me, need blocks to pillar up 100 blocks - mining nearby - unbreakable`;
+            const targetColumn = { x: Math.floor(goal.x), y: selfFloor.y, z: Math.floor(goal.z) };
+            // Move horizontally to column first if far - cheap, no vertical search
+            if (horizDist > 4) {
+                const r = this.navTo(targetColumn, tick, 2);
+                if (r === "running") {
+                    this.reason = `Tower follow: moving to your column ${targetColumn.x},${targetColumn.z} then pillar ${Math.round(verticalDiff)}b up - precise wherever you are`;
+                    return;
+                }
+            }
+            // Pillar up - use cached block check, not scan every tick
+            if (this.builder && this.builder.canBuild) {
+                const pr = this.builder.pillar(tick);
+                if (pr === "placed" || pr === "jumping") {
+                    this.reason = `Tower follow: pillaring ${Math.round(verticalDiff)}b to you at ${goal.x.toFixed(0)},${goal.y.toFixed(0)},${goal.z.toFixed(0)} - precise column ${targetColumn.x},${targetColumn.z} - unbreakable`;
+                    return;
+                }
+                if (pr === "no-support") {
+                    const below = add(selfFloor, { x: 0, y: -1, z: 0 });
                     try {
-                        const near = this.terrain.scanOres(this.sim.location, 8, (type) => {
-                            return type === "minecraft:dirt" || type === "minecraft:grass_block" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log") || type === "minecraft:sand" || type === "minecraft:gravel" || type === "minecraft:netherrack" || type === "minecraft:coarse_dirt";
-                        }, 300);
-                        if (near.length) {
-                            const r = this.nav.go(center(near[0]), tick);
-                            if (r !== "failed") return;
-                            // Try direct break if front
-                            const b = this.terrain.block(near[0]);
-                            if (b) {
-                                const dr = this.digCell(near[0], tick);
-                                if (dr === "digging") return;
-                            }
-                        }
-                    } catch {}
-                }
-            } else {
-                // Have blocks, pillar up towards goal
-                this.reason = `You are ${Math.round(verticalDiff)}b above, pillaring up 100 blocks to reach you - unbreakable tower follow`;
-                // Move horizontally towards goal first if far
-                if (horizDist > 4) {
-                    const r = this.navTo({ x: goal.x, y: selfFloor.y, z: goal.z }, tick, 2);
-                    if (r === "running") return;
-                }
-                // Now pillar
-                if (this.builder) {
-                    const pr = this.builder.pillar(tick);
-                    if (pr === "placed" || pr === "jumping") {
-                        return;
-                    }
-                    // If pillar failed due to no support, try to place support
-                    if (pr === "no-support") {
-                        const below = add(selfFloor, { x: 0, y: -1, z: 0 });
                         const support = this.builder.findSupportFor(below);
                         if (support) {
                             const r = this.builder.placeAt(below, support.pos, { sneak: true, autoAnchor: true });
                             if (r === "placed") return;
                         }
-                        // Try to move to find support
-                        this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, 16);
-                        return;
-                    }
+                    } catch (_e) { this.fault(_e); }
+                }
+            } else {
+                // Need blocks - throttled scan small radius
+                if (needsScan) {
+                    try {
+                        const near = this.terrain.scanOres(this.sim.location, 6, (type) => {
+                            return type === "minecraft:dirt" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log");
+                        }, 80);
+                        this._followCache.blocks = near;
+                        this._followCache.tick = tick;
+                        if (near.length) {
+                            const r = this.nav.go(center(near[0]), tick);
+                            if (r !== "failed") {
+                                this.reason = `Tower follow: need blocks to pillar ${Math.round(verticalDiff)}b, mining nearby - throttled`;
+                                return;
+                            }
+                        }
+                    } catch (_e) { this.fault(_e); }
                 }
             }
-            // If pillar not possible, still try navTo with high vertical tolerance
+            // Fallback: direct nav with reduced radius 48 not 128 to avoid lag
             const r = this.navTo(goal, tick, leash);
             if (r !== "failed" && r !== "blocked") return;
         }
 
-        // === NORMAL FOLLOW WITH WATER/BOAT/BRIDGE FALLBACKS ===
-        if (inWater) {
-            this.reason = "In water while following - trying boat/bridge/swim to you - deep water fix";
-            const dist = distance(this.sim.location, goal);
-            if (dist > 5) {
-                const boatRes = this.escaper.boat(tick);
-                if (boatRes) return;
-            }
+        // WATER: throttled check, not every tick
+        if (needsScan) {
+            try { this._followCache.water = this.waterAhead ? this.waterAhead(goal) : null; } catch (_e) { this.fault(_e); this._followCache.water = null; }
+            this._followCache.tick = tick;
         }
+        if ((this._followCache.water || inWater || waterNear) && totalDist > 6) {
+            try {
+                const boatRes = this.escaper.boat(tick);
+                if (boatRes) {
+                    this.reason = `Follow: water traversal to you ${Math.round(totalDist)}b - precise boat`;
+                    return;
+                }
+            } catch (_e) { this.fault(_e); }
+        }
+
+        // NORMAL FOLLOW: single navTo, no extra scans
         const r = this.navTo(goal, tick, leash);
         if (r === "blocked") {
             this.followBlocked = this.followBlocked || tick;
-            if (waterBetween || inWater || waterNear) {
-                const br = this.escaper.boat(tick);
-                if (br) { this.reason = "Water between us, making boat to follow - deep water"; return; }
-                // Craft boat if needed
-                if (this.settings.assistedCrafting && tick % 40 === 0) {
-                    try {
-                        const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat","minecraft:bamboo_raft"];
-                        for (const bt of boatTypes) {
-                            const slot = this.bag.find(s => s.typeId === bt);
-                            if (slot >= 0) { this.escaper.boat(tick); return; }
-                        }
-                        // Try craft any boat
-                        for (const bt of boatTypes) {
-                            try { this.craft(bt, 1); this.escaper.boat(tick); return; } catch {}
-                        }
-                    } catch {}
-                }
-            }
-            if (this.settings.bridge && this.bag.buildBlock() >= 0) {
+            if (this.builder && this.builder.canBuild && tick % 30 === 0) {
                 try {
                     const p = floor(this.sim.location);
                     const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
                     if (dir.x !== 0 || dir.z !== 0) {
-                        const bridgeRes = this.builder ? this.builder.bridge(dir, tick) : undefined;
+                        const bridgeRes = this.builder.bridge(dir, tick);
                         if (bridgeRes === "placed" || bridgeRes === "placed_support") {
-                            this.reason = "No standable spot, bridging with blocks to reach you - 100 block tower/water";
+                            this.reason = "Follow: bridging to reach you - precise";
                             return;
                         }
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
             }
-            if (tick % 40 === 0 && this.bag.buildBlock() < 0) {
-                this.reason = "No blocks to bridge, mining nearby for blocks to follow you - unbreakable";
-                try {
-                    const near = this.terrain.scanOres(this.sim.location, 6, (type) => type === "minecraft:dirt" || type === "minecraft:sand" || type === "minecraft:gravel" || type.endsWith("_log"), 100);
-                    if (near.length) {
-                        const r2 = this.nav.go(center(near[0]), tick);
-                        if (r2 !== "failed") return;
-                    }
-                } catch {}
-            }
-            // For high tower, try pillar even when blocked
-            if (verticalDiff > 8 && this.builder && this.builder.canBuild) {
-                this.reason = `Blocked but you are ${Math.round(verticalDiff)}b up, pillaring - tower 100 fix`;
-                const pr = this.builder.pillar(tick);
-                if (pr === "placed" || pr === "jumping") return;
-            }
-            this.reason = "Holding position; no standable spot near target yet - trying boat/bridge/pillar - unbreakable";
             if (tick % 30 === 0) {
-                // Keep moving, don't stop - anti-idle
-                this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, 16);
+                try { this.explorer.step(this.sim.location, goal, tick, this.terrain, this.nav, Math.min(32, totalDist)); } catch (_e) { this.fault(_e); }
                 return;
             }
-            try { this.sim.stopMoving(); } catch {}
+            try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
             this.nav.reset();
-            if (tick - this.followBlocked > 200) { this.followBlocked = tick; this.tell("Waiting for standable spot near you, trying to make boat/bridge/pillar 100 blocks."); }
+            if (tick - this.followBlocked > 200) {
+                this.followBlocked = tick;
+                try { this.tell("Still finding way to you - precise follow wherever you are"); } catch (_e) { this.fault(_e); }
+            }
             return;
         }
         this.followBlocked = 0;
         if (r === "failed") {
             this.followFails = (this.followFails ?? 0) + 1;
             this.reason = this.nav.reason;
-            if (this.followFails % 2 === 0) {
-                // Every 2 fails, try water/boat
-                const wb = this.waterAhead ? this.waterAhead(goal) : undefined;
-                if (wb || inWater || waterNear || this.terrain.waterNear(floor(this.sim.location))) {
-                    const br = this.escaper.boat(tick);
-                    if (br) { this.reason = `Water blocks path to you, making boat (${this.nav.reason}) - deep water fix`; return; }
-                    // Try craft boat
-                    if (this.settings.assistedCrafting) {
-                        try {
-                            const counts = this.bag.counts();
-                            const hasBoat = Object.keys(counts).some(k => k.endsWith("_boat"));
-                            if (!hasBoat) {
-                                const hasPlanks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
-                                if (hasPlanks >= 5) {
-                                    this.craft("minecraft:oak_boat", 1);
-                                    this.escaper.boat(tick);
-                                    return;
-                                }
-                            }
-                        } catch {}
-                    }
-                }
+            if (this.followFails % 3 === 0) {
                 try {
                     const obstruct = this.terrain.findObstructions(this.sim.location, goal);
                     if (obstruct.length > 0 && obstruct.length <= 3) {
                         for (const cell of obstruct) {
                             const b = this.terrain.block(cell);
                             if (!b || b.isAir) continue;
-                            if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") continue;
+                            if (b.typeId === "minecraft:obsidian") continue;
                             if (isUnbreakable(b.typeId)) continue;
                             const score = retainScore(b.typeId);
                             if (score >= 80) continue;
                             const dr = this.digCell(cell, tick);
-                            if (dr === "digging") { this.reason = `Breaking ${b.typeId} to follow you - unbreakable`; return; }
+                            if (dr === "digging") { this.reason = `Follow: breaking ${b.typeId} to reach you - precise`; return; }
                         }
                     }
-                } catch {}
-                if (this.settings.bridge && this.bag.buildBlock() >= 0) {
+                } catch (_e) { this.fault(_e); }
+                if (verticalDiff > 8 && this.builder && this.builder.canBuild) {
                     try {
-                        const p = floor(this.sim.location);
-                        const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
-                        if (verticalDiff > 8) {
-                            // Pillar up for tower
-                            const pr = this.builder ? this.builder.pillar(tick) : undefined;
-                            if (pr === "placed" || pr === "jumping") { this.reason = `Pillaring ${Math.round(verticalDiff)}b up to follow you - 100 block tower`; return; }
-                        } else {
-                            const br = this.builder ? this.builder.bridge(dir, tick) : undefined;
-                            if (br === "placed") { this.reason = "Bridging to follow you - unbreakable"; return; }
-                        }
-                    } catch {}
-                } else if (verticalDiff > 8) {
-                    // Need blocks for tower, mine them
-                    if (tick % 20 === 0) {
-                        try {
-                            const near = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:dirt" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log"), 200);
-                            if (near.length) {
-                                const nr = this.nav.go(center(near[0]), tick);
-                                if (nr !== "failed") { this.reason = `Need blocks to pillar ${Math.round(verticalDiff)}b up, mining - tower 100`; return; }
-                            }
-                        } catch {}
-                    }
+                        const pr = this.builder.pillar(tick);
+                        if (pr === "placed" || pr === "jumping") { this.reason = `Follow: pillaring ${Math.round(verticalDiff)}b up to you - precise`; return; }
+                    } catch (_e) { this.fault(_e); }
                 }
             }
-            if (this.followFails >= 6 && this.followFails % 6 === 0) this.tell(`Still trying to reach you (${this.nav.reason}) - will make boat/bridge/pillar 100 blocks if needed - unbreakable`);
-            // Anti-idle: keep exploring towards goal even on fail
             if (tick % 30 === 0) {
-                this.explorer.step(this.sim.location, goal, tick, this.terrain, this.nav, Math.max(32, totalDist));
+                try { this.explorer.step(this.sim.location, goal, tick, this.terrain, this.nav, Math.max(32, totalDist)); } catch (_e) { this.fault(_e); }
             }
             return;
         }
@@ -1409,7 +1270,7 @@ export class Bot {
                     return;
                 }
                 this.nav.reset();
-                try { this.sim.stopMoving(); } catch {}
+                try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
                 if (!g.contact) g.contact = tick;
                 else if (tick - g.contact > 60) { this.grabIgnore.set(g.e.id, tick + 400); this.grab = undefined; }
                 return;
@@ -1484,7 +1345,7 @@ export class Bot {
         if (!g?.anchor) { this.stop("Collect: no sweep point."); return; }
         g.skipped ??= new Set(); g.startCounts ??= this.bag.counts(); g.deadline ??= tick + Math.max(600, g.radius * 60); g.idleSince ??= 0;
         if (this.bag.container.emptySlotsCount < 1) { 
-            try { this.resource.organizeIfNeeded(); } catch {}
+            try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); }
             if (this.bag.container.emptySlotsCount < 1) {
                 this.reason = "Inventory full; organizing and retrying collection";
             }
@@ -1500,7 +1361,7 @@ export class Bot {
                 if (this.nav.go(center(floor(drop.location)), tick) === "failed") { g.skipped.add(drop.id); this.record("collect: one drop unreachable; skipping"); }
                 return;
             }
-            this.nav.reset(); try { this.sim.stopMoving(); } catch {}
+            this.nav.reset(); try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
             if (!g.contact) g.contact = tick;
             else if (tick - g.contact > 80) { g.skipped.add(drop.id); g.contact = 0; }
             return;
@@ -1508,7 +1369,7 @@ export class Bot {
         const blocked = raw.filter((e) => g.skipped.has(e.id) || !this.terrain.safe(e.location)).length;
         if (raw.length && blocked === raw.length) return this.finishCollect(raw, g, "Sweep done");
         if (!raw.length) { if (!g.idleSince) g.idleSince = tick; if (tick - g.idleSince > 40) return this.finishCollect(raw, g, "Sweep done"); } else g.idleSince = 0;
-        try { this.sim.stopMoving(); } catch {}
+        try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
         this.reason = `Sweeping for drops: ${raw.length} in range of the sweep point.`;
     }
     finishCollect(raw, g, label) {
@@ -1527,7 +1388,7 @@ export class Bot {
             const held = this.bag.select(slot);
             if (!this.sim.useItemInSlot(held)) { this.blockTask("Food use rejected by engine."); return; }
             this.eatingUntil = tick + 40; this.reason = "Eating to recover hunger.";
-        } else if (tick >= this.eatingUntil) { try { this.sim.stopUsingItem(); } catch {} this.eatingUntil = 0; }
+        } else if (tick >= this.eatingUntil) { try { this.sim.stopUsingItem(); } catch (_e) { this.fault(_e); } this.eatingUntil = 0; }
     }
     fight(info, tick) {
         // Use advanced combat module
@@ -1605,11 +1466,11 @@ export class Bot {
     mine(m, tick) {
         // ANTI-DROWN: if in water while mining, surface first - never drown
         if (this.sim.isInWater) {
-            try { this.sim.jump(); } catch {}
+            try { this.sim.jump(); } catch (_e) { this.fault(_e); }
             if (this.terrain.headInWater(this.sim)) {
                 this.reason = "Mining interrupted - in water head submerged, surfacing - anti-drown";
                 const cur = this.sim.location;
-                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch {}
+                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch (_e) { this.fault(_e); }
                 const boatRes = this.escaper.boat(tick);
                 if (boatRes) return false;
                 return false;
@@ -1618,8 +1479,8 @@ export class Bot {
             const shore = this.terrain.shoreNear(this.sim.location, 32);
             if (shore) {
                 this.reason = "Mining interrupted - in water, swimming to shore first - anti-drown";
-                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch {}
-                if (tick % 10 === 0) { try { this.sim.jump(); } catch {} }
+                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch (_e) { this.fault(_e); }
+                if (tick % 10 === 0) { try { this.sim.jump(); } catch (_e) { this.fault(_e); } }
                 return false;
             }
         }
@@ -1654,17 +1515,8 @@ export class Bot {
                 if (this.drops.run(m, tick)) return false;
             }
         }
-        // Delegate underground to deep miners (new AdvancedMiner preferred)
+        // Delegate underground to deep miners
         if (m.underground) {
-            // Try AdvancedMiner if active or we want to use it for new deep logic
-            if (this.advancedMiner && this.advancedMiner.phase !== "idle" && this.advancedMiner.requestedBlock) {
-                const done = this.advancedMiner.tick(tick);
-                if (done) {
-                    this.advancedMiner.reset();
-                    return true;
-                }
-                return false;
-            }
             const deep = this.deepMine(m, tick, met);
             if (deep === "done") return true;
             if (deep === "blocked") { 
@@ -1675,7 +1527,7 @@ export class Bot {
         }
         if (met) return true;
         if (this.bag.container.emptySlotsCount < 1) { 
-            try { this.resource.organizeIfNeeded(); } catch {}
+            try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); }
             if (this.bag.container.emptySlotsCount < 1) {
                 this.blockTask("Inventory full; organizing and retrying.", "retry"); 
             }
@@ -1711,12 +1563,12 @@ export class Bot {
                         this.reason = `No wood, found ${m.type} desert fallback - unbreakable`;
                         return false;
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
             }
             if ((this.mode === "survival" || this.mode === "starter" || this.mode === "mine") && m.failures < 40) {
                 m.failures = (m.failures ?? 0) + 1;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
-                try { this.sim.stopBreakingBlock(); } catch {}
+                try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
                 this.explorer.reset(); this.nav.reset();
                 this.reason = `No ${m.item ?? m.block} nearby, exploring (${m.failures}/40) - advanced`;
                 return false;
@@ -1730,7 +1582,7 @@ export class Bot {
                         this.reason = `Still no ${m.block}, found ${m.type} 32b - unbreakable`;
                         return false;
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
                 m.failures = 0;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
                 this.explorer.reset(); this.nav.reset();
@@ -1867,7 +1719,7 @@ export class Bot {
         if (b.typeId !== m.type) {
             this.terrain.invalidate(target);
             const wasBreaking = m.breakingSince !== undefined;
-            try { this.sim.stopBreakingBlock(); } catch {}
+            try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
             m.breakingSince = undefined;
             if (wasBreaking) {
                 m.broken++; m.noTargetSince = tick;
@@ -1914,7 +1766,7 @@ export class Bot {
                             }
                         }
                     }
-                } catch {}
+                } catch (_e) { this.fault(_e); }
             }
             // Direct break attempt for front block - skip nav approach entirely
             // Tool check
@@ -1925,7 +1777,7 @@ export class Bot {
                     try {
                         if (ruleFront.tier >= 2) { const c = this.bag.counts(); if ((c["minecraft:cobblestone"]??0)>=3) { this.obtain("minecraft:stone_pickaxe",1,tick); return false; } }
                         if (ruleFront.tier >= 3) { const c = this.bag.counts(); if ((c["minecraft:iron_ingot"]??0)>=3) { this.obtain("minecraft:iron_pickaxe",1,tick); return false; } }
-                    } catch {}
+                    } catch (_e) { this.fault(_e); }
                     m.target = undefined; m.approach = undefined; m.breakingSince = undefined;
                     this.blockTask(`Need ${ruleFront.tool} tier ${ruleFront.tier} for front ${b.typeId}`, "retry");
                     return false;
@@ -1944,7 +1796,7 @@ export class Bot {
             } else {
                 const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
                 if (tick - m.breakingSince > timeout) {
-                    try { this.sim.stopBreakingBlock(); } catch {}
+                    try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
                     m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout front - advanced");
                 }
                 return false;
@@ -1962,13 +1814,42 @@ export class Bot {
                     return false;
                 }
                 m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined;
-                try { this.sim.stopBreakingBlock(); } catch {} m.breakingSince = undefined; return false;
+                try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); } m.breakingSince = undefined; return false;
             }
         }
 
-        if (m.treeMode && target.y > selfFloor.y + 2) {
+        // FIX: log breaking bug - don't pillar for tree logs, directly break up to 6 high
+        if (m.treeMode && target.y > selfFloor.y + 2 && target.y <= selfFloor.y + 6) {
+            // Direct break for tree logs up to 6 high - fixes keeps mining but cant break
+            const dy = target.y - selfFloor.y;
+            const horiz = horizontal(target, selfFloor);
+            if (horiz <= 3) {
+                // Look up and break directly
+                try {
+                    this.sim.lookAtBlock(this.host.relative(center(target)));
+                    if (!m.breakingSince) {
+                        if (this.sim.breakBlock(this.host.relative(center(target)))) {
+                            m.breakingSince = tick;
+                            this.nav.reset();
+                            this.reason = `Tree: breaking log at ${target.x},${target.y},${target.z} dy=${dy} direct fix - no scaffold`;
+                            return false;
+                        }
+                    } else {
+                        if (tick - m.breakingSince > 80) {
+                            try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+                            m.blocked.set(key(target), tick + 200); // short TTL for logs, not 1800
+                            m.target = undefined;
+                            m.breakingSince = undefined;
+                        }
+                        return false;
+                    }
+                } catch (_e) { this.fault(_e); }
+            }
+        }
+        if (m.treeMode && target.y > selfFloor.y + 6) {
+            // For very high logs >6, try scaffold but with precise logic
             const scaffold = this.builder.scaffoldTo(target, tick);
-            if (scaffold === "placed" || scaffold === "jumping") { this.reason = "Scaffolding to reach high log - advanced"; return false; }
+            if (scaffold === "placed" || scaffold === "jumping") { this.reason = "Scaffolding to reach high log >6 - advanced"; return false; }
         }
 
         // Approach logic only if not front block or front block direct break failed
@@ -2007,7 +1888,7 @@ export class Bot {
                             this.obstructionClear = { target: { ...target }, cells: obs.slice(0,2), since: tick };
                             return false;
                         }
-                    } catch {}
+                    } catch (_e) { this.fault(_e); }
                     const options = CARDINAL.map((d) => add(target, d)).flatMap((q) => [q, { ...q, y: q.y + 1 }, { ...q, y: q.y - 1 }]).filter((q) => this.terrain.safe(q) && (()=>{ try { return this.terrain.line(add(center(q), { x: 0, y: 1.62, z: 0 }), at, target); } catch { return false; } })());
                     options.sort((a, b) => distance(a, this.sim.location) - distance(b, this.sim.location));
                     if (options.length) {
@@ -2031,14 +1912,14 @@ export class Bot {
                     const counts = this.bag.counts();
                     if ((counts["minecraft:cobblestone"] ?? 0) >= 3 || (counts["minecraft:cobbled_deepslate"] ?? 0) >= 3) {
                         this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, crafting stone pickaxe - tier awareness`;
-                        try { this.obtain("minecraft:stone_pickaxe", 1, tick); return false; } catch {}
+                        try { this.obtain("minecraft:stone_pickaxe", 1, tick); return false; } catch (_e) { this.fault(_e); }
                     } else {
                         this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need cobblestone`;
                         m.target = undefined;
                         try { 
                             const cobbleSpot = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:cobblestone" || type === "minecraft:stone", 200);
                             if (cobbleSpot.length) { m.target = cobbleSpot[0]; m.type = "minecraft:cobblestone"; return false; }
-                        } catch {}
+                        } catch (_e) { this.fault(_e); }
                     }
                 }
                 if (neededTier >= 3 && toolName === "pickaxe") {
@@ -2046,12 +1927,12 @@ export class Bot {
                     try { 
                         const counts = this.bag.counts();
                         if ((counts["minecraft:iron_ingot"] ?? 0) >= 3) { this.obtain("minecraft:iron_pickaxe", 1, tick); return false; }
-                        else if ((counts["minecraft:raw_iron"] ?? 0) >= 3) { try { this.autonomy.produce("minecraft:raw_iron", 3, tick); return false; } catch {} }
-                    } catch {}
+                        else if ((counts["minecraft:raw_iron"] ?? 0) >= 3) { try { this.autonomy.produce("minecraft:raw_iron", 3, tick); return false; } catch (_e) { this.fault(_e); } }
+                    } catch (_e) { this.fault(_e); }
                 }
                 m.target = undefined; m.approach = undefined; m.approachTry = 0;
                 if (rule.tier > 0) { this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3.`, "retry"); return false; }
-                try { this.bag.emptyHand(); } catch {}
+                try { this.bag.emptyHand(); } catch (_e) { this.fault(_e); }
             }
         }
         if (!m.breakingSince) {
@@ -2060,13 +1941,13 @@ export class Bot {
         } else {
             const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
             if (tick - m.breakingSince > timeout) {
-                try { this.sim.stopBreakingBlock(); } catch {}
+                try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
                 m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout quick - advanced");
             }
         }
         const held = this.bag.get(this.sim.selectedSlotIndex);
         if (rule && rule.tier > 0 && (!held?.typeId.endsWith("_pickaxe") || toolTier(held.typeId) < rule.tier)) {
-            try { this.sim.stopBreakingBlock(); } catch {}
+            try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
             this.blockTask("Required pickaxe lost or broken.", "retry");
         }
         return false;
@@ -2075,16 +1956,18 @@ export class Bot {
 
 
     findAdjacentLogs(m, tick) {
-        // FAST: after breaking log, check 3x3x4 cube around last target for adjacent logs to avoid idle
+        // FIX: any log + short TTL + larger search for tree logs
         if (!m.target) return null;
-        const center = m.target;
-        for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 3; dy++) for (let dz = -2; dz <= 2; dz++) {
+        const centerPos = m.target;
+        for (let dx = -3; dx <= 3; dx++) for (let dy = -1; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) {
             if (dx===0 && dy===0 && dz===0) continue;
-            const p = { x: center.x + dx, y: center.y + dy, z: center.z + dz };
-            if ((m.blocked.get(key(p)) ?? 0) > tick) continue;
+            const p = { x: centerPos.x + dx, y: centerPos.y + dy, z: centerPos.z + dz };
+            const blockedUntil = m.blocked.get(key(p)) ?? 0;
+            if (blockedUntil > tick && blockedUntil - tick > 200) continue; // allow retry after short block
             const b = this.terrain.block(p);
             if (!b) continue;
-            if (b.typeId === m.block || (m.item && b.typeId === m.item) || b.typeId.endsWith("_log") || b.typeId.endsWith("_wood")) {
+            // Any log acceptable - fixes oak-only waste
+            if (m.block === "#logs" || b.typeId === m.block || (m.item && (b.typeId === m.item || m.item === "#logs")) || b.typeId.endsWith("_log") || b.typeId.endsWith("_wood") || b.typeId.includes("_stem") || b.typeId.includes("bamboo")) {
                 if (this.safeToMine(p)) return p;
             }
         }
@@ -2093,19 +1976,20 @@ export class Bot {
 
     wantedToMine(m, type, p, tick) {
         const r = MINE[type];
-        if (!r) return false;
-        // UNBREAKABLE: if requesting oak_log but any wood available, accept any wood
+        if (!r && !isAnyWood(type) && type !== "minecraft:bamboo" && type !== "minecraft:deadbush" && type !== "minecraft:dead_bush") return false;
+        // FIX: #logs handling - any log acceptable, fixes oak-only waste
         let wanted = false;
-        if (m.item) {
-            wanted = matches(r.drops, m.item);
-            // If item is any log, accept any log drops
+        if (m.block === "#logs" || m.item === "#logs") {
+            wanted = isAnyWood(type) || type.includes("bamboo");
+        } else if (m.item) {
+            wanted = matches(r?.drops ?? type, m.item);
             if (!wanted && isWoodRequest(m.block) && isAnyWood(type)) wanted = true;
-            // If need sticks and in desert, accept dead bush
             if (!wanted && m.block && m.block.includes("stick") && (type === "minecraft:deadbush" || type === "minecraft:dead_bush")) wanted = true;
-            // If need planks, accept any log (can craft planks)
             if (!wanted && m.block && m.block.includes("_planks") && isAnyWood(type)) wanted = true;
+            if (!wanted && m.item === "#logs" && isAnyWood(type)) wanted = true;
         } else {
             wanted = type === m.block;
+            if (!wanted && m.block === "#logs" && isAnyWood(type)) wanted = true;
             if (!wanted && isWoodRequest(m.block) && isAnyWood(type)) wanted = true;
             if (!wanted && m.block && m.block.includes("stick") && (type === "minecraft:deadbush" || type === "minecraft:dead_bush")) wanted = true;
             if (!wanted && m.block && m.block.includes("_planks") && isAnyWood(type)) wanted = true;
@@ -2175,11 +2059,11 @@ export class Bot {
             recover: this.recoverTarget ? { target: { ...this.recoverTarget }, since: this.recoverSince, seen: this.recoverSeen } : undefined,
         };
         let counts = {};
-        try { counts = this.bag.counts(); } catch {}
+        try { counts = this.bag.counts(); } catch (_e) { this.fault(_e); }
         let where, dim;
         try { where = { ...this.sim.location }; dim = this.sim.dimension.id; } catch { where = this.lastKnown?.p; dim = this.lastKnown?.dim; }
         if (!where || !dim) return;
-        try { this.memory?.setDeath(where, dim, system.currentTick, counts); } catch (e) { console.warn("[Verdant] Could not record death point: " + e); }
+        try { this.memory?.setDeath(where, dim, system.currentTick, counts); } catch (_e) { this.fault(_e); }
     }
     isSleeping() { try { return this.sim.isSleeping === true; } catch { return false; } }
     swing(cell, tick) {
@@ -2192,7 +2076,7 @@ export class Bot {
         return r;
     }
     canCamp() {
-        if (this.miner.active || this.deepMiner.active || this.advancedMiner?.active) return false;
+        if (this.miner.active || this.deepMiner.active) return false;
         switch (this.mode) {
             case "idle": case "guard": case "goto": case "collect": case "starter": case "survival": case "mine": case "speedrun": return true;
             case "follow": { const o = this.owner(); return !o || distance(o.location, this.sim.location) > 48; }
@@ -2277,12 +2161,12 @@ export class Bot {
         s.stage = "wait"; s.actionSince = tick;
     }
     campWait(s, tick) {
-        try { this.sim.stopMoving(); } catch {}
+        try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
         if (s.sealed) { this.reason = "Camping: sealed in until dawn."; if (!this.isNight()) { s.stage = "exit"; s.actionSince = tick; } return; }
         if (s.bedCell && !s.sleepTried && tick - s.actionSince > 10) {
             s.sleepTried = true;
             const bed = this.terrain.block(s.bedCell);
-            if (bed && bed.typeId.endsWith("_bed")) { try { if (typeof this.sim.interactWithBlock === "function" && !this.isSleeping()) this.sim.interactWithBlock(bed); } catch {} }
+            if (bed && bed.typeId.endsWith("_bed")) { try { if (typeof this.sim.interactWithBlock === "function" && !this.isSleeping()) this.sim.interactWithBlock(bed); } catch (_e) { this.fault(_e); } }
         }
         this.reason = s.bedCell ? "Camping: sleeping until dawn." : "Camping: standing watch until dawn.";
         if (!this.isNight()) { s.stage = "exit"; s.actionSince = tick; }
@@ -2294,7 +2178,7 @@ export class Bot {
             return;
         }
         if (s.bedCell && this.isSleeping()) {
-            if (tick - s.actionSince > 40) { s.actionSince = tick; try { const bed = this.terrain.block(s.bedCell); if (bed && typeof this.sim.interactWithBlock === "function") this.sim.interactWithBlock(bed); } catch {} }
+            if (tick - s.actionSince > 40) { s.actionSince = tick; try { const bed = this.terrain.block(s.bedCell); if (bed && typeof this.sim.interactWithBlock === "function") this.sim.interactWithBlock(bed); } catch (_e) { this.fault(_e); } }
             return;
         }
         if (s.p && !this.hands.nearCell(s.p)) {
@@ -2312,7 +2196,7 @@ export class Bot {
         if (tick - this.sealSince > 400 || b.isLiquid) { 
             this.escapeSeal = undefined; 
             this.record("Sealed in timeout, opening robustly");
-            try { this.sim.stopMoving(); } catch {}
+            try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
             this.nav.reset();
             return true; 
         }
@@ -2337,7 +2221,7 @@ export class Bot {
         const grave = this.recoverTarget;
         if (!grave) return;
         if (this.bag.container.emptySlotsCount < 1) { 
-            try { this.resource.organizeIfNeeded(); } catch {}
+            try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); }
             this.reason = "Inventory full during recovery, organizing";
             return; 
         }
@@ -2368,7 +2252,7 @@ export class Bot {
                                 const nav2 = this.nav.go(center(target), tick);
                                 if (nav2 !== "failed") return;
                             }
-                        } catch {}
+                        } catch (_e) { this.fault(_e); }
                         // Try builder to place if we have blocks now
                         if (this.builder?.canBuild) {
                             try {
@@ -2381,7 +2265,7 @@ export class Bot {
                                         return;
                                     }
                                 }
-                            } catch {}
+                            } catch (_e) { this.fault(_e); }
                         }
                         // Try alternative path via explorer or larger search
                         if (tick % 60 === 0) {
@@ -2431,7 +2315,7 @@ export class Bot {
                                     }
                                 }
                             }
-                        } catch {}
+                        } catch (_e) { this.fault(_e); }
                         this.recoverPush = 0;
                         this.reason = `Recovery retrying - ${this.nav.reason} - unbreakable, will mine blocks or find alternative`;
                         // Don't blockTask permanently, just keep trying - unbreakable
@@ -2453,14 +2337,14 @@ export class Bot {
     attach(sim) {
         this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
         this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag); this.autonomy = new SurvivalDirector(this);
-        this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.advancedMiner = new AdvancedMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
+        this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
         this.nav.builder = this.builder; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;
     }
     aliveSim() {
         const hp = (e) => { try { return e.getComponent(EntityComponentTypes.Health)?.currentValue ?? 0; } catch { return 0; } };
-        try { if (this.sim.isValid && hp(this.sim) > 0) return this.sim; } catch {}
-        try { const byId = world.getEntity(this.sim.id); if (byId?.isValid && byId.typeId === "minecraft:player" && hp(byId) > 0) return byId; } catch {}
-        try { const found = world.getAllPlayers().find((q) => q.name === this.ownerName && q.hasTag("verdant.bot") && hp(q) > 0); if (found?.isValid) return found; } catch {}
+        try { if (this.sim.isValid && hp(this.sim) > 0) return this.sim; } catch (_e) { this.fault(_e); }
+        try { const byId = world.getEntity(this.sim.id); if (byId?.isValid && byId.typeId === "minecraft:player" && hp(byId) > 0) return byId; } catch (_e) { this.fault(_e); }
+        try { const found = world.getAllPlayers().find((q) => q.name === this.ownerName && q.hasTag("verdant.bot") && hp(q) > 0); if (found?.isValid) return found; } catch (_e) { this.fault(_e); }
         return undefined;
     }
     deadTick(tick) {
@@ -2476,7 +2360,7 @@ export class Bot {
         if (tick - this.deadSince > 200) { this.state = "deadFailed"; this.deadSince = 0; this.reason = "Respawn did not complete; use !bot spawn. Death point is remembered."; this.tell(this.reason); }
     }
     respawned(tick) {
-        try { this.stopActions(); } catch {}
+        try { this.stopActions(); } catch (_e) { this.fault(_e); }
         this.blocked = undefined; this.paused = false; this.escapeSeal = undefined; this.nav.reset(); this.escaper.reset(); this.recentAttacker = undefined; this.lastBranch = "";
         const grave = this.memory?.death(); const here = this.sim.location;
         if (grave && grave.dim === this.sim.dimension.id && distance(here, grave) <= 256) { this.tell("Respawned. Returning to the death point for the drops."); this.startRecover(); return; }
@@ -2505,7 +2389,7 @@ export class Bot {
         return { block: this.mineRequest.block, count: Math.max(1, left) };
     }
     maybeLoot(tick) {
-        if (!this.settings.loot || this.mode === "loot" || this.miner.active || this.deepMiner.active || this.advancedMiner?.active) return false;
+        if (!this.settings.loot || this.mode === "loot" || this.miner.active || this.deepMiner.active) return false;
         if (!["goto", "follow", "survival", "recover", "collect", "idle", "speedrun"].includes(this.mode)) return false;
         if (this.sim.isInWater) return false;
         if (this.bag.container.emptySlotsCount < 2) return false;
@@ -2568,7 +2452,7 @@ export class Bot {
     boatTravel(tick) {
         const t = this.boatTrip;
         const target = this.mode === "goto" ? this.goal : this.mode === "follow" ? this.owner()?.location : this.mode === "recover" ? this.recoverTarget : this.mode === "collect" ? this.goal?.anchor : undefined;
-        if (!this.settings.boat || !target || this.miner.active || this.deepMiner.active || this.advancedMiner?.active) { if (t) this.abortBoat("Water route over; continuing on foot."); return false; }
+        if (!this.settings.boat || !target || this.miner.active || this.deepMiner.active) { if (t) this.abortBoat("Water route over; continuing on foot."); return false; }
         if (!t) {
             if (this.boatIgnore > tick || tick % 20 !== 0) return false;
             const cell = this.waterAhead(target);
@@ -2638,7 +2522,7 @@ export class Bot {
         return undefined;
     }
     ridingBoat() {
-        try { const ride = this.sim.getComponent("minecraft:riding")?.entityRidingOn; if (ride?.isValid && ride.typeId.endsWith("_boat")) return ride; } catch {}
+        try { const ride = this.sim.getComponent("minecraft:riding")?.entityRidingOn; if (ride?.isValid && ride.typeId.endsWith("_boat")) return ride; } catch (_e) { this.fault(_e); }
         return undefined;
     }
     onGround(boat) { try { return this.sim.isOnGround || (boat?.isOnGround ?? false); } catch { return false; } }
@@ -2651,7 +2535,7 @@ export class Bot {
             const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat","minecraft:bamboo_raft"];
             if (this.settings.assistedCrafting) {
                 for (const bt of boatTypes) {
-                    try { this.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                    try { this.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch (_e) { this.fault(_e); }
                 }
                 // Try craft planks from logs if no boat
                 if (slot < 0) {
@@ -2662,9 +2546,9 @@ export class Bot {
                             const plankType = logType.includes("_log") ? logType.replace("_log","_planks") : logType.replace("_wood","_planks");
                             this.craft(plankType, 4);
                             for (const bt of boatTypes) {
-                                try { this.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                                try { this.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch (_e) { this.fault(_e); }
                             }
-                        } catch {}
+                        } catch (_e) { this.fault(_e); }
                     }
                 }
             }
@@ -2685,7 +2569,7 @@ export class Bot {
     abortBoat(reason) {
         const boat = this.ridingBoat();
         if (boat) {
-            try { const rideable = boat.getComponent("minecraft:rideable"); if (rideable?.ejectRider) rideable.ejectRider(this.sim); else if (rideable?.ejectRiders) rideable.ejectRiders(); } catch {}
+            try { const rideable = boat.getComponent("minecraft:rideable"); if (rideable?.ejectRider) rideable.ejectRider(this.sim); else if (rideable?.ejectRiders) rideable.ejectRiders(); } catch (_e) { this.fault(_e); }
         }
         this.boatTrip = undefined; this.reason = reason; this.record("boat: " + reason);
     }
@@ -2746,6 +2630,19 @@ export class Bot {
         }
         if (amountOf(this.bag.usableCounts(), target) >= amount) { this.cancelWork(); return true; }
         if (this.mining) { if (this.mine(this.mining, tick)) { this.mining = undefined; this.stopActions(); } return false; }
+
+        // GOAL DECOMPOSITION: structured hierarchy with tagged requirements
+        try {
+            if (!this.goalTree || this.goalTree.id !== target) {
+                this.goalTree = decomposeMission(target, this.bag.counts());
+                if (this.goalTree) {
+                    const missing = analyzeRequirements(this.goalTree, this.bag.counts(), { near_table: this.terrain.tableNear(this.sim.location), inventory_space: this.bag.container.emptySlotsCount });
+                    if (missing.length) {
+                        this.record(`Goal ${target} decomposition: ${missing.length} missing - ${missing.slice(0,3).map(m=>m.path).join(", ")}`);
+                    }
+                }
+            }
+        } catch (_e) { this.fault(_e); }
         const nearTable = this.terrain.tableNear(this.sim.location);
         const tableBlock = this.tablePosition ? this.terrain.block(this.tablePosition) : undefined;
         if (tableBlock && tableBlock.typeId !== id("crafting_table")) this.tablePosition = undefined;
@@ -2830,6 +2727,6 @@ export class Bot {
         try {
             this.memory?.rememberPrefs(this.settings); this.memory?.flush();
             world.setDynamicProperty("verdant:journal", JSON.stringify(this.status()));
-        } catch (e) { console.warn("[Verdant] Journal failed: " + e); }
+        } catch (_e) { this.fault(_e); }
     }
 }

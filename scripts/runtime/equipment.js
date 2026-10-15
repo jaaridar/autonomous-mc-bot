@@ -105,7 +105,7 @@ export class Equipment {
                 if (!item) continue;
                 if (weaponRank(item.typeId) > 0 && usable(item)) return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 
@@ -231,7 +231,7 @@ export class Equipment {
                     }
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return changes;
     }
 
