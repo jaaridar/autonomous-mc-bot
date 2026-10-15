@@ -39,6 +39,9 @@ export class Navigator {
         this.allowBridge = false;
         this.allowSprintJump = true;
         this.builder = undefined; // set by bot
+        this.bot = undefined; // set by bot: per-tick vitals cache
+        this.direct = undefined; // short straight-line move in progress
+        this.directBan = 0;
     }
 
     reset() {
@@ -54,28 +57,31 @@ export class Navigator {
         this.urgent = false;
         this.avoid = [];
         this.trail = [];
+        this.direct = undefined;
     }
 
     replan(tick) {
         const allowBridge = this.allowBridge || this.builder?.canBuild;
         const allowPillar = allowBridge; // For 100 block tower, allow pillar but throttled to avoid lag
-        const verticalDiff = Math.abs(floor(this.sim.location).y - floor(this.target).y);
-        const horiz = horizontal(this.sim.location, this.target);
-        // FIX: lag when 100 block - reduce nodes/radius, precise column handling in follow() instead of huge A*
-        const isHighTower = verticalDiff > 20 || horiz > 50;
-        const maxNodes = isHighTower ? 3000 : 2000; // was 8000, now 3000 to avoid lag
-        const radius = isHighTower ? 64 : 32; // was 128, now 64 precise
+        const here = this.sim.location;
+        const verticalDiff = Math.abs(Math.floor(here.y) - Math.floor(this.target.y));
+        const horiz = horizontal(here, this.target);
+        // Tower mode only for a goal nearly straight overhead; everything else
+        // is a short rolling-horizon search (partial paths chain long trips).
+        const tower = verticalDiff > 12 && horiz < 4;
+        const maxNodes = tower ? 1500 : 1200;
+        const radius = 24;
         this.search = new PathSearch(
             this.terrain.read,
-            floor(this.sim.location),
+            floor(here),
             floor(this.target),
             0.7,
             this.parkour,
             maxNodes,
             radius,
-            horizontal(this.sim.location, this.target) > 20,
+            horiz > 20,
             this.avoid,
-            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump }
+            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump, vertLimit: tower ? 48 : undefined }
         );
         this.path = [];
         this.corridor = [];
@@ -144,23 +150,37 @@ export class Navigator {
             this.reset();
             return "done";
         }
+        // Short flat hop: walk straight there, no search at all.
+        const direct = this.goDirect(goal, tick);
+        if (direct) return direct;
         if (!this.target) {
             this.target = { ...goal };
             this.lastRetarget = tick;
             this.replan(tick);
-        } else if (distance(goal, this.target) > 3 && tick - this.lastRetarget >= 12) {
-            this.target = { ...goal };
-            this.lastRetarget = tick;
-            this.retries = 0;
-            this.endpoints.clear();
-            this.trail = [];
-            this.replan(tick);
+        } else {
+            // A moving goal (the owner) used to restart A* whenever it drifted
+            // 3 blocks - every ~15 ticks at walking pace, often before the last
+            // search finished. Keep the current path (or let a running search
+            // finish) unless the goal really moved; reaching the end of the
+            // path retargets anyway.
+            const moved = distance(goal, this.target), since = tick - this.lastRetarget;
+            const retarget = this.search
+                ? moved > 8
+                : moved > 8 || (moved > 3 && since >= 40) || (moved >= 2 && since >= 60);
+            if (retarget) {
+                this.target = { ...goal };
+                this.lastRetarget = tick;
+                this.retries = 0;
+                this.endpoints.clear();
+                this.trail = [];
+                this.replan(tick);
+            }
         }
         if (tick - this.segmentStart > 700) return this.fail("Segment timeout; terrain blocked or unloaded.");
 
         if (this.search) {
             const before = this.search.expanded;
-            const result = this.search.step(this.fast ? 120 : 50);
+            const result = this.search.step(this.fast ? 64 : 32);
             this.expansions += this.search.expanded - before;
             if (result === "searching") return "running";
             if (result !== "found" && result !== "partial") return this.fail(`Path ${result}; no safe route.`);
@@ -201,9 +221,11 @@ export class Navigator {
             this.lastPosition = { ...this.sim.location };
         }
 
-        // Check if waypoint still safe, or if we need bridge - entire body must be able to go
-        const waypointSafe = this.terrain.freshSafe(w) || w.kind === "bridge";
-        if (tick - this.lastProgress > 50 || !waypointSafe || this.corridor.some((p) => !this.terrain.freshSafe(p) && p.kind !== "bridge")) {
+        // Check if waypoint still safe, or if we need bridge - entire body must be able to go.
+        // Snapshots up to 4 ticks old are accepted: re-reading the whole
+        // corridor (up to 21 cells) from the engine every tick was pure cost.
+        const waypointSafe = w.kind === "bridge" || this.terrain.freshSafe(w, 2);
+        if (tick - this.lastProgress > 50 || !waypointSafe || this.corridor.some((p) => p.kind !== "bridge" && !this.terrain.freshSafe(p, 4))) {
             // Try to find obstruction that blocks entire body
             if (!waypointSafe && w) {
                 try {
@@ -240,7 +262,7 @@ export class Navigator {
             if (w.kind === "walk") {
                 for (let j = end + 1; j < limit; j++) {
                     const q = this.path[j];
-                    if (q.kind !== "walk" || q.y !== w.y || (alongX ? q.z !== w.z : q.x !== w.x) || !this.terrain.freshSafe(q)) break;
+                    if (q.kind !== "walk" || q.y !== w.y || (alongX ? q.z !== w.z : q.x !== w.x) || !this.terrain.freshSafe(q, 2)) break;
                     end = j;
                 }
             }
@@ -251,8 +273,8 @@ export class Navigator {
             this.corridor = this.path.slice(first, end + 1);
             this.lastIssued = this.waypoint;
 
-            const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
-            const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
+            const hunger = (this.bot?.hunger ? this.bot.hunger() : this.sim.getComponent("minecraft:player.hunger")?.currentValue) ?? 20;
+            const hp = (this.bot?.health ? this.bot.health() : this.sim.getComponent("minecraft:health")?.currentValue) ?? 20;
             const canSprint = hunger > 6 && hp > 6;
             const sprint = canSprint && (this.urgent || (this.fast && w.kind === "walk" && horizontal(this.sim.location, w) > 1));
 
@@ -402,5 +424,62 @@ export class Navigator {
             }
         }
         return "running";
+    }
+
+    /**
+     * Straight-line move for a short (< 6 blocks), flat or gently descending
+     * hop: every cell on the line must be standable at the same level (or up
+     * to 1 lower) and hazard-free, so this is exactly as safe as A* walk/drop
+     * moves - it just skips the search. Returns undefined to fall through to
+     * A*; a stalled hop bans direct mode here for 100 ticks.
+     */
+    goDirect(goal, tick) {
+        if (tick < this.directBan || this.urgent || this.avoid.length) { this.direct = undefined; return undefined; }
+        const here = this.sim.location;
+        const h = horizontal(here, goal);
+        if (h >= 6 || Math.abs(goal.y - here.y) > 1.2) { this.direct = undefined; return undefined; }
+        const d = this.direct;
+        const same = d && Math.abs(d.goal.x - goal.x) < 0.01 && Math.abs(d.goal.z - goal.z) < 0.01 && Math.abs(d.goal.y - goal.y) < 0.01;
+        if (same && tick - d.checked < 10) {
+            if (distance(here, d.last) > 0.15) { d.last = { x: here.x, y: here.y, z: here.z }; d.progress = tick; }
+            if (tick - d.progress > 20) { this.direct = undefined; this.directBan = tick + 100; return undefined; }
+            return "running";
+        }
+        if (!this.lineWalkable(here, goal)) { this.direct = undefined; return undefined; }
+        // Line is clear: drop any search/path and walk.
+        this.search = undefined;
+        this.path = [];
+        this.corridor = [];
+        this.target = undefined;
+        try {
+            this.sim.isSprinting = false;
+            this.sim.moveToLocation(this.host.relative(goal), { speed: this.fast ? 1 : 0.65, faceTarget: true });
+        } catch {
+            this.direct = undefined;
+            this.directBan = tick + 100;
+            return undefined;
+        }
+        this.direct = { goal: { x: goal.x, y: goal.y, z: goal.z }, checked: tick, progress: same ? d.progress : tick, last: { x: here.x, y: here.y, z: here.z } };
+        this.lastProgress = tick;
+        this.reason = "Direct move (short clear line)";
+        return "running";
+    }
+    lineWalkable(from, to) {
+        const fx = from.x, fz = from.z, dx = to.x - fx, dz = to.z - fz;
+        const len = Math.hypot(dx, dz);
+        const steps = Math.max(1, Math.ceil(len * 2));
+        let y = Math.floor(from.y);
+        let lastX = Math.floor(fx), lastZ = Math.floor(fz);
+        for (let i = 1; i <= steps; i++) {
+            const x = Math.floor(fx + dx * i / steps), z = Math.floor(fz + dz * i / steps);
+            if (x === lastX && z === lastZ) continue;
+            // Diagonal step: both corner cells must be passable too (no corner clipping).
+            if (x !== lastX && z !== lastZ && (!this.terrain.safe({ x: lastX, y, z }) || !this.terrain.safe({ x, y, z: lastZ }))) return false;
+            if (this.terrain.safe({ x, y, z })) { /* level */ }
+            else if (this.terrain.safe({ x, y: y - 1, z })) y -= 1;
+            else return false;
+            lastX = x; lastZ = z;
+        }
+        return Math.abs(y - Math.floor(to.y)) <= 1;
     }
 }

@@ -38,7 +38,7 @@ import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../cor
 import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
 import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
 import { UI } from "./ui.js";
-import { Arbiter, REASON_CODES } from "../core/arbiter.js";
+import { Arbiter, REASON_CODES, EXECUTING } from "../core/arbiter.js";
 import { decomposeMission, analyzeRequirements, isAnyLog, HIERARCHY } from "../core/goal-decomposition.js";
 import { shouldRecalculateAdaptive, verifyAction, handlePlanFailure, preserveEmergencyResources } from "../core/adaptive-planning.js";
 
@@ -59,6 +59,24 @@ const VALUABLE = /^minecraft:(diamond|emerald|netherite|.*_ingot|.*enchanted_boo
 const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
 const ANY_WOOD_DROPS = /(_log|_planks|stick|bamboo)/;
 function isAnyWood(type) { return ANY_WOOD.test(type); }
+/** Cells around a navigation goal that navTo() will accept, in preference order. */
+const NAV_OFFSETS = (() => {
+    const seen = new Set(), out = [];
+    for (const d of [{ x: 0, y: 0, z: 0 }, ...COMPASS, ...COMPASS.map((d) => ({ x: d.x * 2, y: 0, z: d.z * 2 })), ...CARDINAL.map((d) => ({ x: d.x, y: -1, z: d.z })), { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }]) {
+        const k = `${d.x},${d.y},${d.z}`;
+        if (!seen.has(k)) { seen.add(k); out.push(d); }
+    }
+    return out;
+})();
+/** Idle drop pickup scan radius (blocks). */
+const IDLE_PICKUP_RADIUS = 4;
+/** findAdjacentLogs() box: dx/dz -2..2, dy -1..2, nearest first (vertical neighbours lead). */
+const ADJACENT_LOG_OFFSETS = (() => {
+    const out = [];
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 2; dy++) for (let dz = -2; dz <= 2; dz++)
+        if (dx || dy || dz) out.push({ x: dx, y: dy, z: dz });
+    return out.sort((a, b) => (Math.abs(a.x) + Math.abs(a.z)) - (Math.abs(b.x) + Math.abs(b.z)) || Math.abs(a.y) - Math.abs(b.y) || b.y - a.y);
+})();
 function isWoodRequest(block) { return block && (block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
 export class Bot {
@@ -137,6 +155,8 @@ export class Bot {
         this.log = [];
         this.errors = 0;
         this.startedTick = system.currentTick;
+        /** Tick stamp for per-tick memos (owner, vitals); refreshed at the top of tick(). */
+        this.now = this.startedTick;
         this.bag = new Bag(sim);
         this.terrain = new Terrain(sim.dimension);
         this.nav = new Navigator(sim, host, this.terrain);
@@ -169,6 +189,7 @@ export class Bot {
         this.goalTree = null;
         this.currentGoal = null;
         this.nav.builder = this.builder;
+        this.nav.bot = this;
         // Enhanced mining state
         this.obstructionClear = undefined;
         this.scaffoldState = undefined;
@@ -186,15 +207,133 @@ export class Bot {
         this.faultResumeAt = 0;
         this.lastErrorTick = 0;
         sim.addTag("verdant.bot");
+        this.instrumentSim(sim);
         this.record("spawned advanced bot v2.0 nether speedrun world-class");
+    }
+    /** Install the per-tick location memo and the item-use / world-edit hooks on the bot's own entity. */
+    instrumentSim(sim) {
+        this.memoLocation(sim);
+        // Item use consumes stacks engine-side (not via Bag.set), and placing /
+        // breaking changes terrain the bot caches. Wrap the bot's own engine
+        // calls so the bag reads live after a use and the touched cells stay
+        // on live reads. Wrappers always sit on the original functions, so
+        // re-attaching (or a new Bot adopting the entity) never stacks them.
+        const bot = this;
+        const FACE = { Up: [0, 1, 0], Down: [0, -1, 0], North: [0, 0, -1], South: [0, 0, 1], East: [1, 0, 0], West: [-1, 0, 0] };
+        const watchPlace = (loc, face) => {
+            if (!loc) return;
+            const at = { x: Math.floor(loc.x), y: Math.floor(loc.y), z: Math.floor(loc.z) };
+            bot.terrain?.watch?.(at, 40);
+            const d = FACE[face];
+            if (d) bot.terrain?.watch?.({ x: at.x + d[0], y: at.y + d[1], z: at.z + d[2] }, 40);
+            else for (const k of Object.keys(FACE)) bot.terrain?.watch?.({ x: at.x + FACE[k][0], y: at.y + FACE[k][1], z: at.z + FACE[k][2] }, 40);
+        };
+        const before = {
+            useItemInSlot: () => bot.bag?.markUsed?.(),
+            useItem: () => bot.bag?.markUsed?.(),
+            useItemInSlotOnBlock: (slot, loc, face) => { bot.bag?.markUsed?.(); watchPlace(loc, face); },
+            breakBlock: (loc) => { if (loc) bot.terrain?.watch?.(loc, 200); },
+        };
+        let hooked = true;
+        let originals;
+        try {
+            originals = sim.__verdantOriginals;
+            if (!originals) {
+                originals = {};
+                Object.defineProperty(sim, "__verdantOriginals", { configurable: true, enumerable: false, value: originals });
+            }
+        } catch { originals = undefined; }
+        for (const name of Object.keys(before)) {
+            try {
+                const fn = originals?.[name] ?? sim[name];
+                if (typeof fn !== "function") continue;
+                if (originals) originals[name] = fn;
+                const hook = before[name];
+                Object.defineProperty(sim, name, { configurable: true, writable: true, enumerable: false, value: function (...args) { try { hook(...args); } catch { /* bookkeeping only */ } return fn.apply(sim, args); } });
+                if (sim[name] === fn && name.startsWith("use")) hooked = false;
+            } catch { if (name.startsWith("use")) hooked = false; }
+        }
+        if (this.bag) this.bag.useHooked = hooked;
+        this._useHooked = hooked;
+    }
+    /**
+     * Per-tick memo of the bot's own position. sim.location is an engine call
+     * returning a fresh vector and is read at ~25 sites per tick; within one
+     * tick it cannot change (nothing here teleports the bot, and respawn goes
+     * through forgetLocation()). Callers still get their own copy. If the
+     * engine object refuses an own property, live reads simply continue.
+     */
+    memoLocation(sim) {
+        this.forgetLocation = () => { };
+        try {
+            let proto = Object.getPrototypeOf(sim), desc;
+            while (proto && !(desc = Object.getOwnPropertyDescriptor(proto, "location"))) proto = Object.getPrototypeOf(proto);
+            if (!desc || typeof desc.get !== "function") return;
+            const bot = this, read = desc.get;
+            let at, x = 0, y = 0, z = 0;
+            Object.defineProperty(sim, "location", {
+                configurable: true,
+                enumerable: false,
+                get() {
+                    if (at !== bot.now || at === undefined) {
+                        const v = read.call(sim);
+                        x = v.x; y = v.y; z = v.z;
+                        at = bot.now;
+                    }
+                    return { x, y, z };
+                },
+            });
+            this.forgetLocation = () => { at = undefined; };
+        } catch { /* not extensible: keep live reads */ }
     }
 
     owner() {
-        return world.getAllPlayers().find((p) => p.name === this.ownerName && !p.hasTag("verdant.bot"));
+        // getAllPlayers() + name/tag reads were repeated by ~13 callers per
+        // tick; the answer cannot change inside a tick.
+        if (this._ownerTick === this.now && this._ownerTick !== undefined) return this._owner;
+        const o = world.getAllPlayers().find((p) => p.name === this.ownerName && !p.hasTag("verdant.bot"));
+        this._owner = o;
+        this._ownerTick = this.now;
+        return o;
     }
     record(event) {
-        this.log.push({ tick: system.currentTick, event });
+        const now = this.now ?? system.currentTick;
+        // Fold an event repeated within 5 s into one journal line (count kept)
+        // instead of churning the 64-entry log every assessment.
+        const last = this.log[this.log.length - 1];
+        if (last && last.event === event && now - last.tick < 100) { last.repeat = (last.repeat ?? 1) + 1; return; }
+        this.log.push({ tick: now, event });
         if (this.log.length > 64) this.log.shift();
+    }
+    /** Health this tick (one engine read per tick, shared by every director). */
+    health() {
+        if (this._hpTick !== this.now) {
+            this._hpTick = this.now;
+            try { this._hp = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue; } catch { this._hp = undefined; }
+        }
+        return this._hp;
+    }
+    /** Hunger this tick (one engine read per tick). */
+    hunger() {
+        if (this._foodTick !== this.now) {
+            this._foodTick = this.now;
+            try { this._food = this.sim.getComponent("minecraft:player.hunger")?.currentValue; } catch { this._food = undefined; }
+        }
+        return this._food;
+    }
+    /** isInWater this tick (one engine read per tick). */
+    inWater() {
+        if (this._waterTick !== this.now) {
+            this._waterTick = this.now;
+            try { this._water = !!this.sim.isInWater; } catch { this._water = false; }
+        }
+        return this._water;
+    }
+    /** Blocks fallen since the current airborne spell began (0 when none). */
+    fallDepth() {
+        const start = this.survivalMaster?.fallStartY;
+        if (start === null || start === undefined || this._curY === undefined) return 0;
+        return Math.max(0, start - this._curY);
     }
     tell(msg) { this.owner()?.sendMessage(`§a[Verdant] §r${msg}`); }
     stopActions() {
@@ -291,6 +430,7 @@ export class Bot {
     onHurt(event) {
         if (event.hurtEntity.id !== this.sim.id) return;
         this.hurtTick = system.currentTick;
+        this.terrain.forgetThreats?.();
         const attacker = event.damageSource.damagingEntity;
         if (attacker?.typeId !== "minecraft:player") this.recentAttacker = attacker;
         this.record("hurt: " + event.damage);
@@ -597,12 +737,19 @@ export class Bot {
     }
     tick() {
         const tick = system.currentTick;
+        this.now = tick;
+        // Per-tick engine caches: one inventory snapshot and one terrain epoch
+        // per tick, shared by every director.
+        this.bag.begin(tick);
+        this.terrain.begin(tick);
         if (this.state === "dead") { this.deadTick(tick); return; }
         if (!this.sim.isValid) return;
-        try { this.lastKnown = { p: { ...this.sim.location }, dim: this.sim.dimension.id }; } catch (_e) { this.fault(_e); }
+        let here;
+        try { here = this.sim.location; this.lastKnown = { p: { x: here.x, y: here.y, z: here.z }, dim: this.sim.dimension.id }; } catch (_e) { this.fault(_e); }
         // Fall detection for survival master
         try {
-            const curY = this.sim.location.y;
+            const curY = here ? here.y : this.sim.location.y;
+            this._curY = curY;
             const onGround = this.sim.isOnGround;
             if (!onGround && this.survivalMaster) {
                 if (this.survivalMaster.fallStartY === null || this.survivalMaster.fallStartY === undefined) {
@@ -667,11 +814,10 @@ export class Bot {
             }
         }
         // Allow all dimensions: overworld, nether, end - for full-game speedrun
-        this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
 
         // ANTI-DROWN: if in water, immediately handle swimming - never drown
-        if (this.sim.isInWater) {
+        if (this.inWater()) {
             // Force swimming behavior - jump every tick to stay at surface
             if (tick % 5 === 0) {
                 try { this.sim.jump(); } catch (_e) { this.fault(_e); }
@@ -699,17 +845,17 @@ export class Bot {
         try { this.awareness.tick(tick); } catch (_e) { this.fault(_e); }
         try { this.structures.tick(tick); } catch (_e) { this.fault(_e); }
 
-        const hp = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 0;
+        const hp = this.health() ?? 0;
         if (hp <= 0) { this.recordDeath(); this.save(); this.state = "dead"; this.deadSince = tick; this.respawnTried = false; return; }
         if (this.escapeSeal && this.unseal(tick)) return;
-        const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+        const hunger = this.hunger() ?? 20;
 
-        // Auto organize if needed - retain important stuff
-        if (tick % 200 === 0) { try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); } }
+        // Auto organize if needed - retain important stuff (staggered off the 100/200 boundaries other work uses)
+        if (tick % 400 === 7) { try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); } }
         // Retain important items logic - never drop critical
-        if (tick % 100 === 0) { try { this.retainImportant(); } catch (_e) { this.fault(_e); } }
+        if (tick % 200 === 13) { try { this.retainImportant(); } catch (_e) { this.fault(_e); } }
 
-        if (this.settings.armor && !this.equipment.faultReason && tick - this.lastEquipmentCheck >= 20) {
+        if (this.settings.armor && !this.equipment.faultReason && tick % 20 === 14) {
             this.lastEquipmentCheck = tick;
             try { if (this.equipment.autoEquip()) this.record("equipped better armour"); } catch (error) {
                 this.equipment.faultReason = String(error); 
@@ -732,27 +878,25 @@ export class Bot {
         // ARBITER: replaces 430-line chain of if (director.tick()) return;
         // Keeps current behavior until finishes or clearly better appears, returns reason codes
         try {
-            if (tick % 5 === 0 || !this.arbiter.current || this.arbiter.current.id === "survival_master" || this.sim.isInWater) {
+            // Tick the arbiter every tick only while it owns real work; the
+            // behaviours it merely ranks (mission/escape/combat run below)
+            // only need re-ranking every 5 ticks.
+            const cur = this.arbiter.current;
+            if (tick % 5 === 0 || !cur || EXECUTING.has(cur.id)) {
                 const arbResult = this.arbiter.tick(tick);
-                if (arbResult.code === "running") {
-                    // If arbiter says running for survival/escape/combat/food, honor it
-                    if (["survival_master","escape","combat","food","bucket","golem","village","nether"].includes(arbResult.id)) {
-                        return;
-                    }
-                } else if (arbResult.code === "failed") {
-                    this.record(`Arbiter failed: ${arbResult.reason}`);
-                }
+                if (arbResult.code === "running" && EXECUTING.has(arbResult.id)) return;
+                if (arbResult.code === "failed") this.record(`Arbiter failed: ${arbResult.reason}`);
             }
         } catch (_e) { this.fault(_e); }
 
         // WORLD-CLASS SURVIVAL MASTER - now via arbiter, but keep direct call for fall fast path
         try {
-            const shouldTickSurvival = (tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || (this.survivalMaster.fallStartY !== null);
+            const shouldTickSurvival = (tick % 10 === 3) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || this.fallDepth() >= 3;
             if (shouldTickSurvival && this.survivalMaster.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
         // QUICK TOOL PRIORITY #1 - NEVER FIGHT BARE HAND
-        if (tick - this.lastQuickToolCheck > 40) {
+        if (tick % 40 === 18) {
             this.lastQuickToolCheck = tick;
             try {
                 const counts = this.bag.counts();
@@ -780,7 +924,7 @@ export class Bot {
         }
 
         // Death recovery - pick items if died
-        if (this.memory?.death() && tick % 100 === 0) {
+        if (tick % 100 === 77 && this.memory?.death()) {
             try {
                 const death = this.memory.death();
                 if (death && death.dim === this.sim.dimension.id) {
@@ -808,13 +952,14 @@ export class Bot {
 
         // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING
         try {
-            const counts = this.bag.counts();
-            const curHealth = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 20;
+            const curHealth = this.health() ?? 20;
             const prevHealth = this.previousHealth ?? curHealth;
             if (curHealth < prevHealth) {
                 this.lastDamageTick = tick;
                 try {
-                    const reassess = reassessAfterDamage({ health: curHealth, previousHealth: prevHealth, damage: prevHealth - curHealth, hostileCount: getCachedThreat().count }, { hasBlocks: (this.builder?.countBlocks() ?? 0) > 0 });
+                    // (previousPlan, damageTaken, newHealth, newThreats, context) - this call
+                    // used to pass one object, so context was undefined and it threw on every hit.
+                    const reassess = reassessAfterDamage(null, prevHealth - curHealth, curHealth, getCachedThreat().list ?? [], { previousHealth: prevHealth, previousThreatCount: this.previousThreatCount ?? 0, hasBlocks: (this.builder?.countBlocks() ?? 0) > 0 });
                     if (reassess.priority >= 80) {
                         this.reason = `Food: ${reassess.reason} - reassess after damage`;
                     }
@@ -823,7 +968,7 @@ export class Bot {
             this.previousHealth = curHealth;
 
             // Adaptive planning: recalculate whenever discovers village/ruined portal/lava pool/useful chest/hostile group/unexpected obstacle
-            if (tick % 60 === 0) {
+            if (tick % 60 === 23) {
                 try {
                     const discovered = [];
                     const top = this.structures?.getTopPriority();
@@ -842,7 +987,7 @@ export class Bot {
             if (tick - (this.lastFoodCheck ?? 0) > 80) {
                 this.lastFoodCheck = tick;
                 try {
-                    const reserves = assessFoodReserves(counts, { hunger, health: curHealth });
+                    const reserves = assessFoodReserves(this.bag.counts(), { hunger, health: curHealth });
                     if (reserves.status === "critical" && this.mode !== "idle") {
                         this.reason = `Food critical ${reserves.totalHunger} hunger, ${reserves.status} - prioritizing food`;
                     }
@@ -864,7 +1009,7 @@ export class Bot {
         // FOOD HEALING COMBAT READINESS (10-tick cadence; it counted the whole
         // inventory and read components on every single tick before)
         try {
-            if (this.food && tick % 10 === 0 && this.food.tick(tick)) return;
+            if (this.food && tick % 10 === 9 && this.food.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
         // BUCKET ACQUISITION & NETHER PREPARATION
@@ -915,25 +1060,26 @@ export class Bot {
         this.nav.stuck = false;
         let escapeKind = this.escaper.active ? this.escaper.mode : "";
         if (!escapeKind) {
-            if (this.sim.isInWater) escapeKind = "water";
+            if (this.inWater()) escapeKind = "water";
             else if (below?.hazard) escapeKind = "trapped";
             else if (justStuck && this.mode !== "idle") escapeKind = "trapped";
             // World-class: extreme combat situations need dedicated escape
-            else if (info.count >= 8 || info.bombNear || (info.ranged >= 6) || (info.list.some(e => e.typeId === "minecraft:ender_man") && (this.sim.getComponent("minecraft:health")?.currentValue ?? 20) <= 12)) {
+            else if (info.count >= 8 || info.bombNear || (info.ranged >= 6) || (info.list.some(e => e.typeId === "minecraft:ender_man") && (this.health() ?? 20) <= 12)) {
                 escapeKind = "combat_escape";
             }
         }
-        const usable = this.bag.usableCounts();
-        const hasWeapon = Object.keys(usable).some((k) => usable[k] > 0 && (k.endsWith("_sword") || k.endsWith("_axe")));
+        // Inventory facts are only read when a decision needs them (a quiet
+        // follow tick used to snapshot the whole inventory just to compute
+        // a weapon flag and a food slot it never looked at).
+        const hasWeapon = () => { const usable = this.bag.usableCounts(); return Object.keys(usable).some((k) => usable[k] > 0 && (k.endsWith("_sword") || k.endsWith("_axe"))); };
         const desperate = hp <= 8 || hunger <= 4;
-        const foodSlot = this.bag.food(desperate);
         let retreat = false;
         if (info.nearest) {
-            retreat = hp <= 6 || info.bombNear || info.count >= 4 || (hp <= 12 && (info.count >= 2 || info.explosive > 0)) || (hp <= 10 && !hasWeapon) || (hp <= 14 && info.ranged > 0 && info.closest > 3);
+            retreat = hp <= 6 || info.bombNear || info.count >= 4 || (hp <= 12 && (info.count >= 2 || info.explosive > 0)) || (hp <= 10 && !hasWeapon()) || (hp <= 14 && info.ranged > 0 && info.closest > 3);
         }
         if (retreat) this.fleeSince = this.fleeSince || tick; else this.fleeSince = 0;
         if (this.fleeSince && info.nearest && tick - this.fleeSince < 200) retreat = true;
-        const eat = foodSlot >= 0 && hunger <= 17 && (!info.nearest || info.closest > 10 || hunger <= 6);
+        const eat = hunger <= 17 && (!info.nearest || info.closest > 10 || hunger <= 6) && this.bag.food(desperate) >= 0;
         const branch = priority({ paused: false, escape: !!escapeKind, retreat, eat, threat: !!info.nearest, });
         if (branch !== this.lastBranch) { this.stopActions(); this.lastBranch = branch; this.retreatSince = 0; this.eatingUntil = 0; }
         this.state = branch;
@@ -963,8 +1109,10 @@ export class Bot {
             if (this.blocked.retryAt !== undefined && tick >= this.blocked.retryAt) { this.recoverTask(tick); }
             return;
         }
-        const observed = JSON.stringify(this.bag.counts());
-        if (observed !== this.progressSignature) { this.progressSignature = observed; this.recoveryAttempts = 0; this.escapeAttempts = 0; }
+        if (tick % 10 === 9) { // same phase as the food director: shares its inventory snapshot
+            const observed = JSON.stringify(this.bag.counts());
+            if (observed !== this.progressSignature) { this.progressSignature = observed; this.recoveryAttempts = 0; this.escapeAttempts = 0; }
+        }
         // ROBUST: Task deadline should NOT auto shutdown - reset and retry with exploring instead of manual block
         if (tick - this.taskStart > (this.mode === "survival" || this.mode === "goto" || this.mode === "speedrun" ? 36000 : this.mode === "starter" ? 12000 : 7200) && ["mine", "goto", "starter", "speedrun"].includes(this.mode)) {
             this.record(`Task deadline exceeded in ${this.mode}, resetting and retrying robustly`);
@@ -1023,19 +1171,24 @@ export class Bot {
                 case "golem": this.golemTick(tick); break;
             }
         } catch (error) { this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual"); }
-        if (tick % 100 === 0) this.save();
+        if (tick % 100 === 57) this.save();
     }
     navTo(goal, tick, leash) {
         if (distance(this.sim.location, goal) <= leash) { this.nav.reset(); return "done"; }
         const base = floor(goal);
-        const seen = new Set();
-        const candidates = [];
-        const offsets = [{ x: 0, y: 0, z: 0 }, ...COMPASS, ...COMPASS.map((d) => ({ x: d.x * 2, y: 0, z: d.z * 2 })), ...CARDINAL.map((d) => ({ x: d.x, y: -1, z: d.z })), { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }];
-        for (const d of offsets) {
-            const q = add(base, d), k = key(q);
-            if (seen.has(k)) continue;
-            seen.add(k);
-            if (this.terrain.safe(q)) candidates.push(q);
+        // Standable cells around the goal, reused for 10 ticks while the goal
+        // stays in the same cell (it was 22 standability checks every call).
+        const ck = key(base);
+        let candidates;
+        const nc = this._navCand;
+        if (nc && nc.key === ck && tick - nc.tick < 10 && tick >= nc.tick) candidates = nc.list.slice();
+        else {
+            candidates = [];
+            for (const d of NAV_OFFSETS) {
+                const q = add(base, d);
+                if (this.terrain.safe(q)) candidates.push(q);
+            }
+            this._navCand = { key: ck, tick, list: candidates.slice() };
         }
         if (!candidates.length) {
             // ROBUST: No safe spot, try to find workaround by breaking obstruction unless obsidian or important
@@ -1105,14 +1258,43 @@ export class Bot {
             return;
         }
 
-        // LAG FIX: cache heavy scans, throttle to 40 ticks
+        // LAG FIX: cache heavy scans, throttle to 60 ticks
         if (!this._followCache) this._followCache = { tick: 0, blocks: [], water: null, lastPos: null };
-        const needsScan = tick - this._followCache.tick > 40;
-        const inWater = this.sim.isInWater;
-        const waterNear = (() => { try { return this.terrain.waterNear ? this.terrain.waterNear(selfFloor) : false; } catch (_e) { this.fault(_e); return false; } })();
+        const needsScan = tick - this._followCache.tick > 60;
+        const inWater = this.inWater();
+        // waterNear: steering hint only, so it is memoized per standing cell
+        // for 80 ticks (it was 7 live block reads on every follow tick).
+        const wk = key(selfFloor);
+        let wn = this._followWater;
+        if (!wn || wn.key !== wk || tick - wn.tick > 80 || tick < wn.tick) {
+            let near = false;
+            try { near = this.terrain.waterNearCached(selfFloor, 10); } catch (_e) { this.fault(_e); }
+            wn = this._followWater = { key: wk, tick, near };
+        }
+        const waterNear = wn.near;
 
-        // PRECISE TOWER 100: if owner >12 above, pillar directly under owner's column - precise, no 128 radius A*
-        if (verticalDiff > 12) {
+        // FAR: beyond 80 blocks walk a checked straight line (2 waypoints at a
+        // time) instead of chaining full searches; any obstacle falls back to A*.
+        if (horizDist > 80 && Math.abs(verticalDiff) <= 12 && !inWater) {
+            if (this.followLine(goal, tick, horizDist)) return;
+        } else this._followLine = undefined;
+
+        // TOWER: owner >12 above. Walk to their column at our own level (cheap
+        // 2D search); pillar only once within 8 blocks horizontally.
+        if (verticalDiff > 12 && horizDist >= 8) {
+            const targetColumn = { x: Math.floor(goal.x), y: selfFloor.y, z: Math.floor(goal.z) };
+            const r = this.navTo(targetColumn, tick, 2);
+            if (r === "running") {
+                this.reason = `Tower follow: approaching your column ${targetColumn.x},${targetColumn.z} before pillaring ${Math.round(verticalDiff)}b - precise`;
+                return;
+            }
+        }
+        // PRECISE TOWER 100: if owner >12 above, pillar directly under owner's column - precise, no 128 radius A*.
+        // Once a pillar is under way, keep climbing until level with the owner:
+        // handing the last 12 blocks to A* (pillar moves cost 6 each) made it
+        // flood its node budget forever and the climb stalled 12 blocks short.
+        const towering = !!this.builder?.pillaring && verticalDiff > 1.5;
+        if ((verticalDiff > 12 || towering) && horizDist < 8) {
             const targetColumn = { x: Math.floor(goal.x), y: selfFloor.y, z: Math.floor(goal.z) };
             // Move horizontally to column first if far - cheap, no vertical search
             if (horizDist > 4) {
@@ -1125,7 +1307,11 @@ export class Bot {
             // Pillar up - use cached block check, not scan every tick
             if (this.builder && this.builder.canBuild) {
                 const pr = this.builder.pillar(tick);
-                if (pr === "placed" || pr === "jumping") {
+                // "occupied" = the block under us is already placed and we are
+                // still airborne: mid-pillar, not a failure. Treating it as one
+                // fell through to a doomed A* toward a goal 20 blocks overhead,
+                // whose budget failure flagged the bot as stuck.
+                if (pr === "placed" || pr === "jumping" || pr === "occupied") {
                     this.reason = `Tower follow: pillaring ${Math.round(verticalDiff)}b to you at ${goal.x.toFixed(0)},${goal.y.toFixed(0)},${goal.z.toFixed(0)} - precise column ${targetColumn.x},${targetColumn.z} - unbreakable`;
                     return;
                 }
@@ -1230,7 +1416,7 @@ export class Bot {
                 if (verticalDiff > 8 && this.builder && this.builder.canBuild) {
                     try {
                         const pr = this.builder.pillar(tick);
-                        if (pr === "placed" || pr === "jumping") { this.reason = `Follow: pillaring ${Math.round(verticalDiff)}b up to you - precise`; return; }
+                        if (pr === "placed" || pr === "jumping" || pr === "occupied") { this.reason = `Follow: pillaring ${Math.round(verticalDiff)}b up to you - precise`; return; }
                     } catch (_e) { this.fault(_e); }
                 }
             }
@@ -1242,6 +1428,44 @@ export class Bot {
         this.followFails = 0;
     }
 
+
+    /**
+     * Long-range follow leg: two ground waypoints 8 and 16 blocks along the
+     * straight line to the owner, used only if every cell of the line is
+     * walkable (level or stepping down, no hazards - the navigator's
+     * lineWalkable check). Returns false to let the caller use A* instead.
+     */
+    followLine(goal, tick, horizDist) {
+        const here = this.sim.location;
+        const L = this._followLine;
+        if (L && tick - L.at < 160) {
+            const w = L.points[L.i];
+            if (w && horizontal(here, center(w)) < 1.2) L.i++;
+            if (L.i < L.points.length) {
+                if (distance(here, L.last) > 0.15) { L.last = { x: here.x, y: here.y, z: here.z }; L.progress = tick; }
+                if (tick - L.progress > 30) { this._followLine = undefined; this._followLineBan = tick + 200; return false; }
+                if (L.issued !== L.i) {
+                    try { this.sim.moveToLocation(this.host.relative(center(L.points[L.i])), { speed: 1, faceTarget: true }); } catch { this._followLine = undefined; return false; }
+                    L.issued = L.i;
+                }
+                this.reason = `Follow: long straight run toward you (${Math.round(horizDist)}b)`;
+                return true;
+            }
+        }
+        this._followLine = undefined;
+        if (tick < (this._followLineBan ?? 0)) return false;
+        const dx = goal.x - here.x, dz = goal.z - here.z, len = Math.hypot(dx, dz);
+        if (len < 1) return false;
+        const at = (n) => this.terrain.groundNear(Math.floor(here.x + dx / len * n), Math.floor(here.z + dz / len * n), Math.floor(here.y), 3);
+        const p1 = at(8), p2 = p1 && at(16);
+        if (!p1 || !p2 || !this.nav.lineWalkable(here, center(p1)) || !this.nav.lineWalkable(center(p1), center(p2))) return false;
+        this.nav.reset();
+        try { this.sim.isSprinting = (this.hunger() ?? 20) > 6 && (this.health() ?? 20) > 6; } catch (_e) { this.fault(_e); }
+        try { this.sim.moveToLocation(this.host.relative(center(p1)), { speed: 1, faceTarget: true }); } catch { return false; }
+        this._followLine = { points: [p1, p2], i: 0, at: tick, progress: tick, last: { x: here.x, y: here.y, z: here.z }, issued: 0 };
+        this.reason = `Follow: long straight run toward you (${Math.round(horizDist)}b)`;
+        return true;
+    }
 
     idle(tick) {
         // ANTI-IDLE: never stay idle unless compulsory - always active guarding/patrolling/collecting
@@ -1277,12 +1501,16 @@ export class Bot {
             }
         }
 
-        // Always look for nearby drops to collect - never idle
-        if (this.settings.pickup && this.bag.container.emptySlotsCount > 0 && tick % 20 === 0) {
+        // Always look for nearby drops to collect - never idle (every 2 s, 4-block radius)
+        if (this.settings.pickup && tick % 40 === 21 && this.bag.freeSlots() > 0) {
             if (this.grabIgnore.size > 64) for (const [entityId, until] of this.grabIgnore) if (until < tick) this.grabIgnore.delete(entityId);
-            const near = this.sim.dimension.getEntities({ type: "minecraft:item", location: this.sim.location, maxDistance: 10, })
-                .filter((e) => e.isValid && (this.grabIgnore.get(e.id) ?? 0) < tick && this.terrain.safe(e.location))
-                .sort((a, b) => distance(a.location, this.sim.location) - distance(b.location, this.sim.location))[0];
+            const here = this.sim.location;
+            let near, best = Infinity;
+            for (const e of this.sim.dimension.getEntities({ type: "minecraft:item", location: here, maxDistance: IDLE_PICKUP_RADIUS, })) {
+                if (!e.isValid || (this.grabIgnore.get(e.id) ?? 0) >= tick) continue;
+                const at = e.location, d = distance(at, here);
+                if (d < best && this.terrain.safe(at)) { best = d; near = e; }
+            }
             if (near) {
                 this.reason = "Active idle: collecting nearby drops - never idle";
                 this.grab = { e: near, since: tick, contact: 0 };
@@ -1291,7 +1519,7 @@ export class Bot {
         }
 
         // Opportunistic resource gathering within 8 blocks - stay active
-        if (tick % 40 === 0 && this.settings.hunting) {
+        if (tick % 40 === 33 && this.settings.hunting) {
             const opp = this.resource.findOpportunistic(tick);
             if (opp && distance(opp.e.location, this.sim.location) < 12) {
                 this.reason = `Active idle: ${opp.type} within 12 blocks, collecting - never idle`;
@@ -1300,8 +1528,8 @@ export class Bot {
             }
         }
 
-        // Patrol around home/anchor if owner nearby - never stay still
-        if (tick % 60 === 0) {
+        // Patrol around home/anchor if owner nearby - never stay still (every 4 s)
+        if (tick % 80 === 41) {
             const patrolTarget = this.explorer.goal ?? null;
             if (!patrolTarget || distance(patrolTarget, this.sim.location) < 3) {
                 // Find new patrol spot near anchor
@@ -1320,7 +1548,7 @@ export class Bot {
         }
 
         // If still here, at least look around and guard - but try to move a bit
-        if (tick % 20 === 0) {
+        if (tick % 20 === 16) {
             const p = floor(this.sim.location);
             const candidates = [];
             for (const d of COMPASS) {
@@ -1490,7 +1718,10 @@ export class Bot {
         if (m.item) {
             const gained = amountOf(stock, m.item) - m.startCount;
             if (m.treeMode) {
-                met = (gained + m.broken + (m.loot?.size ?? 0)) >= m.amount || gained >= m.amount;
+                // A felled log counts once - broken (drop may still be on the
+                // ground) or picked up. Adding the two counted every collected
+                // log twice and stopped at half the requested amount.
+                met = Math.max(gained, m.broken) >= m.amount;
             } else {
                 met = gained >= m.amount;
             }
@@ -1956,20 +2187,22 @@ export class Bot {
 
 
     findAdjacentLogs(m, tick) {
-        // FIX: any log + short TTL + larger search for tree logs
+        // Next trunk/branch log next to the one just cut. 5x4x5 box around the
+        // target, nearest cells first (straight up/down the trunk before the
+        // corners), scanned from cached type snapshots; the chosen cell is
+        // confirmed with a live read. Only real wood counts: the old test
+        // accepted ANY block for "#logs", so once the quota was met it kept
+        // "finding" dirt/stone, walked the target one cell per tick down to
+        // bedrock and the task never finished.
         if (!m.target) return null;
         const centerPos = m.target;
-        for (let dx = -3; dx <= 3; dx++) for (let dy = -1; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) {
-            if (dx===0 && dy===0 && dz===0) continue;
-            const p = { x: centerPos.x + dx, y: centerPos.y + dy, z: centerPos.z + dz };
+        const isLog = (t) => !!t && (isAnyWood(t) || t.includes("bamboo") || t === m.block || (!!m.item && m.item !== "#logs" && t === m.item));
+        for (const o of ADJACENT_LOG_OFFSETS) {
+            const p = { x: centerPos.x + o.x, y: centerPos.y + o.y, z: centerPos.z + o.z };
             const blockedUntil = m.blocked.get(key(p)) ?? 0;
-            if (blockedUntil > tick && blockedUntil - tick > 200) continue; // allow retry after short block
-            const b = this.terrain.block(p);
-            if (!b) continue;
-            // Any log acceptable - fixes oak-only waste
-            if (m.block === "#logs" || b.typeId === m.block || (m.item && (b.typeId === m.item || m.item === "#logs")) || b.typeId.endsWith("_log") || b.typeId.endsWith("_wood") || b.typeId.includes("_stem") || b.typeId.includes("bamboo")) {
-                if (this.safeToMine(p)) return p;
-            }
+            if (blockedUntil > tick && blockedUntil - tick > 400) continue; // allow retry after short block
+            if (!isLog(this.terrain.type(p)) || !isLog(this.terrain.typeFresh(p))) continue;
+            if (this.safeToMine(p)) return p;
         }
         return null;
     }
@@ -2037,18 +2270,27 @@ export class Bot {
         return true;
     }
 
-    isNight() { try { const t = world.getTimeOfDay(); return t >= 13000 && t < 23000; } catch { return false; } }
+    isNight() {
+        const now = this.now ?? 0;
+        if (this._nightAt !== undefined && now - this._nightAt < 20 && now >= this._nightAt) return this._night;
+        let night = false;
+        try { const t = world.getTimeOfDay(); night = t >= 13000 && t < 23000; } catch { night = false; }
+        this._night = night; this._nightAt = now;
+        return night;
+    }
     observe(tick) {
-        if (!this.memory || tick % 40 !== 0) return;
+        if (!this.memory || tick % 40 !== 31) return;
         const base = floor(this.sim.location), dim = this.sim.dimension.id;
         for (let dx = -5; dx <= 5; dx++) for (let dz = -5; dz <= 5; dz++) {
             if (dx * dx + dz * dz > 27) continue;
             for (let dy = -2; dy <= 2; dy++) {
-                const b = this.terrain.block(add(base, { x: dx, y: dy, z: dz }));
-                if (!b) continue;
-                const kind = OBSERVED.get(b.typeId);
-                if (kind) this.memory.notice(kind, b.location, dim, tick);
-                else if (b.typeId.endsWith("_bed")) this.memory.notice("bed", b.location, dim, tick);
+                // Snapshot types (cached) - memory notices tolerate a few ticks of staleness.
+                const q = { x: base.x + dx, y: base.y + dy, z: base.z + dz };
+                const t = this.terrain.typeSurvey(q, 100);
+                if (!t) continue;
+                const kind = OBSERVED.get(t);
+                if (kind) this.memory.notice(kind, q, dim, tick);
+                else if (t.endsWith("_bed")) this.memory.notice("bed", q, dim, tick);
             }
         }
     }
@@ -2335,10 +2577,17 @@ export class Bot {
         this.stop(found ? "Death point swept; drops collected." : "No drops remained at death point."); this.tell(this.reason);
     }
     attach(sim) {
-        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
+        this.sim = sim; this.bag = new Bag(sim); this.instrumentSim(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
         this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag); this.autonomy = new SurvivalDirector(this);
         this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
-        this.nav.builder = this.builder; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;
+        this.nav.builder = this.builder; this.nav.bot = this; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;
+        // These directors keep sim/terrain/bag references from construction;
+        // left alone they would keep driving the dead entity (every call
+        // throwing, every tick) and a terrain whose clock no longer advances.
+        this.awareness = new WorldAwareness(this); this.structures = new StructureDetector(this); this.survivalMaster = new SurvivalMaster(this);
+        this.nether = new NetherDirector(this); this.village = new VillageDirector(this); this.golem = new GolemDirector(this);
+        this.food = new FoodDirector(this); this.bucket = new BucketDirector(this); this.ui = new UI(this); this.arbiter = new Arbiter(this);
+        this._ownerTick = undefined; this._hpTick = undefined; this._foodTick = undefined; this._waterTick = undefined; this._navCand = undefined;
     }
     aliveSim() {
         const hp = (e) => { try { return e.getComponent(EntityComponentTypes.Health)?.currentValue ?? 0; } catch { return 0; } };
@@ -2352,7 +2601,7 @@ export class Bot {
         if (tick - this.deadSince < 40) return;
         if (!this.respawnTried) {
             this.respawnTried = true; let ok = false;
-            try { if (typeof this.sim.respawn === "function") { this.sim.respawn(); ok = true; this.tell("Respawning automatically; the death point is remembered."); } } catch (e) { this.record("respawn failed: " + String(e).slice(0, 120)); }
+            try { if (typeof this.sim.respawn === "function") { this.sim.respawn(); this.forgetLocation?.(); ok = true; this.tell("Respawning automatically; the death point is remembered."); } } catch (e) { this.record("respawn failed: " + String(e).slice(0, 120)); }
             if (!ok) { this.state = "deadFailed"; this.reason = "Auto-respawn is not available in this build; use !bot spawn. Death point is remembered."; this.tell(this.reason); return; }
         }
         const back = this.aliveSim();

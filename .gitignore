@@ -7,3 +7,6 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 *.log
+
+# perf profiler working copies (tools/perf.mjs)
+tools/perf-load/

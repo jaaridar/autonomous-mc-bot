@@ -3,94 +3,240 @@ import { standable } from "../core/navigation.js";
 import { HAZARDS, HOSTILES, RANGED, EXPLOSIVE, threatRank } from "../core/policy.js";
 
 const THREAT_RADIUS = 18;
+const TABLE_OFFSETS = [];
+for (let x = -3; x <= 3; x++)
+    for (let z = -3; z <= 3; z++)
+        for (let y = -1; y <= 1; y++)
+            TABLE_OFFSETS.push({ x, y, z });
+TABLE_OFFSETS.sort((a, b) => (a.x * a.x + a.y * a.y + a.z * a.z) - (b.x * b.x + b.y * b.y + b.z * b.z));
+const isStore = (t) => !!t && (t === "minecraft:chest" || t === "minecraft:trapped_chest" || t === "minecraft:barrel" || t.includes("shulker_box") || t === "minecraft:ender_chest");
+const NEAR6 = [UP, DOWN, ...CARDINAL];
+const NEAR7 = [{ x: 0, y: 0, z: 0 }, ...NEAR6];
 
 // Walk-through blocks: no collision - keep narrow, anchored where needed to avoid substring traps like stairs containing \"air\"
 const WALKABLE = /(short_grass|tallgrass|tall_grass|fern|large_fern|deadbush|dead_bush|yellow_flower|red_flower|dandelion|poppy|blue_orchid|allium|azure_bluet|_tulip$|oxeye_daisy|sunflower|lilac|rose_bush|peony|cornflower|lily_of_the_valley|_rose$|eyeblossom|torchflower|_mushroom$|sapling|^minecraft:bush$|crimson_roots|warped_roots|nether_sprouts|_carpet$|lily_pad|torch|redstone_wire|tripwire$|_button$|_plate$|_rail$|^minecraft:rail$|^minecraft:wheat$|^minecraft:carrots$|^minecraft:potatoes$|^minecraft:beetroots$|melon_stem$|pumpkin_stem$|sugar_cane|_vine|^minecraft:vine$|glow_lichen|sculk_vein|hanging_roots|snow_layer|pink_petals|wildflowers|leaf_litter|^minecraft:air$|^minecraft:cave_air$|^minecraft:void_air$)/;
 
+/** Exact numeric key for a cell (x/z wrap every 65536 blocks; entries store x/z to reject wraps). */
+const cellKey = (x, y, z) => ((x & 0xffff) * 65536 + (z & 0xffff)) * 1024 + ((y + 512) & 1023);
+const AIR = new Set(["minecraft:air", "minecraft:cave_air", "minecraft:void_air"]);
+const LIQUID_TYPE = /^minecraft:(flowing_)?(water|lava)$/;
+/** Facts derived from a typeId alone: regex/set work runs once per type, not once per cell. */
+const TYPE_INFO = new Map();
+export function typeInfo(type) {
+    let t = TYPE_INFO.get(type);
+    if (t === undefined) {
+        const air = AIR.has(type);
+        const liquid = LIQUID_TYPE.test(type) || type === "minecraft:bubble_column";
+        t = {
+            air,
+            liquid,
+            passable: air || WALKABLE.test(type),
+            hazard: HAZARDS.has(type) || liquid,
+            water: liquid && !type.includes("lava"),
+            lava: type.includes("lava"),
+        };
+        TYPE_INFO.set(type, t);
+    }
+    return t;
+}
+/** How long a block handle is reused. Handles are live: properties read through them are always current. */
+const HANDLE_TTL = 40;
+/** How long a typeId/isSolid snapshot is trusted (solid blocks rarely change; air and fluids do). */
+const SOLID_TTL = 40;
+const OPEN_TTL = 10;
+/** Entities that are never threats; excluded engine-side so they are not even wrapped. */
+const NOT_THREATS = ["minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:player", "minecraft:falling_block", "minecraft:painting", "minecraft:armor_stand", "minecraft:leash_knot"];
+
+class Cell {
+    constructor(x, y, z) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+        this.b = undefined; // Block handle, null when unloaded/outside the world
+        this.bt = -1;       // handle reusable while tick < bt
+        this.t = undefined; // typeId snapshot (null when no block)
+        this.s = undefined; // isSolid snapshot (lazy)
+        this.dt = -1;       // snapshot trusted while tick < dt
+        this.at = -1;       // tick the snapshot was taken
+        this.g = -1;        // Terrain.gen the snapshot belongs to
+        this.w = -1;        // watched (always read live) until this tick
+        this.v = undefined; // read() record built from the snapshot
+    }
+}
+
 export class Terrain {
+    constructor(dimension) {
+        this.dimension = dimension;
+        this.cache = new Map();
+        this.gen = 0;
+        this.tick = 0;
+        this.reads = 0;
+        this.hits = 0;
+        this.threatMemo = undefined;
+        this.read = (p) => this.readXYZ(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+    }
     begin(tick) {
         this.tick = tick;
         this.reads = 0;
         this.hits = 0;
-        if (this.cache.size > 18000) {
-            let n = 2500;
+        if (this.cache.size > 24000)
+            this.prune();
+    }
+    prune() {
+        const now = this.tick;
+        for (const [k, c] of this.cache)
+            if (c.dt <= now && c.bt <= now)
+                this.cache.delete(k);
+        if (this.cache.size > 20000) {
+            let n = this.cache.size - 16000;
             for (const k of this.cache.keys()) {
                 this.cache.delete(k);
-                if (--n <= 0) break;
+                if (--n <= 0)
+                    break;
             }
         }
     }
-    freshSafe(p) {
-        const b = floor(p);
-        for (const y of [-1, 0, 1]) this.cache.delete(key(add(b, { x: 0, y, z: 0 })));
-        return this.safe(b);
+    cell(x, y, z) {
+        const k = cellKey(x, y, z);
+        let c = this.cache.get(k);
+        if (c === undefined || c.x !== x || c.z !== z) {
+            c = new Cell(x, y, z);
+            this.cache.set(k, c);
+        }
+        return c;
     }
-    invalidate(p) { this.cache.delete(key(floor(p))); }
-    constructor(dimension) {
-        this.dimension = dimension;
-        this.cache = new Map();
-        this.tick = 0;
-        this.reads = 0;
-        this.hits = 0;
-        this.read = (p) => {
-            const k = key(p);
-            const cached = this.cache.get(k);
-            if (cached && cached.expires > this.tick) {
-                this.hits++;
-                return cached.value;
-            }
-            this.reads++;
-            const b = this.block(p);
-            let result;
-            if (b) {
-                const hazard = HAZARDS.has(b.typeId) || b.isLiquid;
-                result = {
-                    passable: b.isAir || WALKABLE.test(b.typeId),
-                    support: b.isSolid,
-                    hazard,
-                    type: b.typeId,
-                    isAir: b.isAir,
-                    isLiquid: b.isLiquid,
-                    isSolid: b.isSolid,
-                };
-            }
-            this.cache.set(k, { value: result, expires: this.tick + (result ? 40 : 2) });
-            return result;
-        };
-    }
-    clear() { this.cache.clear(); }
-    // Fast cached block read - uses read cache for performance, critical for mining speed
-    block(p) {
+    handle(c) {
+        if (c.bt > this.tick && c.b !== undefined)
+            return c.b;
+        let b;
         try {
-            const fp = floor(p);
-            const k = key(fp);
-            const cached = this.cache.get(k);
-            if (cached && cached.expires > this.tick) {
-                // Return synthetic block from cached read if possible, else fetch
-                if (cached.value && cached.value._block) return cached.value._block;
-            }
-            const b = this.dimension.getBlock(fp);
-            // Cache it
-            if (b) {
-                const hazard = HAZARDS.has(b.typeId) || b.isLiquid;
-                this.cache.set(k, { 
-                    value: {
-                        passable: b.isAir || WALKABLE.test(b.typeId),
-                        support: b.isSolid,
-                        hazard,
-                        type: b.typeId,
-                        isAir: b.isAir,
-                        isLiquid: b.isLiquid,
-                        isSolid: b.isSolid,
-                        _block: b
-                    }, 
-                    expires: this.tick + (b.isSolid ? 40 : 2) 
-                });
-            }
-            return b;
-        } catch { return undefined; }
+            b = this.dimension.getBlock({ x: c.x, y: c.y, z: c.z });
+        }
+        catch {
+            b = undefined;
+        }
+        this.reads++;
+        c.b = b ?? null;
+        c.bt = this.tick + (b ? HANDLE_TTL : 2);
+        return c.b;
     }
-    // Uncached direct read for when you need fresh
+    /** Cached typeId of a cell; undefined when unloaded or outside the world. */
+    typeOf(c, maxAge) {
+        if (c.g === this.gen && c.dt > this.tick && c.w < this.tick && (maxAge === undefined || this.tick - c.at <= maxAge)) {
+            this.hits++;
+            return c.t ?? undefined;
+        }
+        const b = this.handle(c);
+        let t = null;
+        if (b) {
+            try {
+                t = b.typeId;
+            }
+            catch {
+                t = null;
+                c.b = undefined;
+                c.bt = -1;
+            }
+        }
+        c.t = t;
+        c.s = undefined;
+        c.v = undefined;
+        c.g = this.gen;
+        c.at = this.tick;
+        if (t === null)
+            c.dt = this.tick + 2;
+        else {
+            const info = typeInfo(t);
+            c.dt = this.tick + (info.air || info.liquid ? OPEN_TTL : SOLID_TTL);
+        }
+        return t ?? undefined;
+    }
+    solidOf(c) {
+        if (c.s === undefined) {
+            let s = false;
+            const info = c.t ? typeInfo(c.t) : undefined;
+            if (info && !info.air && !info.liquid && c.b) {
+                try {
+                    s = c.b.isSolid;
+                }
+                catch {
+                    s = false;
+                }
+            }
+            c.s = s;
+        }
+        return c.s;
+    }
+    /** Pathing snapshot of a cell (cached; see SOLID_TTL/OPEN_TTL). Shared object - do not mutate. */
+    readXYZ(x, y, z, maxAge) {
+        const c = this.cell(x, y, z);
+        const t = this.typeOf(c, maxAge);
+        if (t === undefined)
+            return undefined;
+        if (c.v === undefined) {
+            const info = typeInfo(t);
+            const solid = this.solidOf(c);
+            c.v = { passable: info.passable, support: solid, hazard: info.hazard, type: t, isAir: info.air, isLiquid: info.liquid, isSolid: solid };
+        }
+        return c.v;
+    }
+    /** Cached typeId at p (for scans). Verify a hit with typeFresh() before acting on it. */
+    type(p) {
+        return this.typeOf(this.cell(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)));
+    }
+    /**
+     * typeId for far-field surveys (awareness/structure sweeps): any snapshot
+     * up to maxAge ticks old is accepted even past its normal TTL, so a bot
+     * standing still does not re-read the same distant cells every sweep.
+     * invalidate()/clear() still force a fresh read.
+     */
+    typeSurvey(p, maxAge = 120) {
+        const c = this.cell(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+        if (c.g === this.gen && c.t !== undefined && c.t !== null && c.at >= 0 && c.w < this.tick && this.tick - c.at <= maxAge && this.tick >= c.at) {
+            this.hits++;
+            return c.t;
+        }
+        return this.typeOf(c);
+    }
+    /** Current typeId at p, read through the live handle (refreshes the snapshot). */
+    typeFresh(p) {
+        const c = this.cell(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+        c.dt = -1;
+        c.at = -1;
+        return this.typeOf(c);
+    }
+    freshSafe(p, maxAge = 0) {
+        const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+        const a = this.readXYZ(x, y, z, maxAge), b = this.readXYZ(x, y + 1, z, maxAge), c = this.readXYZ(x, y - 1, z, maxAge);
+        return !!(a?.passable && b?.passable && c?.support && !a.hazard && !b.hazard && !c.hazard);
+    }
+    invalidate(p) {
+        const c = this.cache.get(cellKey(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)));
+        if (c) {
+            c.dt = -1;
+            c.at = -1;
+        }
+    }
+    /**
+     * The bot is changing this cell (placing, breaking): serve it from live
+     * reads for the next `ticks` ticks so every snapshot user (A*, scans,
+     * tableNear) sees the change as soon as the engine applies it.
+     */
+    watch(p, ticks = 40) {
+        const c = this.cell(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+        c.w = Math.max(c.w, this.tick + ticks);
+        c.dt = -1;
+        c.at = -1;
+    }
+    /** Distrust every snapshot (O(1)); live block handles stay reusable. */
+    clear() {
+        this.gen++;
+    }
+    /** Live block handle (cached handle, properties always current). */
+    block(p) {
+        return this.handle(this.cell(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) ?? undefined;
+    }
+    /** Uncached direct read for when you need fresh */
     blockUncached(p) {
         try { return this.dimension.getBlock(floor(p)); } catch { return undefined; }
     }
@@ -101,10 +247,30 @@ export class Terrain {
     waterAt(p) { const b = this.block(p); return !!b && b.isLiquid && /water/.test(b.typeId); }
     lavaAt(p) { const b = this.block(p); return !!b && /lava/.test(b.typeId); }
     lavaNear(p) {
-        return (this.lavaAt(p) || [UP, DOWN, ...CARDINAL].some((d) => this.lavaAt(add(p, d))));
+        if (this.lavaAt(p))
+            return true;
+        for (const d of NEAR6)
+            if (this.lavaAt({ x: p.x + d.x, y: p.y + d.y, z: p.z + d.z }))
+                return true;
+        return false;
     }
     waterNear(p) {
-        return (this.waterAt(p) || [UP, DOWN, ...CARDINAL].some((d) => this.waterAt(add(p, d))));
+        if (this.waterAt(p))
+            return true;
+        for (const d of NEAR6)
+            if (this.waterAt({ x: p.x + d.x, y: p.y + d.y, z: p.z + d.z }))
+                return true;
+        return false;
+    }
+    /** waterNear() from snapshots no older than maxAge ticks (cheap; for steering, not for digging safety). */
+    waterNearCached(p, maxAge = 10) {
+        const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+        for (const d of NEAR7) {
+            const t = this.typeOf(this.cell(x + d.x, y + d.y, z + d.z), maxAge);
+            if (t && typeInfo(t).water)
+                return true;
+        }
+        return false;
     }
     headInWater(entity) {
         const h = entity.getHeadLocation();
@@ -138,10 +304,10 @@ export class Terrain {
             for (let dz = -radius + parity; dz <= radius; dz += 2) {
                 if (dx * dx + dz * dz > radius * radius) continue;
                 for (let dy = -4; dy <= 4; dy++) {
-                    const p = add(base, { x: dx, y: dy, z: dz });
-                    const b = this.block(p);
-                    if (b && (b.typeId === "minecraft:chest" || b.typeId === "minecraft:trapped_chest" || b.typeId === "minecraft:barrel" || b.typeId.includes("shulker_box") || b.typeId === "minecraft:ender_chest"))
-                        found.push({ ...p });
+                    const p = { x: base.x + dx, y: base.y + dy, z: base.z + dz };
+                    // Cached snapshot for the sweep; a hit is confirmed live below.
+                    if (isStore(this.type(p)) && isStore(this.typeFresh(p)))
+                        found.push(p);
                 }
             }
         return found.sort((a, b) => distance(a, base) - distance(b, base));
@@ -259,64 +425,127 @@ export class Terrain {
     }
 
     tableNear(p) {
+        // A table found in the last 100 ticks is re-checked with one live read
+        // instead of a 147-cell sweep. Only hits are remembered: caching a miss
+        // would hide a table the bot has just placed and make it place another.
+        const known = this.lastTable;
+        if (known && this.tick - known.tick <= 100 && this.tick >= known.tick && distance(p, known.cell) <= 3.5) {
+            if (this.typeFresh(known.cell) === "minecraft:crafting_table") return true;
+            this.lastTable = undefined;
+        }
         const b = floor(p);
-        for (let x = -3; x <= 3; x++)
-            for (let z = -3; z <= 3; z++)
-                for (let y = -1; y <= 1; y++) {
-                    const q = add(b, { x, y, z });
-                    if (distance(p, q) <= 3.5 && this.block(q)?.typeId === "minecraft:crafting_table") return true;
-                }
+        for (const q of TABLE_OFFSETS) {
+            const c = { x: b.x + q.x, y: b.y + q.y, z: b.z + q.z };
+            if (distance(p, c) <= 3.5 && this.type(c) === "minecraft:crafting_table" && this.typeFresh(c) === "minecraft:crafting_table") {
+                this.lastTable = { cell: c, tick: this.tick };
+                return true;
+            }
+        }
         return false;
     }
 
     threats(bot, owner) {
-        return this.dimension.getEntities({ location: bot.location, maxDistance: THREAT_RADIUS + 4 })
-            .filter((e) => HOSTILES.has(e.typeId) && e.isValid &&
-                (distance(e.location, bot.location) <= THREAT_RADIUS || (owner && distance(e.location, owner.location) <= 12)))
-            .sort((a, b) => distance(a.location, bot.location) - distance(b.location, bot.location))
-            .slice(0, 10);
-    }
-
-    threatInfo(bot, owner) {
-        const list = this.threats(bot, owner);
-        let ranged = 0, explosive = 0, melee = 0, closest = Infinity;
-        for (const e of list) {
-            const d = distance(e.location, bot.location);
-            if (d < closest) closest = d;
-            const rank = threatRank(e.typeId);
-            if (rank === 3) explosive++;
-            else if (rank === 2) ranged++;
-            else melee++;
-        }
-        return {
-            list, nearest: list[0], count: list.length, ranged, explosive, melee, closest,
-            bombNear: list.some((e) => EXPLOSIVE.has(e.typeId) && distance(e.location, bot.location) < 5),
-            underFire: list.some((e) => RANGED.has(e.typeId) && distance(e.location, bot.location) > 3),
-        };
+        return this.threatInfo(bot, owner).list;
     }
 
     /**
-     * Scan for ores in radius, returns positions of matching ore types.
+     * Hostiles near the bot (or within 12 of the owner), nearest first, max 10.
+     * One engine query per tick no matter how many directors ask: about twenty
+     * call sites used to run their own getEntities() every tick. When the last
+     * scan was empty it is reused for 2 more ticks (forgetThreats() on damage).
+     */
+    threatInfo(bot, owner) {
+        const m = this.threatMemo, now = this.tick;
+        if (m && m.bot === bot && m.hasOwner === !!owner && (m.tick === now || (m.info.count === 0 && now - m.tick <= 2 && now >= m.tick)))
+            return m.info;
+        const info = this.scanThreats(bot, owner);
+        this.threatMemo = { tick: now, bot, hasOwner: !!owner, info };
+        return info;
+    }
+    forgetThreats() {
+        this.threatMemo = undefined;
+    }
+    scanThreats(bot, owner) {
+        const here = bot.location;
+        const ownerAt = owner ? owner.location : undefined;
+        const rows = [];
+        let list = [];
+        try {
+            list = this.dimension.getEntities({ location: here, maxDistance: THREAT_RADIUS + 4, excludeTypes: NOT_THREATS });
+        }
+        catch {
+            list = [];
+        }
+        for (const e of list) {
+            if (!HOSTILES.has(e.typeId) || !e.isValid)
+                continue;
+            const at = e.location;
+            const d = distance(at, here);
+            if (d <= THREAT_RADIUS || (ownerAt && distance(at, ownerAt) <= 12))
+                rows.push({ e, d, t: e.typeId });
+        }
+        rows.sort((a, b) => a.d - b.d);
+        if (rows.length > 10)
+            rows.length = 10;
+        let ranged = 0, explosive = 0, melee = 0, closest = Infinity, bombNear = false, underFire = false;
+        for (const r of rows) {
+            if (r.d < closest) closest = r.d;
+            const rank = threatRank(r.t);
+            if (rank === 3) explosive++;
+            else if (rank === 2) ranged++;
+            else melee++;
+            if (EXPLOSIVE.has(r.t) && r.d < 5) bombNear = true;
+            if (RANGED.has(r.t) && r.d > 3) underFire = true;
+        }
+        const out = rows.map((r) => r.e);
+        return { list: out, nearest: out[0], count: out.length, ranged, explosive, melee, closest, bombNear, underFire };
+    }
+
+    /**
+     * Scan for ores in radius, returns positions of matching ore types,
+     * nearest first. Only the nearest `budget` cells are ever examined, so the
+     * offsets come from one precomputed nearest-first list instead of building
+     * and sorting the whole sphere on every call (137k points at radius 32).
+     * Matches are confirmed with a live read before being returned.
      */
     scanOres(origin, radius, predicate, budget = 512) {
-        const points = [];
         const p = floor(origin);
-        for (let x = -radius; x <= radius; x++)
-            for (let z = -radius; z <= radius; z++)
-                for (let y = -radius; y <= radius; y++) {
-                    if (x*x + y*y + z*z > radius*radius) continue;
-                    points.push(add(p, { x, y, z }));
-                }
-        points.sort((a,b) => distance(a, origin) - distance(b, origin));
+        const r2 = radius * radius;
+        const offsets = sphereOffsets(budget + 1);
         const found = [];
         let used = 0;
-        for (const pt of points) {
+        for (const o of offsets) {
+            if (o.d2 > r2) break;
             if (used++ > budget) break;
-            const b = this.block(pt);
-            if (b && predicate(b.typeId, pt)) found.push(pt);
+            const pt = { x: p.x + o.x, y: p.y + o.y, z: p.z + o.z };
+            const t = this.type(pt);
+            if (t && predicate(t, pt)) {
+                const live = this.typeFresh(pt);
+                if (live && predicate(live, pt)) found.push(pt);
+            }
         }
         return found;
     }
+}
+
+/** Nearest-first sphere offsets, grown on demand (shared by every scanOres call). */
+let SPHERE = [];
+let SPHERE_R = 0;
+function sphereOffsets(count) {
+    while (SPHERE.length < count) {
+        const r = SPHERE_R + 4;
+        const pts = [];
+        for (let x = -r; x <= r; x++)
+            for (let y = -r; y <= r; y++)
+                for (let z = -r; z <= r; z++) {
+                    const d2 = x * x + y * y + z * z;
+                    if (d2 <= r * r) pts.push({ x, y, z, d2 });
+                }
+        pts.sort((a, b) => a.d2 - b.d2);
+        SPHERE = pts;
+        SPHERE_R = r;
+    }
+    return SPHERE;
 }
 
 /**
@@ -353,8 +582,12 @@ export class BlockScan {
         while (budget-- > 0 && this.cursor < this.offsets.length) {
             const off = this.offsets[this.cursor++];
             const p = { x: origin.x + off.x, y: origin.y + off.y, z: origin.z + off.z };
-            const b = terrain.block(p);
-            if (b && predicate(b.typeId, p)) return p;
+            // Cached snapshot for the sweep; only a candidate costs a live read.
+            const t = terrain.type ? terrain.type(p) : terrain.block(p)?.typeId;
+            if (t && predicate(t, p)) {
+                const live = terrain.typeFresh ? terrain.typeFresh(p) : t;
+                if (live && predicate(live, p)) return p;
+            }
         }
         return undefined;
     }

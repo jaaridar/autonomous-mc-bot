@@ -1,4 +1,4 @@
-# Verdant Bot — architecture v1.2.0 Nether Speedrun World-Class
+# Verdant Bot — architecture v1.2.5 Nether Speedrun World-Class
 
 Where things live, who owns what, and the rules that keep the bot honest.
 If you are adding a feature, find its layer here first.
@@ -124,6 +124,45 @@ If you are adding a feature, find its layer here first.
 - Nether Entry Decision System: continuously compare ground-level lava pool bucket water minimal digging, cave lava pool only when accessible usable danger travel cost acceptable, ruined portal inspect frame loot determine completing faster than building new, alternative nearby resources gather missing ignition portal-building when required, choose route best balance time feasibility resource requirements survival probability, do not insist original when world provides better alternative.
 - Adaptive Planning & Survival Rules: recalculate whenever discovers village ruined portal lava pool useful chest hostile mob group unexpected obstacle, prioritize essential progression over optional exploration unnecessary collection, avoid fights not contributing meaningfully, never assume route safe merely because worked previously reassess current health terrain enemies escape paths, use blocks intelligently bridges barriers emergency cover elevation controlled traversal, when plan fails identify missing requirement select safest efficient alternative, preserve enough resources recover common emergencies, verify important actions crafting bucket acquisition portal construction ignition Nether entry rather than assuming succeeded.
 - Final principle: behave like experienced adaptive speedrunner not fixed sequence scripted actions. Objective not collect everything or win every fight — reach Nether efficiently using resources opportunities available in current world while avoiding preventable deaths. Main goal enter nether anyhow prepare itself find resource recipe or in world use any advantage.
+
+## Performance v1.2.5 (engine-call discipline)
+
+Every engine call (block, item, component, entity read) is expensive on the
+pack's interpreter. Rules for new code:
+
+- **Inventory**: read through `Bag` (`counts()`, `find()`, `types()`,
+  `freeSlots()`, `hasTool()`); the bot calls `bag.begin(tick)` so all readers in
+  a tick share one snapshot. Never hold slot copies across ticks. Writes go
+  through `bag.set()` (invalidates). Engine-side consumption (`useItemInSlot*`)
+  is hooked by the bot and switches the bag to live reads for the rest of the
+  tick, so `craft()`/`deposit()` commits are always built from real slots.
+- **Terrain**: `read()`/`safe()`/`type()` serve snapshots (solid 40 ticks, air
+  and fluids 10); `typeSurvey()` accepts up to 120-tick snapshots for far-field
+  sweeps only; `block()` returns a cached *live* handle — use it (or
+  `typeFresh()`) when the answer must reflect this tick. Verify scan hits with
+  `typeFresh()` before acting. Cells the bot edits are `watch()`ed (live) and
+  `invalidate()`/`clear()` are cheap.
+- **Per-tick memos on the bot**: `owner()`, `health()`, `hunger()`,
+  `inWater()`, `sim.location` (memoized on the bot's own entity) and
+  `terrain.threatInfo()` (one entity query per tick) — do not call
+  `getAllPlayers()`, `getComponent("minecraft:health")` or `getEntities()` for
+  hostiles directly from per-tick code.
+- **Cadence**: periodic work runs on its own phase, `tick % period === phase`.
+  Current phases in a 20-tick cycle: awareness slice 2/12, survival assessment
+  3/13, structures slice 5/15, UI 7, food + progress signature 9/19, golem scan
+  11, equipment 14, idle guard-wander 16; longer jobs: quick-tool 18 (of 40),
+  idle drop scan 21 (of 40), adaptive replan 23 (of 60), observe 31 (of 40),
+  idle opportunistic 33 (of 40), idle patrol 41 (of 80), save 57 (of 100),
+  death recovery 77 (of 100), organize 7 (of 400), retain 13 (of 200). Pick a
+  free phase for new periodic work.
+- **Arbiter**: only `survival_master`, `food`, `village` and `nether` are
+  executed by the arbiter; mission, escape and combat candidates are ranked but
+  `defer` to the main loop, which calls them with the right arguments. A
+  declined director cools down 20 ticks, a throwing one 100.
+- **Pathing**: `PathSearch` is time-sliced (64 expansions/tick fast, 32
+  otherwise) and memoizes cell reads per search; the navigator walks short
+  clear hops directly and keeps its path while the goal drifts.
+- Measure before and after: `node tools/perf.mjs --compare <ref>` (see README).
 
 ## Honesty contract
 

@@ -12,7 +12,8 @@ export class UI {
         this.objective = null;
         this.lastReason = "";
         this.lastMission = "";
-        this.scoreboardLines = new Map();
+        this.scoreboardLines = new Map(); // score -> participant name currently shown
+        this.cleaned = false;
         this.initScoreboard();
     }
 
@@ -34,7 +35,7 @@ export class UI {
     }
 
     tick(tick) {
-        if (tick - this.lastUpdate < 20) return; // update every 1 sec
+        if (tick % 20 !== 7) return; // update every 1 sec, phase 7 (staggered against the other directors)
         this.lastUpdate = tick;
         try {
             this.updateScoreboard(tick);
@@ -53,17 +54,19 @@ export class UI {
                 obj = sb.getObjective("verdant");
                 if (!obj) obj = sb.addObjective("verdant", "Verdant Bot");
                 this.objective = obj;
+                this.scoreboardLines.clear();
+                this.cleaned = false;
                 try { sb.setObjectiveAtDisplaySlot("sidebar", { objective: obj }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if (!obj) return;
 
             const sim = b.sim;
-            const hp = sim.getComponent("minecraft:health")?.currentValue ?? 20;
-            const hunger = sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+            const hp = (b.health ? b.health() : sim.getComponent("minecraft:health")?.currentValue) ?? 20;
+            const hunger = (b.hunger ? b.hunger() : sim.getComponent("minecraft:player.hunger")?.currentValue) ?? 20;
             const pos = floor(sim.location);
             const counts = b.bag.counts();
             const totalItems = Object.values(counts).reduce((a,c)=>a+c,0);
-            const freeSlots = b.bag.container.emptySlotsCount;
+            const freeSlots = b.bag.freeSlots ? b.bag.freeSlots() : b.bag.container.emptySlotsCount;
             const mode = b.mode;
             const state = b.state;
             const stage = b.autonomy?.stage ?? b.speedrun?.stage ?? 0;
@@ -138,26 +141,38 @@ export class UI {
             // Line 15: Tick
             lines.push({ name: `§8Tick:${tick} Log:${b.log.length}`, score: 1 });
 
-            // Remove old participants that are not in new lines
-            try {
-                const participants = obj.getParticipants();
-                for (const p of participants) {
-                    const name = p.displayName;
-                    if (!lines.some(l => l.name === name)) {
-                        try { obj.removeParticipant(name); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            // Diff against what is on screen: every setScore/removeParticipant
+            // is an engine call and a scoreboard packet to every viewer, and
+            // most lines do not change between 1 s updates.
+            const shown = this.scoreboardLines;
+            if (!this.cleaned) {
+                // Once per objective: clear stale participants left by older sessions.
+                try {
+                    for (const p of obj.getParticipants()) {
+                        try { obj.removeParticipant(p.displayName); } catch { /* already gone */ }
                     }
-                }
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-
-            // Set new scores
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                shown.clear();
+                this.cleaned = true;
+            }
+            const wanted = new Map(lines.map((l) => [l.score, l.name]));
+            for (const [score, name] of [...shown]) {
+                const next = wanted.get(score);
+                if (next === name || (next !== undefined && this.safeName(next) === name)) continue;
+                try { obj.removeParticipant(name); } catch { /* already gone */ }
+                shown.delete(score);
+            }
             for (const line of lines) {
+                if (shown.has(line.score)) continue;
                 try {
                     obj.setScore(line.name, line.score);
+                    shown.set(line.score, line.name);
                 } catch (e) {
                     // Try with rawtext if fails due to invalid chars
                     try {
-                        const safeName = line.name.replace(/[^a-zA-Z0-9 :.,_-]/g, "").slice(0, 30);
+                        const safeName = this.safeName(line.name);
                         obj.setScore(safeName, line.score);
+                        shown.set(line.score, safeName);
                     } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 }
             }
@@ -167,14 +182,18 @@ export class UI {
         }
     }
 
+    safeName(name) {
+        return name.replace(/[^a-zA-Z0-9 :.,_-]/g, "").slice(0, 30);
+    }
+
     updateActionBar(tick) {
         try {
             const b = this.bot;
             const owner = b.owner();
             if (!owner) return;
 
-            const hp = b.sim.getComponent("minecraft:health")?.currentValue ?? 20;
-            const hunger = b.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+            const hp = (b.health ? b.health() : b.sim.getComponent("minecraft:health")?.currentValue) ?? 20;
+            const hunger = (b.hunger ? b.hunger() : b.sim.getComponent("minecraft:player.hunger")?.currentValue) ?? 20;
             const mode = b.mode;
             const reason = b.reason;
             const mission = b.mission();

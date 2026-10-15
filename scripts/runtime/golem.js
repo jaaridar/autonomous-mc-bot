@@ -43,7 +43,7 @@ export class GolemDirector {
     tick(tick) {
         if (!this.bot.settings.defend) return false;
         // ROBUST QUICK: only scan every 20 ticks unless in active fight
-        if (this.fightStage === "idle" && tick - this.lastScan < 20) return false;
+        if (this.fightStage === "idle" && tick % 20 !== 11) return false; // phase 11 (staggered)
         this.lastScan = tick;
 
         // Find golem nearby

@@ -6,6 +6,23 @@ import { floor, add, distance, key, UP, DOWN, CARDINAL } from "../core/math.js";
 import { STRUCTURE_SIGS, detectStructure } from "../core/knowledge.js";
 import { shouldLootChest } from "../core/loot.js";
 
+/**
+ * The cells one sweep examines: the first 400 cells, in the original raster
+ * order, of the r=20 / dy -6..6 cylinder - exactly the set the old one-shot
+ * loop visited before its budget ran out. Precomputed once.
+ */
+const SWEEP = (() => {
+    const out = [], R = 20;
+    for (let dx = -R; dx <= R && out.length < 400; dx++)
+        for (let dz = -R; dz <= R && out.length < 400; dz++) {
+            if (dx * dx + dz * dz > R * R) continue;
+            for (let dy = -6; dy <= 6 && out.length < 400; dy++) out.push({ x: dx, y: dy, z: dz });
+        }
+    return out;
+})();
+/** Sweep is time-sliced into this many parts so no single tick pays for all of it. */
+const SLICES = 4;
+
 export class StructureDetector {
     constructor(bot) {
         this.bot = bot;
@@ -15,6 +32,7 @@ export class StructureDetector {
         this.memory = bot.memory;
 
         this.lastScan = 0;
+        this.sweep = undefined; // in-progress sliced sweep
         this.found = []; // {name, pos, priority, loot, reason, portal, tick}
         this.lavaPools = []; // {pos, size, tick}
         this.portalCandidates = []; // potential portal builds
@@ -22,6 +40,7 @@ export class StructureDetector {
     }
 
     reset() {
+        this.sweep = undefined;
         this.found = [];
         this.lavaPools = [];
         this.portalCandidates = [];
@@ -29,18 +48,17 @@ export class StructureDetector {
     }
 
     tick(tick) {
-        // ROBUST QUICK: scan every 40 ticks not 80 for faster structure detection, especially when food low
-        const interval = (() => {
-            try {
-                const hunger = this.bot.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
-                if (hunger <= 10) return 20; // food low, scan faster
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            return 40;
-        })();
-        if (tick - this.lastScan < interval) return;
+        // One sweep per 40 ticks (20 when food is low), delivered as SLICES
+        // slices every 10 (5) ticks. Hunger comes from the bot's per-tick
+        // cache: it used to be a component read on every single tick.
+        const hunger = (this.bot.hunger ? this.bot.hunger() : this.bot.sim.getComponent("minecraft:player.hunger")?.currentValue) ?? 20;
+        const interval = hunger <= 10 ? 20 : 40;
+        const step = interval / SLICES;
+        if (tick % step !== 5 % step) return; // phase 5 (of 10): staggered against the other directors
         this.lastScan = tick;
-        this.scan(tick);
-        try { this.scanEntities(tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        if (this.scan(tick)) {
+            try { this.scanEntities(tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
     }
 
     scanEntities(tick) {
@@ -70,36 +88,35 @@ export class StructureDetector {
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
+    /**
+     * Advance the sliced sweep by one slice; returns true when a sweep just
+     * completed (detection ran). Cell reads use the terrain's cached type
+     * snapshot (1 typeId read per new cell) instead of 3-7 live reads.
+     */
     scan(tick) {
-        const origin = floor(this.sim.location);
-        const blockCounts = {};
-        const chestPositions = [];
-        const lavaPositions = [];
-        const obsidianPositions = [];
-        const scanR = 20;
-
-        let budget = 400;
-        for (let dx = -scanR; dx <= scanR && budget > 0; dx++) {
-            for (let dz = -scanR; dz <= scanR && budget > 0; dz++) {
-                if (dx*dx + dz*dz > scanR*scanR) continue;
-                for (let dy = -6; dy <= 6 && budget > 0; dy++) {
-                    budget--;
-                    const p = add(origin, { x: dx, y: dy, z: dz });
-                    const b = this.terrain.block(p);
-                    if (!b || b.isAir) continue;
-                    blockCounts[b.typeId] = (blockCounts[b.typeId] ?? 0) + 1;
-                    if (b.typeId === "minecraft:chest" || b.typeId === "minecraft:trapped_chest" || b.typeId === "minecraft:barrel") {
-                        chestPositions.push({ ...p, type: b.typeId });
-                    }
-                    if (b.typeId === "minecraft:lava" || b.typeId === "minecraft:flowing_lava") {
-                        lavaPositions.push({ ...p });
-                    }
-                    if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") {
-                        obsidianPositions.push({ ...p });
-                    }
-                }
+        let sw = this.sweep;
+        if (!sw) sw = this.sweep = { origin: floor(this.sim.location), i: 0, blockCounts: {}, chestPositions: [], lavaPositions: [], obsidianPositions: [] };
+        const { origin, blockCounts, chestPositions, lavaPositions, obsidianPositions } = sw;
+        const end = Math.min(SWEEP.length, sw.i + Math.ceil(SWEEP.length / SLICES));
+        for (; sw.i < end; sw.i++) {
+            const o = SWEEP[sw.i];
+            const p = { x: origin.x + o.x, y: origin.y + o.y, z: origin.z + o.z };
+            const t = this.terrain.typeSurvey ? this.terrain.typeSurvey(p) : this.terrain.type(p);
+            if (!t || t === "minecraft:air") continue;
+            blockCounts[t] = (blockCounts[t] ?? 0) + 1;
+            if (t === "minecraft:chest" || t === "minecraft:trapped_chest" || t === "minecraft:barrel") {
+                chestPositions.push({ ...p, type: t });
+            }
+            if (t === "minecraft:lava" || t === "minecraft:flowing_lava") {
+                lavaPositions.push({ ...p });
+            }
+            if (t === "minecraft:obsidian" || t === "minecraft:crying_obsidian") {
+                obsidianPositions.push({ ...p });
             }
         }
+        if (sw.i < SWEEP.length) return false;
+        this.sweep = undefined;
+        const scanR = 20;
 
         // Detect structures
         const detected = detectStructure(blockCounts, scanR);
@@ -174,6 +191,7 @@ export class StructureDetector {
             const should = shouldLootChest(distance(cp, this.sim.location), homeDist, freeSlots);
             return { pos: cp, priority, should, structure: struct?.name, dist: distance(cp, this.sim.location) };
         }).filter(q => q.should).sort((a,b) => b.priority - a.priority || a.dist - b.dist);
+        return true;
     }
 
     clusterCenter(positions) {
@@ -184,9 +202,10 @@ export class StructureDetector {
 
     // Main priority if structure found
     getTopPriority() {
-        if (!this.found.length) return null;
-        const sorted = [...this.found].sort((a,b) => b.priority - a.priority);
-        return sorted[0];
+        // Highest priority, earliest found on ties (same as the stable sort it replaces) - no copy+sort per call.
+        let best = null;
+        for (const f of this.found) if (!best || f.priority > best.priority) best = f;
+        return best;
     }
 
     getLootTarget() {

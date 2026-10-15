@@ -8,6 +8,28 @@ import { scoreSurrounding, prioritizeGoal, bridgingPlan, parkourPlan, planDeathR
 import { detectStructure, retainScore, isCritical, STRUCTURE_SIGS } from "../core/knowledge.js";
 import { isPassable } from "../core/blocks.js";
 
+/**
+ * Cells one awareness sweep examines: the first 513 cells, in the original
+ * raster order, of the r=24 / dy -8..8 cylinder - the exact set the old
+ * one-shot loop reached before its budget check stopped it. Precomputed.
+ */
+const SWEEP = (() => {
+    const out = [], R = 24, BUDGET = 512;
+    for (let dx = -R; dx <= R; dx++)
+        for (let dz = -R; dz <= R; dz++) {
+            if (dx * dx + dz * dz > R * R) continue;
+            for (let dy = -8; dy <= 8; dy++) {
+                if (out.length > BUDGET) return out;
+                out.push({ x: dx, y: dy, z: dz });
+            }
+        }
+    return out;
+})();
+/** One sweep per 60 ticks, delivered in slices every 10 ticks. */
+const SWEEP_TICKS = 60, SLICE_TICKS = 10;
+const HAZARD_OFFSETS = [];
+for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (let dy = -4; dy <= 2; dy++) HAZARD_OFFSETS.push({ x: dx, y: dy, z: dz });
+
 export class WorldAwareness {
     constructor(bot) {
         this.bot = bot;
@@ -30,9 +52,11 @@ export class WorldAwareness {
 
         this.scanRadius = 24;
         this.scanBudget = 512;
+        this.sweep = undefined;
     }
 
     reset() {
+        this.sweep = undefined;
         this.surrounding = [];
         this.structures = [];
         this.importantSpots.clear();
@@ -46,15 +70,17 @@ export class WorldAwareness {
     }
 
     tick(tick) {
-        if (tick - this.lastScan < 60) return; // scan every 3 sec
+        // A full sweep every 3 s as before, but sliced across 10-tick steps so
+        // no single tick pays for 513 cells plus an entity query.
+        // Phase 2 of each 10-tick window (staggered against the other directors).
+        if (tick % SLICE_TICKS !== 2) return;
         this.lastScan = tick;
         this.scan(tick);
-        // Try /locate when permitted every 10 sec
-        if (tick % 200 === 0) this.tryLocateStructures(tick);
         // Track coords explored locations known lava pools safe routes escape paths
-        if (tick % 100 === 0) this.trackExplored(tick);
-        // Detect cliffs drops lava water currents before movement
-        if (tick % 40 === 0) this.scanHazards(tick);
+        if (tick - (this.lastExplored ?? -1000) >= 100) { this.lastExplored = tick; this.trackExplored(tick); }
+        // Detect cliffs drops lava water currents (write-only telemetry today: a
+        // fixed 6 s cadence instead of whenever a scan tick happened to be %40)
+        if (tick - (this.lastHazardScan ?? -1000) >= 120) { this.lastHazardScan = tick; this.scanHazards(tick); }
     }
 
     tryLocateStructures(tick) {
@@ -88,26 +114,21 @@ export class WorldAwareness {
     scanHazards(tick) {
         // Detect cliffs drops lava water currents before movement, understand jumping sprint-jumping climbing swimming falling block placement safe traversal
         try {
-            const p = floor(this.sim.location);
+            const here = this.sim.location;
+            const p = floor(here);
             const hazards = [];
-            // Check 5 blocks ahead in movement direction
-            for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (let dy = -4; dy <= 2; dy++) {
-                const q = add(p, { x: dx, y: dy, z: dz });
-                const b = this.terrain.block(q);
-                if (!b) continue;
-                if (b.typeId.includes("lava")) hazards.push({ type: "lava", pos: q, distance: distance(q, this.sim.location) });
-                if (b.typeId.includes("water") && b.typeId.includes("flowing")) hazards.push({ type: "water_current", pos: q, distance: distance(q, this.sim.location) });
+            const survey = (q) => (this.terrain.typeSurvey ? this.terrain.typeSurvey(q, 60) : this.terrain.type(q));
+            const open = (q) => { const t = survey(q); return !t || t === "minecraft:air"; };
+            // Check 5 blocks ahead in movement direction (cached type snapshots)
+            for (const o of HAZARD_OFFSETS) {
+                const q = { x: p.x + o.x, y: p.y + o.y, z: p.z + o.z };
+                const t = survey(q);
+                if (!t) continue;
+                if (t.includes("lava")) hazards.push({ type: "lava", pos: q, distance: distance(q, here) });
+                if (t.includes("water") && t.includes("flowing")) hazards.push({ type: "water_current", pos: q, distance: distance(q, here) });
                 // Cliff detection: air below 3 blocks
-                if (dy === -1) {
-                    const below1 = add(q, DOWN);
-                    const below2 = add(below1, DOWN);
-                    const below3 = add(below2, DOWN);
-                    const b1 = this.terrain.block(below1);
-                    const b2 = this.terrain.block(below2);
-                    const b3 = this.terrain.block(below3);
-                    if ((!b1 || b1.isAir) && (!b2 || b2.isAir) && (!b3 || b3.isAir)) {
-                        hazards.push({ type: "cliff", pos: q, distance: distance(q, this.sim.location) });
-                    }
+                if (o.y === -1 && open({ x: q.x, y: q.y - 1, z: q.z }) && open({ x: q.x, y: q.y - 2, z: q.z }) && open({ x: q.x, y: q.y - 3, z: q.z })) {
+                    hazards.push({ type: "cliff", pos: q, distance: distance(q, here) });
                 }
             }
             this.lastHazards = hazards.slice(0, 10);
@@ -115,29 +136,27 @@ export class WorldAwareness {
     }
 
     scan(tick) {
-        const origin = floor(this.sim.location);
-        const blockCounts = {};
+        let sw = this.sweep;
+        if (!sw) sw = this.sweep = { origin: floor(this.sim.location), i: 0, blockCounts: {}, distanceMap: {}, blockPositions: {} };
+        const { origin, blockCounts, distanceMap, blockPositions } = sw;
         const entityCounts = {};
-        const distanceMap = {};
-        const blockPositions = {}; // type -> nearest pos
+        const here = this.sim.location;
 
-        // Scan blocks in radius
-        let scanned = 0;
-        for (let dx = -this.scanRadius; dx <= this.scanRadius; dx++) {
-            for (let dz = -this.scanRadius; dz <= this.scanRadius; dz++) {
-                if (dx*dx + dz*dz > this.scanRadius*this.scanRadius) continue;
-                for (let dy = -8; dy <= 8; dy++) {
-                    if (scanned++ > this.scanBudget) break;
-                    const p = add(origin, { x: dx, y: dy, z: dz });
-                    const b = this.terrain.block(p);
-                    if (!b || b.isAir) continue;
-                    const type = b.typeId;
+        // Scan this slice of the sweep (cached type snapshots: one typeId read per new cell)
+        const end = Math.min(SWEEP.length, sw.i + Math.ceil(SWEEP.length / (SWEEP_TICKS / SLICE_TICKS)));
+        for (; sw.i < end; sw.i++) {
+            {
+                {
+                    const o = SWEEP[sw.i];
+                    const p = { x: origin.x + o.x, y: origin.y + o.y, z: origin.z + o.z };
+                    const type = this.terrain.typeSurvey ? this.terrain.typeSurvey(p) : this.terrain.type(p);
+                    if (!type || type === "minecraft:air") continue;
                     blockCounts[type] = (blockCounts[type] ?? 0) + 1;
                     if (distanceMap[type] === undefined) {
-                        distanceMap[type] = distance(p, this.sim.location);
+                        distanceMap[type] = distance(p, here);
                         blockPositions[type] = { ...p };
                     } else {
-                        const d = distance(p, this.sim.location);
+                        const d = distance(p, here);
                         if (d < distanceMap[type]) {
                             distanceMap[type] = d;
                             blockPositions[type] = { ...p };
@@ -178,6 +197,8 @@ export class WorldAwareness {
                 }
             }
         }
+        if (sw.i < SWEEP.length) return;
+        this.sweep = undefined;
 
         // Scan entities
         try {

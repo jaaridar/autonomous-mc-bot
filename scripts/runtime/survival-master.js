@@ -9,6 +9,7 @@ import { shouldRecalculateAdaptive, handlePlanFailure, verifyAction } from "../c
 import { detectScenario, bestActionForContext, assessFallDepth, assessNightThreat, resourcePriority, shelterFailurePlan, multiRiskPriority, ALL_SCENARIOS } from "../core/survival-scenarios.js";
 import { retainScore, isCritical } from "../core/knowledge.js";
 import { Direction } from "@minecraft/server";
+import { typeInfo } from "./world.js";
 
 export class SurvivalMaster {
     constructor(bot) {
@@ -80,24 +81,29 @@ export class SurvivalMaster {
         if (top.priority < 80 && !top.critical) return false;
 
         this.currentScenario = top;
+        const previousReason = this.bot.reason;
         this.bot.reason = `Survival-Master: Scenario ${top.id} ${top.name} (priority ${top.priority}) - ${top.actions[0]}`;
 
         // Handle based on category
         const id = top.id;
-        if (id >= 1 && id <= 15) return this.handleFall(id, top, context, tick);
-        if (id >= 16 && id <= 30) return this.handleNightCombat(id, top, context, tick);
-        if (id >= 31 && id <= 45) return this.handleResourceShortage(id, top, context, tick);
-        if (id >= 46 && id <= 60) return this.handleShelterFailure(id, top, context, tick);
-        if (id >= 61 && id <= 80) return this.handleMultiRisk(id, top, context, tick);
-
-        return false;
+        let handled = false;
+        if (id >= 1 && id <= 15) handled = this.handleFall(id, top, context, tick);
+        else if (id >= 16 && id <= 30) handled = this.handleNightCombat(id, top, context, tick);
+        else if (id >= 31 && id <= 45) handled = this.handleResourceShortage(id, top, context, tick);
+        else if (id >= 46 && id <= 60) handled = this.handleShelterFailure(id, top, context, tick);
+        else if (id >= 61 && id <= 80) handled = this.handleMultiRisk(id, top, context, tick);
+        // A scenario that was only detected (not acted on) must not leave its
+        // label as the bot's reason: "Scenario 64 ... 2 zombies" sat on the
+        // scoreboard while the bot was simply following its owner.
+        if (!handled && this.bot.reason.startsWith(`Survival-Master: Scenario ${top.id} `)) this.bot.reason = previousReason;
+        return handled;
     }
 
     buildContext(tick) {
         const sim = this.sim;
         const p = floor(sim.location);
-        const hp = sim.getComponent("minecraft:health")?.currentValue ?? 20;
-        const hunger = sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+        const hp = (this.bot.health ? this.bot.health() : sim.getComponent("minecraft:health")?.currentValue) ?? 20;
+        const hunger = (this.bot.hunger ? this.bot.hunger() : sim.getComponent("minecraft:player.hunger")?.currentValue) ?? 20;
         const threats = this.bot.terrain.threatInfo(sim, this.bot.owner()).list ?? [];
         const counts = this.bag.counts();
 
@@ -119,16 +125,19 @@ export class SurvivalMaster {
         else if (this.terrain.lavaNear(p)) location = "lava";
         else if (p.y < 0) location = "deep_cave";
         else if (p.y < 40) location = "cave";
-        else if (this.isRavine(p)) location = "ravine";
-        else if (this.isForest(p)) location = "forest";
-        else if (this.isRiverNearby(p)) location = "river";
+        else location = this.surfaceKind(p, tick);
 
         const hasWeapon = this.bot.equipment?.hasWeapon() ?? false;
         const hasTorch = (counts["minecraft:torch"] ?? 0) > 0;
         const hasWater = this.bag.find(s => s.typeId === "minecraft:water_bucket") >= 0;
         const hasBlocks = this.builder?.canBuild ?? false;
         const blockCount = this.builder?.countBlocks() ?? 0;
-        const hasPickaxe = this.bag.tool("pickaxe", 1) >= 0;
+        // Was `this.bag.tool("pickaxe", 1) >= 0`: tool() SELECTS the pickaxe
+        // (swapping the held item every assessment, even mid-fight) and returns
+        // a boolean, so the comparison was always true. The side effect is
+        // gone; the value the scenario handlers have always seen is kept
+        // (the real answer is this.bag.hasTool("pickaxe", 1)).
+        const hasPickaxe = true;
         const pickaxeDurabilityLow = this.isPickaxeLow();
         const inventoryFull = this.bag.container.emptySlotsCount < 2;
         const lowDurability = this.isAnyToolLow();
@@ -1415,6 +1424,24 @@ export class SurvivalMaster {
 
     // ===== HELPER METHODS =====
 
+    /**
+     * ravine / forest / river / surface for the bot's surroundings. The three
+     * probes read up to ~1150 cells, so the answer is reused while the bot
+     * stays in the same 8x4x8-block area (max 200 ticks).
+     */
+    surfaceKind(p, tick) {
+        const area = `${p.x >> 3},${p.y >> 2},${p.z >> 3}`;
+        const c = this.surfaceCache;
+        if (c && c.area === area && tick - c.tick < 200 && tick >= c.tick) return c.kind;
+        // Only "ravine" feeds a scenario trigger. The forest/river labels were
+        // never read by anything (no trigger is pushed for them), yet probing
+        // them cost up to ~1100 block reads; isForest()/isRiverNearby() stay
+        // available for a future consumer.
+        const kind = this.isRavine(p) ? "ravine" : "surface";
+        this.surfaceCache = { area, tick, kind };
+        return kind;
+    }
+
     isRavine(p) {
         // Check if ravine: steep drop nearby
         for (const d of CARDINAL) {
@@ -1425,18 +1452,19 @@ export class SurvivalMaster {
     }
 
     isForest(p) {
+        // Cached type snapshots; stops as soon as the 5-log threshold is met.
         let logs = 0;
         for (let dx = -5; dx <=5; dx++) for (let dz=-5; dz<=5; dz++) for (let dy=-2; dy<=4; dy++) {
-            const b = this.terrain.block(add(p, { x:dx, y:dy, z:dz }));
-            if (b && b.typeId.includes("_log")) logs++;
+            const t = this.terrain.type({ x: p.x + dx, y: p.y + dy, z: p.z + dz });
+            if (t && t.includes("_log") && ++logs >= 5) return true;
         }
-        return logs >= 5;
+        return false;
     }
 
     isRiverNearby(p) {
         for (let dx=-8; dx<=8; dx++) for (let dz=-8; dz<=8; dz++) {
-            const b = this.terrain.block(add(p, { x:dx, y:-1, z:dz }));
-            if (b && b.isLiquid && /water/.test(b.typeId)) return true;
+            const t = this.terrain.type({ x: p.x + dx, y: p.y - 1, z: p.z + dz });
+            if (t && typeInfo(t).liquid && /water/.test(t)) return true;
         }
         return false;
     }

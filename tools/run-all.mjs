@@ -28,6 +28,8 @@ const steps = [
     { name: "survival capability tests", file: "test-capabilities.mjs" },
     { name: "walkable regex guard", file: "walkable.mjs" },
     { name: "drop-flush tests", file: "flush.mjs" },
+    { name: "runtime cache tests (fake engine: inventory/terrain/A*/arbiter)", file: "runtime.test.mjs" },
+    { name: "perf smoke (native-call budget per tick, fake engine)", file: "perf.mjs", args: ["--check"] },
     { name: "no-undef gate catches its fixtures (expected to fail)", file: "undef.mjs", args: ["tools/selftest"], mustFail: true },
 ];
 
