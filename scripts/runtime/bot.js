@@ -52,6 +52,11 @@ const OBSERVED = new Map([
 const totalItems = (c) => Object.values(c).reduce((a, b) => a + b, 0);
 const BLOCKED_TTL = 1800;
 const VALUABLE = /^minecraft:(diamond|emerald|netherite|.*_ingot|.*enchanted_book|golden_apple|enchanted_golden_apple|totem_of_undying|heart_of_the_sea|nautilus_shell|.*_horse_armor|saddle|name_tag|.*_bucket|.*_smithing_template|.*_armor_trim|music_disc_.*|.*_spawn_egg|.*_shulker_box|ancient_debris|obsidian|ender_pearl|blaze_rod|ender_eye|elytra|trident|.*_bed|.*_wool)/;
+// UNBREAKABLE WOOD: any log/wood/stem is acceptable for wood needs
+const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
+const ANY_WOOD_DROPS = /(_log|_planks|stick|bamboo)/;
+function isAnyWood(type) { return ANY_WOOD.test(type); }
+function isWoodRequest(block) { return block && (block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
 export class Bot {
     constructor(sim, ownerName, host, memory) {
@@ -384,6 +389,7 @@ export class Bot {
         const bulk = !!drop && isBulk(drop);
         if (bulk && !item) item = drop;
         const underground = !!drop && (isUndergroundOre(drop) || bulk) && this.settings.deepMining;
+        const isWoodReq = block && (block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem"));
         return {
             amount, block, item, bulk, deepItem: drop, underground,
             startCount: amountOf(this.bag.counts(), drop),
@@ -391,8 +397,10 @@ export class Bot {
             scan: new BlockScan(this.sim.location, underground ? 8 : 12),
             blocked: new Map(), loot: new Map(), lootSince: system.currentTick,
             noTargetSince: system.currentTick, failures: 0,
-            treeMode: /(_log|_wood)$/.test(block ?? ""),
-            cropMode: /(wheat|carrot|potato|beetroot|berry|melon|pumpkin|cactus|sugar_cane|kelp|bamboo)/.test(block ?? ""),
+            treeMode: /(_log|_wood|_stem|_hyphae)$/.test(block ?? ""),
+            cropMode: /(wheat|carrot|potato|beetroot|berry|melon|pumpkin|cactus|sugar_cane|kelp|bamboo|deadbush|dead_bush)/.test(block ?? ""),
+            anyWood: isWoodReq, // UNBREAKABLE: accept any wood type
+            desertFallback: isWoodReq, // also try dead bushes in desert
         };
     }
     newScan(m) { return new BlockScan(this.sim.location, m?.underground ? 8 : 12); }
@@ -1359,20 +1367,59 @@ export class Bot {
                     return false;
                 }
             }
+            // UNBREAKABLE: if oak_log not found, try ANY wood, then desert bushes for sticks, then widen
+            if (isWoodRequest(m.block)) {
+                // Try to find ANY wood type nearby, not just oak
+                try {
+                    const anyWood = this.terrain.scanOres(this.sim.location, 16, (type) => isAnyWood(type), 400);
+                    if (anyWood.length > 0) {
+                        m.target = anyWood[0];
+                        m.type = this.terrain.block(anyWood[0])?.typeId;
+                        m.noTargetSince = tick;
+                        this.reason = `No ${m.block} but found ${m.type} at ${anyWood[0].x},${anyWood[0].y},${anyWood[0].z} - any wood acceptable - unbreakable`;
+                        return false;
+                    }
+                    // Desert fallback: dead bush for sticks
+                    const bushes = this.terrain.scanOres(this.sim.location, 16, (type) => type === "minecraft:deadbush" || type === "minecraft:dead_bush" || type === "minecraft:bamboo" || type === "minecraft:cactus", 300);
+                    if (bushes.length > 0) {
+                        m.target = bushes[0];
+                        m.type = this.terrain.block(bushes[0])?.typeId;
+                        m.noTargetSince = tick;
+                        this.reason = `No wood, but found ${m.type} for sticks/planks in desert - unbreakable fallback`;
+                        return false;
+                    }
+                } catch {}
+            }
             // ROBUST: never manual block for mine mode, always retry with exploring
             if ((this.mode === "survival" || this.mode === "starter" || this.mode === "mine") && m.failures < 40) {
                 m.failures = (m.failures ?? 0) + 1;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
                 try { this.sim.stopBreakingBlock(); } catch {}
                 this.explorer.reset(); this.nav.reset();
-                this.reason = `No ${m.item ?? m.block} nearby, exploring further... (${m.failures}/40)`;
+                this.reason = `No ${m.item ?? m.block} nearby, exploring further for ANY wood (${m.failures}/40) - unbreakable`;
                 return false;
             } else {
-                // After many failures, retry not manual to avoid shutdown
+                // After many failures, try any wood and widen range
+                try {
+                    const anyWood = this.terrain.scanOres(this.sim.location, 32, (type) => isAnyWood(type) || type === "minecraft:deadbush" || type === "minecraft:dead_bush", 600);
+                    if (anyWood.length > 0) {
+                        m.target = anyWood[0];
+                        m.type = this.terrain.block(anyWood[0])?.typeId;
+                        m.noTargetSince = tick;
+                        this.reason = `Still no ${m.block}, found ${m.type} in wider 32b search - unbreakable`;
+                        return false;
+                    }
+                } catch {}
                 m.failures = 0;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
                 this.explorer.reset(); this.nav.reset();
-                this.reason = `Still searching for ${m.item ?? m.block}, widening search...`;
+                // Increase range if following and failing
+                if (this.mode === "follow") {
+                    this.settings.range = Math.min(512, (this.settings.range ?? 256) + 32);
+                    this.reason = `Still searching for ${m.item ?? m.block}, widening range to ${this.settings.range} - following ${this.ownerName} - unbreakable`;
+                } else {
+                    this.reason = `Still searching for ${m.item ?? m.block}, widening search - will take ANY wood - unbreakable`;
+                }
                 return false;
             }
         }
@@ -1683,7 +1730,22 @@ export class Bot {
     wantedToMine(m, type, p, tick) {
         const r = MINE[type];
         if (!r) return false;
-        const wanted = m.item ? matches(r.drops, m.item) : type === m.block;
+        // UNBREAKABLE: if requesting oak_log but any wood available, accept any wood
+        let wanted = false;
+        if (m.item) {
+            wanted = matches(r.drops, m.item);
+            // If item is any log, accept any log drops
+            if (!wanted && isWoodRequest(m.block) && isAnyWood(type)) wanted = true;
+            // If need sticks and in desert, accept dead bush
+            if (!wanted && m.block && m.block.includes("stick") && (type === "minecraft:deadbush" || type === "minecraft:dead_bush")) wanted = true;
+            // If need planks, accept any log (can craft planks)
+            if (!wanted && m.block && m.block.includes("_planks") && isAnyWood(type)) wanted = true;
+        } else {
+            wanted = type === m.block;
+            if (!wanted && isWoodRequest(m.block) && isAnyWood(type)) wanted = true;
+            if (!wanted && m.block && m.block.includes("stick") && (type === "minecraft:deadbush" || type === "minecraft:dead_bush")) wanted = true;
+            if (!wanted && m.block && m.block.includes("_planks") && isAnyWood(type)) wanted = true;
+        }
         if (!wanted || (m.blocked.get(key(p)) ?? 0) > tick) return false;
         const self = floor(this.sim.location);
         // For tree logs, allow mining above

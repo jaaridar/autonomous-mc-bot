@@ -515,12 +515,29 @@ export class SpeedrunDirector {
 
     woodPhase(tick, counts) {
         const b = this.bot;
-        // ULTRA FAST WOOD: get logs ASAP, no waiting
+        // ULTRA FAST WOOD: get ANY wood ASAP, desert bushes for sticks - unbreakable
         const hasWeapon = b.equipment.hasWeapon();
-        const totalLogs = (counts["minecraft:oak_log"] ?? 0) + (counts["minecraft:birch_log"] ?? 0) + (counts["minecraft:spruce_log"] ?? 0) + (counts["minecraft:jungle_log"] ?? 0);
-        if (!hasWeapon && totalLogs < 2) {
-            b.reason = "Speedrun wood FAST: need 2 logs for weapon - mining logs quickly";
-            if (!b.mining || !b.mining.block.endsWith("_log")) b.startMine("minecraft:oak_log", 3);
+        const totalLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood") || k.includes("_stem") || k.includes("_hyphae")).reduce((a,[,v])=>a+v,0);
+        const totalPlanks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
+        const sticks = counts["minecraft:stick"] ?? 0;
+        const deadBush = (counts["minecraft:deadbush"] ?? 0) + (counts["minecraft:dead_bush"] ?? 0);
+        if (!hasWeapon && totalLogs < 2 && totalPlanks < 2 && sticks < 1 && deadBush < 1) {
+            b.reason = "Speedrun wood FAST: need ANY wood/logs/bush for weapon - mining any wood quickly - desert fallback";
+            // Try any wood type
+            if (!b.mining || !b.mining.anyWood) {
+                // Scan for any wood
+                try {
+                    const anyWood = b.terrain.scanOres(b.sim.location, 16, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem") || type === "minecraft:bamboo" || type === "minecraft:deadbush" || type === "minecraft:dead_bush" || type === "minecraft:cactus", 400);
+                    if (anyWood.length > 0) {
+                        const t = b.terrain.block(anyWood[0])?.typeId ?? "minecraft:oak_log";
+                        b.startMine(t, 3);
+                    } else {
+                        b.startMine("minecraft:oak_log", 3);
+                    }
+                } catch {
+                    b.startMine("minecraft:oak_log", 3);
+                }
+            }
             return;
         }
         if (!hasWeapon) {
@@ -548,10 +565,21 @@ export class SpeedrunDirector {
             } catch {}
         }
 
-        if ((counts["minecraft:oak_log"] ?? 0) < 6 && (counts["minecraft:birch_log"] ?? 0) < 6 && (counts["minecraft:spruce_log"] ?? 0) < 6) {
-            b.reason = "Speedrun: gathering wood for upskilling, retain important";
-            if (!b.mining || b.mining.block !== "minecraft:oak_log") {
-                b.startMine("minecraft:oak_log", 8);
+        const anyLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0);
+        if (anyLogs < 6) {
+            b.reason = "Speedrun: gathering ANY wood for upskilling - oak/birch/spruce/jungle/acacia/dark/mangrove/cherry - unbreakable";
+            if (!b.mining || !b.mining.anyWood) {
+                try {
+                    const anyWood = b.terrain.scanOres(b.sim.location, 20, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem"), 500);
+                    if (anyWood.length > 0) {
+                        const t = b.terrain.block(anyWood[0])?.typeId ?? "minecraft:oak_log";
+                        b.startMine(t, 8);
+                    } else {
+                        b.startMine("minecraft:oak_log", 8);
+                    }
+                } catch {
+                    b.startMine("minecraft:oak_log", 8);
+                }
             }
             return;
         }
