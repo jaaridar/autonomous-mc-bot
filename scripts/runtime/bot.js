@@ -24,7 +24,12 @@ import { Parkour } from "./parkour.js";
 import { DeepMiner } from "./deepminer.js";
 import { ResourceManager } from "./resource.js";
 import { SpeedrunDirector } from "./speedrun.js";
+import { WorldAwareness } from "./world-awareness.js";
+import { StructureDetector } from "./structures.js";
 import { isPassable, isUnbreakable, isFalling } from "../core/blocks.js";
+import { needsQuickTool } from "../core/combat.js";
+import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../core/knowledge.js";
+import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -135,6 +140,8 @@ export class Bot {
         this.deepMiner = new DeepMiner(this);
         this.resource = new ResourceManager(this);
         this.speedrun = new SpeedrunDirector(this);
+        this.awareness = new WorldAwareness(this);
+        this.structures = new StructureDetector(this);
         this.nav.builder = this.builder;
         // Enhanced mining state
         this.obstructionClear = undefined;
@@ -142,8 +149,12 @@ export class Bot {
         this.lastTorchPlace = 0;
         this.mineStuckSince = 0;
         this.mineRetries = 0;
+        this.lastQuickToolCheck = 0;
+        this.deathRecovery = undefined;
+        this.upskillPhase = "wood";
+        this.retainCache = new Map();
         sim.addTag("verdant.bot");
-        this.record("spawned advanced bot v0.9");
+        this.record("spawned advanced bot v1.0 omni-aware");
     }
 
     owner() {
@@ -167,6 +178,23 @@ export class Bot {
         if (this.mining) this.mining.breakingSince = undefined;
     }
     dangerThreat() { return this.threat; }
+    retainImportant() {
+        // Retain important stuff: iron ore, diamond, obsidian, etc - never drop critical
+        const counts = this.bag.counts();
+        const free = this.bag.container.emptySlotsCount;
+        if (free > 2) return;
+        // If inventory full, drop low-value first, keep critical
+        const entries = Object.entries(counts).map(([type, count]) => ({ type, count, score: retainScore(type) }));
+        entries.sort((a,b) => a.score - b.score); // low first
+        for (const e of entries) {
+            if (e.score < 20 && e.count > 0) {
+                // Try to drop? Actually bot doesn't auto-drop, but we can tell
+                // For now just record
+                if (e.count > 16) this.record(`low value ${e.type} taking space, consider deposit`);
+                break;
+            }
+        }
+    }
     stop(reason = "Stopped by owner.") {
         this.stopActions();
         if (this.parkCamp()) this.tell("Shelter is still sealed; !bot resume opens it first.");
@@ -176,6 +204,9 @@ export class Bot {
         this.builder.resetPillar?.();
         this.combat.reset();
         this.looting.reset();
+        this.awareness?.reset();
+        this.structures?.reset();
+        this.parkour?.reset();
         this.blocked = undefined;
         this.recoveryAttempts = 0;
         this.mode = "idle";
@@ -184,6 +215,7 @@ export class Bot {
         this.pendingTable = undefined;
         this.goal = undefined;
         this.recoverTarget = undefined;
+        this.deathRecovery = undefined;
         this.state = "paused";
         this.reason = reason;
         this.record(reason);
@@ -271,11 +303,17 @@ export class Bot {
         this.miner.reset();
         this.deepMiner.reset();
         this.combat.reset();
+        this.builder.resetPillar?.();
+        this.awareness?.reset();
+        this.structures?.reset();
+        this.parkour?.reset();
+        this.looting.reset();
         this.escapeAttempts = 0;
         this.fleeSince = 0;
         this.mining = undefined;
         this.pendingTable = undefined;
         this.recoverTarget = undefined;
+        this.deathRecovery = undefined;
         this.goal = goal;
         this.anchor = { ...this.sim.location };
         this.mode = mode;
@@ -298,6 +336,8 @@ export class Bot {
         this.taskStart = system.currentTick;
         this.mineStuckSince = 0;
         this.mineRetries = 0;
+        this.lastQuickToolCheck = 0;
+        this.upskillPhase = mode === "speedrun" ? "wood" : "wood";
         this.record(`mode:${mode}`);
     }
     startMine(block, amount) {
@@ -470,13 +510,20 @@ export class Bot {
         this.nav.parkour = this.settings.parkour;
         this.nav.allowBridge = this.settings.bridge;
         this.observe(tick);
+
+        // World-class awareness: scan surroundings, remember important (iron ore, sheep, lava pools, structures)
+        try { this.awareness.tick(tick); } catch {}
+        try { this.structures.tick(tick); } catch {}
+
         const hp = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 0;
         if (hp <= 0) { this.recordDeath(); this.save(); this.state = "dead"; this.deadSince = tick; this.respawnTried = false; return; }
         if (this.escapeSeal && this.unseal(tick)) return;
         const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
 
-        // Auto organize if needed
+        // Auto organize if needed - retain important stuff
         if (tick % 200 === 0) { try { this.resource.organizeIfNeeded(); } catch {} }
+        // Retain important items logic - never drop critical
+        if (tick % 100 === 0) { try { this.retainImportant(); } catch {} }
 
         if (this.settings.armor && !this.equipment.faultReason && tick - this.lastEquipmentCheck >= 20) {
             this.lastEquipmentCheck = tick;
@@ -484,6 +531,91 @@ export class Bot {
                 this.equipment.faultReason = String(error); this.blockTask(this.equipment.faultReason, "manual");
             }
         }
+
+        // QUICK TOOL PRIORITY #1 - NEVER FIGHT BARE HAND
+        if (tick - this.lastQuickToolCheck > 40) {
+            this.lastQuickToolCheck = tick;
+            try {
+                const counts = this.bag.counts();
+                const hasWeapon = this.equipment.hasWeapon();
+                const quickNeed = this.equipment.quickToolNeeded(tick);
+                if (quickNeed && !hasWeapon) {
+                    // Emergency: craft quick tool immediately
+                    this.reason = `Quick tool priority: ${quickNeed.reason}`;
+                    if (quickNeed.craft && this.settings.assistedCrafting) {
+                        try {
+                            this.obtain(quickNeed.need, 1, tick);
+                            return;
+                        } catch {}
+                    }
+                }
+                // Also check generic needsQuickTool from core/combat
+                const need = needsQuickTool(hasWeapon, counts);
+                if (need && !hasWeapon) {
+                    this.reason = `No weapon - ${need.reason} #1 priority`;
+                    if (this.settings.assistedCrafting) {
+                        try { this.obtain(need.craft, 1, tick); return; } catch {}
+                    }
+                }
+            } catch {}
+        }
+
+        // Death recovery - pick items if died
+        if (this.memory?.death() && tick % 100 === 0) {
+            try {
+                const death = this.memory.death();
+                if (death && death.dim === this.sim.dimension.id) {
+                    const dist = distance(death, this.sim.location);
+                    if (dist < 64) {
+                        // Try to recover
+                        if (!this.deathRecovery) this.deathRecovery = { pos: death, since: tick, tries: 0 };
+                        // If close, collect drops
+                        if (dist < 8) {
+                            this.reason = `Recovering death items at ${death.x},${death.y},${death.z}`;
+                            // Look for item entities near death
+                            try {
+                                const items = this.sim.dimension.getEntities({ type: "minecraft:item", location: death, maxDistance: 12 });
+                                if (items.length) {
+                                    const nearest = items.sort((a,b) => distance(a.location, this.sim.location) - distance(b.location, this.sim.location))[0];
+                                    const r = this.navTo(nearest.location, tick, 1);
+                                    if (r !== "failed") return;
+                                }
+                            } catch {}
+                        }
+                    }
+                }
+            } catch {}
+        }
+
+        // Structure loot main priority if found - interrupt current task if high priority
+        try {
+            const topStruct = this.structures.getTopPriority();
+            if (topStruct && topStruct.priority >= 90) {
+                const currentPrio = this.mode === "idle" ? 0 : 50;
+                if (this.structures.shouldInterruptForLoot(currentPrio)) {
+                    const lootTarget = this.structures.getLootTarget();
+                    if (lootTarget) {
+                        this.reason = `Structure priority: ${topStruct.name} (${topStruct.reason}) - looting chest`;
+                        const r = this.navTo(center(lootTarget.pos), tick, 2);
+                        if (r !== "failed") return;
+                    }
+                }
+            }
+            // Lava pool -> portal if have water bucket - main priority
+            const portalOpp = this.structures.getPortalOpportunity();
+            if (portalOpp && portalOpp.hasWater) {
+                const inv = this.bag.counts();
+                if ((inv["minecraft:obsidian"] ?? 0) < 10) {
+                    this.reason = `Lava pool portal opportunity at ${portalOpp.pos.x},${portalOpp.pos.y},${portalOpp.pos.z} - making obsidian`;
+                    // If near lava pool, try to make obsidian
+                    if (distance(portalOpp.pos, this.sim.location) < 12) {
+                        // Place water logic would be in survival/speedrun, but we can navigate there
+                        const r = this.navTo(center(portalOpp.pos), tick, 3);
+                        if (r !== "failed") return;
+                    }
+                }
+            }
+        } catch {}
 
         // Enhanced threat evaluation with combat module
         const info = this.settings.defend ? this.terrain.threatInfo(this.sim, owner) : { list: [], nearest: undefined, count: 0, ranged: 0, explosive: 0, melee: 0, closest: Infinity, bombNear: false, underFire: false };

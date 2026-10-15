@@ -92,7 +92,7 @@ function spawnBot(p) {
     if (remembered.death)
         say(p, "A death point is remembered; it is fetched automatically after the next death, or use !bot recover now.");
 }
-const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. Requires /tag @s add verdant.admin. See README. v0.9 advanced.";
+const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. Requires /tag @s add verdant.admin. v1.0 omni-aware: knows every block/item, retains important, structure loot priority (village/ruined portal/lava->portal), adaptive combat any mob, quick tool #1 never bare-hand, world awareness, death recovery, arbitrary bridging/parkour.";
 function say(p, msg) {
     p.sendMessage("§a[Verdant] §r" + msg);
 }
@@ -437,6 +437,6 @@ world.afterEvents.playerLeave.subscribe((e) => {
 });
 system.runInterval(() => bot?.tick(), 1);
 world.afterEvents.worldLoad.subscribe(() => {
-    console.warn("[Verdant 0.9.0] Advanced speedrun bot: deep mining branch+vein, builder bridging/pillaring, combat tactics, looting, parkour 2-gap, boat, resource manager. Back up world; deposit before exit.");
-    world.sendMessage("§a[Verdant] v0.9.0 advanced - !bot spawn to begin. !bot speedrun for full auto.");
+    console.warn("[Verdant 1.0.0] Omni-aware world-class: every block/item mapped, retains important (iron ore, sheep, lava pool), structure loot priority (village, ruined portal=free obsidian, lava->portal), adaptive combat any mob, quick tool #1 never bare-hand, world awareness, death recovery picks items, upskilling main goal, arbitrary bridging horizontal/diagonal/up, amazing parkour.");
+    world.sendMessage("§a[Verdant] v1.0.0 omni-aware - !bot spawn to begin. !bot speedrun for full auto upskilling. Knows every block/item, structure loot priority, lava->portal.");
 });

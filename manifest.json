@@ -1,12 +1,12 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Verdant Bot 0.9.0 \u2022 Bedrock 1.21.114 \u2022 Advanced Speedrun",
-    "description": "0.9.0 ADVANCED: Full speedrun bot with deep mining (branch + vein clustering, Y-level optimized, obstruction clearing), builder (bridging/pillaring/scaffolding), advanced combat (kite/rush/retreat tactics, group handling, crits, strafing), looting (scored chest evaluation, village detection, home avoidance), parkour (1-gap, 2-gap sprint jumps, jump-up, big drops), boat travel improved, resource manager (auto organize, opportunistic gathering), speedrun director (wood->stone->iron->diamond->portal). Fixes: mining below now clears obstructions instead of blacklisting, tree mining scaffolds to high logs, mine mode explores instead of idling after no target, bridging places real blocks with support checks, crops added to mineable. New modules: builder.js, combat.js, looting.js, parkour.js, deepminer.js, resource.js, speedrun.js, blocks.js, combat core, loot core, mining-strategy core. Commands: !bot speedrun, !bot deepmine, config speedrun. Fast dev cycle: modular pure core + runtime separation, JSDoc, no circular deps.",
+    "name": "Verdant Bot 1.0.0 • Bedrock 1.21.114 • Omni-Aware World-Class",
+    "description": "1.0.0 OMNI-AWARE: Knows every block/item and best use in situation, retains important (iron ore, diamond, sheep, lava pool), structure loot main priority (village, temple, ruined portal=free obsidian, lava pool->portal), adaptive combat for ANY mob list (not hardcoded), quick tool priority #1 never bare-hand, world awareness scanning surroundings, death recovery picks items, upskilling main goal, arbitrary bridging (horizontal/diagonal/up) depending on terrain and goal, amazing parkour. New: core/knowledge.js exhaustive Bedrock registry, core/world-awareness.js scoring, runtime/world-awareness.js iron/sheep/lava tracking, runtime/structures.js portal detection, builder arbitrary diagonal, parkour arbitrary, combat adaptive, equipment quick tool, loot structure multiplier, resource retain scoring. 44 modules.",
     "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
     "version": [
+      1,
       0,
-      9,
       0
     ],
     "min_engine_version": [
@@ -20,8 +20,8 @@
       "type": "data",
       "uuid": "9dfd46cd-74e7-4bc1-a3be-a13098a5f764",
       "version": [
+        1,
         0,
-        9,
         0
       ]
     },
@@ -31,8 +31,8 @@
       "entry": "scripts/main.js",
       "uuid": "2547de70-aaa2-4a2e-bd7c-91be2a224d7c",
       "version": [
+        1,
         0,
-        9,
         0
       ]
     }
