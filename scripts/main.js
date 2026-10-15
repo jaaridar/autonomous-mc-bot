@@ -92,7 +92,7 @@ function spawnBot(p) {
     if (remembered.death)
         say(p, "A death point is remembered; it is fetched automatically after the next death, or use !bot recover now.");
 }
-const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | auto | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. Requires /tag @s add verdant.admin. See README.";
+const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. Requires /tag @s add verdant.admin. See README. v0.9 advanced.";
 function say(p, msg) {
     p.sendMessage("§a[Verdant] §r" + msg);
 }
@@ -253,6 +253,18 @@ function command(p, text) {
                 b.setMode("survival");
                 say(p, "Survival supervisor started: defence, food, tools and armour progression. Hunting targets unnamed livestock; config hunting off disables it. !bot stop cancels.");
                 break;
+            case "speedrun":
+                if (!b.settings.assistedCrafting)
+                    throw Error("Run !bot config crafting on first, then !bot speedrun. End-to-end speedrun: wood->stone->iron->diamond->portal.");
+                b.setMode("speedrun");
+                say(p, "Speedrun mode started: full progression with deep mining, looting, combat, bridging, parkour. !bot status shows phase.");
+                break;
+            case "deepmine":
+                if (!b.settings.assistedCrafting)
+                    throw Error("Run !bot config crafting on first, then !bot deepmine. Deep mining with branch mining and vein clustering.");
+                b.startMine(id(a[0] ?? "diamond_ore"), integer(a[1], 1, 64, 5));
+                say(p, `Deep mining ${a[0] ?? "diamond_ore"} x${a[1] ?? 5} with branch pattern and vein detection.`);
+                break;
             case "starter":
                 if (!b.settings.assistedCrafting)
                     throw Error("Enable !bot config crafting on first. This is assisted add-on crafting, not vanilla UI.");
@@ -350,8 +362,10 @@ function command(p, text) {
                     b.settings.camp = value;
                 else if (a[0] === "pickup")
                     b.settings.pickup = value;
+                else if (a[0] === "speedrun")
+                    b.settings.speedrun = value;
                 else
-                    throw Error("Settings: crafting, parkour, defend, fast, hunting, armor, bridge, boat, loot, deep, camp, pickup.");
+                    throw Error("Settings: crafting, parkour, defend, fast, hunting, armor, bridge, boat, loot, deep, camp, pickup, speedrun.");
                 b.stop("Configuration changed; choose or resume a task.");
                 say(p, JSON.stringify(b.settings));
                 break;
@@ -423,6 +437,6 @@ world.afterEvents.playerLeave.subscribe((e) => {
 });
 system.runInterval(() => bot?.tick(), 1);
 world.afterEvents.worldLoad.subscribe(() => {
-    console.warn("[Verdant 0.8.10] Persistent memory, night camping, death recovery and inventory merging active. Back up the world; deposit before world exit.");
-    world.sendMessage("§a[Verdant] v0.8.10 scripts loaded - !bot spawn to begin.");
+    console.warn("[Verdant 0.9.0] Advanced speedrun bot: deep mining branch+vein, builder bridging/pillaring, combat tactics, looting, parkour 2-gap, boat, resource manager. Back up world; deposit before exit.");
+    world.sendMessage("§a[Verdant] v0.9.0 advanced - !bot spawn to begin. !bot speedrun for full auto.");
 });

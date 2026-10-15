@@ -1,99 +1,106 @@
-# Verdant Bot — architecture
+# Verdant Bot — architecture v0.9.0 Advanced
 
 Where things live, who owns what, and the rules that keep the bot honest.
 If you are adding a feature, find its layer here first.
 
 ## Layers
 
-- `scripts/core/` — pure logic. No `@minecraft/server` imports, testable
-  offline: math, block policy (MINE table), recipes/refusals, ore levels,
-  food tables, the path search, task-fault types, memory schema.
-- `scripts/runtime/` — engine adapters and the brain: everything that talks
-  to the live simulation. One file per responsibility.
-- `scripts/main.js` — commands and the 20 Hz brain pump; modes live in bot.js.
+- `scripts/core/` — pure logic. No `@minecraft/server` imports, testable offline:
+  - `math.js` — vectors, distance, keys
+  - `policy.js` — MINE table, hazards, hostiles, food
+  - `recipes.js` — crafting, smelting dependencies
+  - `ores.js` — ore Y-levels, bulk detection
+  - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, big drops, bridge cost)
+  - `blocks.js` — exhaustive Bedrock block taxonomy (passable, solid, falling, hazard, climbable, value scoring, obstruction detection)
+  - `combat.js` — mob stats, threat scoring, tactics (kite/rush/retreat/pillar), strafe, crit windows
+  - `loot.js` — chest loot scoring, valuable detection, junk filtering, upgrade logic
+  - `mining-strategy.js` — branch patterns, quarry, vein clustering, optimal spacing, efficiency calc, best Y
+  - `resource.js` — speedrun phases (WOOD/STONE/IRON/DIAMOND/PORTAL), checklist, current phase, next needed
+  - `memory.js` — persistent memory schema, prefs sanitization
+  - `survival.js` — food fuel tables
+  - `recovery.js`, `transfer.js`, `commands.js`
 
-## Runtime module map
+- `scripts/runtime/` — engine adapters and the brain:
+  - `bot.js` — the brain v5: tick order, mode dispatch, task objects, integrates all advanced modules, obstruction clearing, scaffolding
+  - `navigation.js` — `Navigator`: rolling-horizon A* with parkour + bridging awareness, loop detection, threat avoidance, builder integration
+  - `builder.js` — `Builder`: bridging (find support, place with sneak), pillaring (jump-place), scaffolding, torch placement, obstruction clearing
+  - `combat.js` — `Combat`: tactical fighting (rush for ranged, retreat for creeper, kite for heavy, group positioning, crit jump, strafe)
+  - `looting.js` — `Looting`: scored chest scanning (16 blocks), home avoidance, valuable-first withdraw, village detection via entities
+  - `parkour.js` — `Parkour`: gap detection, step-up, sprint jump, ladder/vine climb, bridge assist
+  - `deepminer.js` — `DeepMiner`: shaft -> branch (branchPattern) -> vein (clusterVeins flood-fill) -> ascend, with drop collection, torching
+  - `mining.js` — `Miner`: legacy staircase + corridor, kept for compatibility, now supplemented by DeepMiner
+  - `resource.js` — `ResourceManager`: inventory organization, opportunistic gathering, deposit decisions
+  - `speedrun.js` — `SpeedrunDirector`: end-to-end speedrun (wood->stone->iron->diamond->portal), phase tracking
+  - `drops.js` — loose-drop collection with entity tracking
+  - `scouting.js` — village detection + opportunistic foraging
+  - `world.js` — `Terrain` with enhanced scans (storeNear 14 blocks, scanOres, findObstructions, obstructionsBelow, safeToMineEx), `BlockScan`
+  - `escape.js` — `Escaper`: water/lava/trapped handling, probes 4 dirs goal-first
+  - `survival.js` — `SurvivalDirector`: gear ladder + food
+  - `foraging.js` — animal hunting
+  - `inventory.js` / `hands.js` / `equipment.js` / `furnace.js` / `host.js` / `memory.js` / `exploration.js`
 
-| File | Owns |
-|---|---|
-| `bot.js` | The brain: tick order, mode dispatch, task objects (`m`), combat, escapes, camp/night, death pipeline, crafting orchestration. |
-| `navigation.js` | `Navigator`: path planning + following. The only thing that may own long-distance movement. `navTo()` = ring-targeting around awkward goals. |
-| `drops.js` | Loose-drop collection. `near()` finds matching item entities, `run()` walks to (and waits on) one, `pushToward()` is the bounded last-resort straight line. |
-| `scouting.js` | `Scout`: everything about roaming voluntarily — village detection, frontier scouting, opportunistic foraging (logs, sheep). Runs only in the survival maintain stage. |
-| `mining.js` | `Miner`: staircase shafts, corridors, torch placement, cavity bookkeeping. Called by mine-mode; never moves the bot itself. |
-| `escape.js` | `Escaper`: water/lava/being-stuck handling. A stuck escape probes all four directions (goal-ward first) and picks tunnel/bridge/climb/drop/pillar to fit the terrain; it never digs beside lava. Uses nav.lastGoal so escapes aim at the real goal. |
-| `survival.js` | `SurvivalDirector`: the gear ladder (stone → iron → armour → extras → maintain) and the food hook. |
-| `foraging.js` | `Forager`: hunger-driven animal hunting (physical attacks only). |
-| `world.js` | `Terrain` (block reads, danger rules, threats, entity helpers) + `BlockScan` (chunked nearest-first block sweeps). |
-| `inventory.js` / `hands.js` / `equipment.js` | Bag model and native-inventory transfers, world interactions (place/use), armour moves. |
-| `furnace.js` | Native furnace placement/loading/polling. |
-| `host.js` / `memory.js` | Sim lookup/rebinding, persistent memory store. |
-| `exploration.js` | `Explorer`: bounded frontier hopping used by scouting and fruitless mine searches. |
+- `scripts/main.js` — commands and 20 Hz brain pump, handles spawn takeover, rate limiting, new commands: speedrun, deepmine
 
-## The resource-search ladder (mine mode)
+## Advanced mining flow (v0.9)
 
-A surface resource task never silently roams. In order:
+1. **Obstruction clearing** — before mining a block below, `Terrain.obstructionsBelow` finds blocks in column; if <=3, they are cleared first via `obstructionClear` state instead of blacklisting target. Fixes "mines block below but can't get below".
+2. **Tree scaffolding** — for logs >2 above bot, `Builder.scaffoldTo` pillars up with jump-place.
+3. **Deep mining** — `DeepMiner` starts shaft to `bestYFor(ore)`, then branchPattern with spacing `optimalSpacing(ore)`, scans for ores via `Terrain.scanOres`, clusters via `clusterVeins`, mines vein blocks nearest-first, then ascends via recorded route.
+4. **Tight scan** — 12 blocks, budget 600 cells/tick, nearest-first.
+5. **Wide sweep** — 28 blocks, budget 900, re-arms when moved 10 blocks.
+6. **Explore** — `Explorer` hops 12-20, with continuous 12-block watch; now also runs in `mine` mode, not just survival, so bot doesn't idle after wood/oat.
+7. **Loot** — tree loot remembered in `m.loot` Map, flushed within 6 blocks before wide sweep.
+8. **Drop handling** — `Drops.near` + `run` + `flush`, with `pushToward` for planner-refused hops.
 
-1. **Tight scan** — 10 blocks (6 underground), every tick, nearest-first.
-2. **Wide sweep** — 24 blocks, chunked at 768 cells per brain tick, bounded
-   (~12 s); re-arms when the bot has walked somewhere new. One rule
-   (`wantedToMine`) drives every radius.
-3. **Explore** — `Explorer` hops 12–20 blocks at a time, while a radius-10
-   watch runs continuously (re-armed every 10 ticks): the stroll ends the
-   moment the resource shows up ("Spotted … while scouting").
-4. **Dead end** — explorer reports `blocked`: the bot reports once, walks
-   home (peek still running), then pauses with an actionable message
-   (`blockTask`, retry kind). After repeated fruitless cycles it stops
-   honestly: "Searched everywhere reachable: no X."
-5. **Drops** — tree breaks are interrupted only for a drop underfoot; the
-   rest is remembered (`m.loot`) and walked by a loot pass (`Drops.flush`)
-   the moment the tight scan is done and no trunk log is left — *before* the
-   wide sweep, so the bot walks its loot line instead of standing through the
-   sweep, and a far target waits its turn. A remembered cell is matched
-   within 6 blocks (drops fall to the ground from tall trunks), so nothing is
-   silently forgotten while its item is still there; cells with nothing left
-   are dropped. Other digs keep chase-per-break. A task cannot finish without
-   its items: quota counts the bag, completion sweeps strays. Unreachable
-   stacks are blacklisted briefly, never orbited.
+## Movement rules v0.9
 
-## Movement rules
+- `Navigator` now supports: walk, step, drop, bigdrop (1-3), jump (1-gap), sprintjump (2-gap), jumpup, bridge (cost 8).
+- `allowBridge` true when builder has blocks; bridging tries to find solid neighbor support.
+- Loop detection: 5+ revisits in 6s or 8-11s travel with <1.5 approach.
+- `navTo(goal)` searches rings around goal (compass + 2x + up/down) for standable cells.
+- `Builder` owns all placement: `placeAt(target, anchor, {sneak, allowHazard, blockType})`, `bridge(dir)`, `pillar()`, `scaffoldTo()`.
+- `Parkour` assists jumps: `canJumpGap`, `canStepUp`, `jump`, `sprintJump`, `climbIfNeeded`.
+- `Drops.pushToward` is still only sanctioned straight-line for short hops.
 
-- Long-distance movement is `Navigator`'s. Call `nav.reset()` when you take
-  over, or the next caller inherits a stale plan.
-- `Navigator` flags two failure modes: a stall (no movement for ~2 s) and a
-  loop (movement that never closes the gap, or 5+ re-entries of one cell in
-  6 s). Both set `nav.stuck` for exactly one tick; the brain then escalates.
-- `navTo(goal, tick, leash)` targets walkable cells *around* a point (drops on
-  leaves, owner on a ledge) instead of demanding the exact cell.
-- `Drops.pushToward()` is the only sanctioned straight-line movement: short
-  hops the planner refuses, bounded by the caller's tick budget, never a
-  journey.
-- Escape is the only tunneling/bridging path; `nav.lastGoal` must point at
-  whatever the bot actually wants, not home.
+## Combat v0.9
+
+- `Combat.evaluate` scores threats via `combatThreatScore`, picks highest priority within 8 blocks.
+- Tactics: `rush` for skeletons (close distance), `retreat` for creepers (<5 blocks), `kite` for heavy melee when hp<=10, `strafe`/`pillar` for golem/ravager, `flee` for warden.
+- Crit: jump then hit on way down, window 25 ticks.
+- Group: find position maximizing sum distance from all mobs.
+- Retreat: uses `groundNear` to find safe spot away from threat, up to 8 blocks, with hazard checks.
+
+## Looting v0.9
+
+- `Looting.scan` every 20 ticks, radius 16, parity optimization.
+- `shouldLootChest` checks free slots, home distance <48 = player base, distance >16 = too far.
+- `chooseLoot` scores via `LOOT_VALUE`, valuable first, junk filtered.
+- `withdraw` uses same rollback-safe transfer as deposit.
+- Village detection via `villager/villager_v2/wandering_trader/cat/iron_golem` entities within 64 blocks.
+
+## Resource management v0.9
+
+- `ResourceManager` auto-organizes when >6 partial stacks.
+- Opportunistic: scans item entities within 8 blocks, picks high priority (>=50).
+- Deposit when low-value items >16 and free slots <5.
+- Phases via `currentPhase(counts)`, next needed via `nextNeeded`.
+
+## Speedrun v0.9
+
+- Phases: WOOD (8 logs, table, wooden pick), STONE (20 cobble, stone pick/sword, furnace, 12 torch), IRON (12 raw iron, smelt, iron pick, bucket), DIAMOND (5 diamond, diamond pick), PORTAL (10 obsidian).
+- Each phase uses `obtain` which triggers mining/crafting.
+- Uses `DeepMiner` for iron/diamond.
 
 ## Honesty contract
 
-- Items are observed and moved with rollback-protected transfers — never
-  fabricated, duplicated or teleported.
-- `tell()` = chat messages to the owner; `reason` = the HUD line; `blockTask`
-  = stop and say why (kinds: `manual` needs the owner, `retry` backs off and
-  retries).
-- Entity disappearance is the pickup success signal; inventory deltas are the
-  quota success signal. Nothing reports success it did not observe.
+- Items observed and moved with rollback-protected transfers — never fabricated.
+- `tell()` = chat to owner; `reason` = HUD; `blockTask` = stop with kind manual/retry.
+- Entity disappearance = pickup success; inventory delta = quota success.
 
-## Adding a feature
+## Adding a feature v0.9
 
-1. Pure logic goes in `core/`, engine touches in `runtime/`.
-2. New roaming/collection duties belong in `scouting.js` / `drops.js`; the
-   brain only calls `b.scout.step(tick)` / `b.drops.*`.
-3. Budget every loop (ticks or attempts) and end with an actionable message —
-   no silent loops, no standing still.
-4. Run the full verification suite before shipping: `parse.mjs` (parses every
-   file in *module goal* — exactly how the engine parses it; one invalid line
-   silently kills the whole pack in-game), `linkcheck.mjs` (links and
-   evaluates every module with stubbed @minecraft APIs — catches missing
-   exports, import cycles and top-level throws), `undef.mjs` (flags calls to
-   names never imported/declared — the 0.8.7 `horizontal` crash — and
-   `this.<field>` reads never assigned or defined in that file — the 0.8.8
-   `this.scan` crash; `// undef-ok:` marks deliberate external callbacks),
-   `imports.mjs`, `test.mjs`, `walkable.mjs`.
+1. Pure logic in `core/`, engine touches in `runtime/`.
+2. New modules: follow existing pattern — constructor(bot), tick(tick), reset(), with bounded budgets.
+3. Every loop budgeted (ticks or attempts) and ends with actionable message.
+4. Run verification: `node tools/run-all.mjs` — must pass parse, linkcheck, undef, imports, core tests, walkable, flush, and selftest must fail.
+5. For fast dev: keep core pure, runtime thin, no circular deps, JSDoc comments, small files.

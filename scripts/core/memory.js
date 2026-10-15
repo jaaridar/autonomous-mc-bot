@@ -90,6 +90,7 @@ const BOOL_PREFS = [
     "camp",
     "pickup",
     "loot",
+    "speedrun",
 ];
 /** Whitelisted, type-checked operator preferences; unknown keys are dropped. */
 export function sanitizePrefs(raw) {
