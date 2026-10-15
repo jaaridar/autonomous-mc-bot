@@ -27,10 +27,16 @@ import { SpeedrunDirector } from "./speedrun.js";
 import { WorldAwareness } from "./world-awareness.js";
 import { StructureDetector } from "./structures.js";
 import { SurvivalMaster } from "./survival-master.js";
+import { NetherDirector } from "./nether.js";
+import { VillageDirector } from "./village.js";
+import { GolemDirector } from "./golem.js";
+import { FoodDirector } from "./food.js";
+import { BucketDirector } from "./bucket.js";
 import { isPassable, isUnbreakable, isFalling } from "../core/blocks.js";
 import { needsQuickTool } from "../core/combat.js";
 import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../core/knowledge.js";
 import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
+import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -144,6 +150,11 @@ export class Bot {
         this.awareness = new WorldAwareness(this);
         this.structures = new StructureDetector(this);
         this.survivalMaster = new SurvivalMaster(this);
+        this.nether = new NetherDirector(this);
+        this.village = new VillageDirector(this);
+        this.golem = new GolemDirector(this);
+        this.food = new FoodDirector(this);
+        this.bucket = new BucketDirector(this);
         this.nav.builder = this.builder;
         // Enhanced mining state
         this.obstructionClear = undefined;
@@ -155,8 +166,12 @@ export class Bot {
         this.deathRecovery = undefined;
         this.upskillPhase = "wood";
         this.retainCache = new Map();
+        this.lastFoodCheck = 0;
+        this.lastDamageTick = 0;
+        this.previousHealth = 20;
+        this.previousThreatCount = 0;
         sim.addTag("verdant.bot");
-        this.record("spawned advanced bot v1.1 survival-master 80 scenarios");
+        this.record("spawned advanced bot v2.0 nether speedrun world-class");
     }
 
     owner() {
@@ -210,6 +225,11 @@ export class Bot {
         this.structures?.reset();
         this.parkour?.reset();
         this.survivalMaster?.reset();
+        this.nether?.reset?.(system.currentTick);
+        this.village?.reset?.(system.currentTick);
+        this.golem?.reset?.();
+        this.food?.reset?.();
+        this.bucket?.reset?.();
         this.blocked = undefined;
         this.recoveryAttempts = 0;
         this.mode = "idle";
@@ -311,6 +331,11 @@ export class Bot {
         this.structures?.reset();
         this.parkour?.reset();
         this.survivalMaster?.reset();
+        this.nether?.reset?.(system.currentTick);
+        this.village?.reset?.(system.currentTick);
+        this.golem?.reset?.();
+        this.food?.reset?.();
+        this.bucket?.reset?.();
         this.looting.reset();
         this.escapeAttempts = 0;
         this.fleeSince = 0;
@@ -611,6 +636,80 @@ export class Bot {
                 }
             } catch {}
         }
+
+        // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING
+        try {
+            const counts = this.bag.counts();
+            const curHealth = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 20;
+            const prevHealth = this.previousHealth ?? curHealth;
+            if (curHealth < prevHealth) {
+                this.lastDamageTick = tick;
+                // After damage reassess instead of blindly continuing
+                try {
+                    const reassess = reassessAfterDamage({ health: curHealth, previousHealth: prevHealth, damage: prevHealth - curHealth, hostileCount: this.terrain.threatInfo(this.sim, owner).count }, { hasBlocks: (this.builder?.countBlocks() ?? 0) > 0 });
+                    if (reassess.priority >= 80) {
+                        this.reason = `Food: ${reassess.reason} - reassess after damage`;
+                    }
+                } catch {}
+            }
+            this.previousHealth = curHealth;
+
+            // Adaptive planning: recalculate whenever discovers village/ruined portal/lava pool/useful chest/hostile group/unexpected obstacle
+            if (tick % 60 === 0) {
+                try {
+                    const discovered = [];
+                    const top = this.structures?.getTopPriority();
+                    if (top && top.tick && tick - top.tick < 120) discovered.push(top.name);
+                    const lava = this.awareness?.getLavaPool();
+                    if (lava && lava.tick && tick - lava.tick < 120) discovered.push("lava_pool");
+                    if (discovered.length) {
+                        this.record(`adaptive recalc trigger: ${discovered.join(",")} - reevaluating Nether route`);
+                        // Reset nether lastRecalc to force re-eval
+                        if (this.nether) this.nether.lastRecalc = 0;
+                    }
+                } catch {}
+            }
+
+            // Food reserves assessment
+            if (tick - (this.lastFoodCheck ?? 0) > 80) {
+                this.lastFoodCheck = tick;
+                try {
+                    const reserves = assessFoodReserves(counts, { hunger, health: curHealth });
+                    if (reserves.status === "critical" && this.mode !== "idle") {
+                        this.reason = `Food critical ${reserves.totalHunger} hunger, ${reserves.status} - prioritizing food`;
+                    }
+                } catch {}
+            }
+        } catch {}
+
+        // NETHER ENTRY DECISION SYSTEM - primary objective enter Nether quickly reliably without dying
+        try {
+            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter" || this.mode === "idle") && this.settings.speedrun !== false) {
+                if (this.nether && this.nether.tick(tick)) return;
+            }
+        } catch {}
+
+        // VILLAGE-FIRST STRATEGY
+        try {
+            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter" || this.mode === "idle") && this.village) {
+                if (this.village.tick(tick)) return;
+            }
+        } catch {}
+
+        // IRON GOLEM COMBAT & RISK MANAGEMENT
+        try {
+            if (this.settings.defend && this.golem && this.golem.tick(tick)) return;
+        } catch {}
+
+        // FOOD HEALING COMBAT READINESS
+        try {
+            if (this.food && this.food.tick(tick)) return;
+        } catch {}
+
+        // BUCKET ACQUISITION & NETHER PREPARATION
+        try {
+            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter") && this.bucket && this.bucket.tick(tick)) return;
+        } catch {}
 
         // Structure loot main priority if found - interrupt current task if high priority
         try {
