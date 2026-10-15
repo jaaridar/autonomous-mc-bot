@@ -1042,20 +1042,99 @@ export class Bot {
         return result;
     }
     follow(goal, tick, leash) {
+        // UNBREAKABLE FOLLOW: water handling, boat, bridge, mining blocks if needed
+        if (this.sim.isInWater) {
+            // If in water while following, force water escape logic via escaper, but also try boat/bridge
+            this.reason = "In water while following - trying boat/bridge/swim to you";
+            // Try boat if far
+            const dist = distance(this.sim.location, goal);
+            if (dist > 5) {
+                const boatRes = this.escaper.boat(tick);
+                if (boatRes) return;
+            }
+            // If has blocks, try to bridge towards goal
+            if (this.settings.bridge && this.bag.buildBlock() >= 0 && dist < 20) {
+                // Attempt bridging in water - will be handled by escaper water mode
+            }
+        }
         const r = this.navTo(goal, tick, leash);
         if (r === "blocked") {
             this.followBlocked = this.followBlocked || tick;
-            this.reason = "Holding position; no standable spot near the target yet.";
+            // Try workaround: if water between, make boat
+            const waterBetween = this.waterAhead ? this.waterAhead(goal) : undefined;
+            if (waterBetween) {
+                const br = this.escaper.boat(tick);
+                if (br) { this.reason = "Water between us, making boat to follow"; return; }
+            }
+            // If have blocks, try to bridge
+            if (this.settings.bridge && this.bag.buildBlock() >= 0) {
+                try {
+                    const p = floor(this.sim.location);
+                    const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
+                    if (dir.x !== 0 || dir.z !== 0) {
+                        const bridgeRes = this.builder ? this.builder.bridge(dir, tick) : undefined;
+                        if (bridgeRes === "placed" || bridgeRes === "placed_support") {
+                            this.reason = "No standable spot, bridging with blocks to reach you";
+                            return;
+                        }
+                    }
+                } catch {}
+            }
+            // If no blocks, try to mine blocks nearby for bridging
+            if (tick % 40 === 0 && this.bag.buildBlock() < 0) {
+                this.reason = "No blocks to bridge, mining nearby for blocks to follow you";
+                try {
+                    const near = this.terrain.scanOres(this.sim.location, 6, (type) => type === "minecraft:dirt" || type === "minecraft:sand" || type === "minecraft:gravel" || type.endsWith("_log"), 100);
+                    if (near.length) {
+                        const r2 = this.nav.go(center(near[0]), tick);
+                        if (r2 !== "failed") return;
+                    }
+                } catch {}
+            }
+            this.reason = "Holding position; no standable spot near the target yet - trying boat/bridge.";
             try { this.sim.stopMoving(); } catch {}
             this.nav.reset();
-            if (tick - this.followBlocked > 200) { this.followBlocked = tick; this.tell("Waiting for a standable spot near the target."); }
+            if (tick - this.followBlocked > 200) { this.followBlocked = tick; this.tell("Waiting for a standable spot near you, trying to make boat/bridge."); }
             return;
         }
         this.followBlocked = 0;
         if (r === "failed") {
             this.followFails = (this.followFails ?? 0) + 1;
             this.reason = this.nav.reason;
-            if (this.followFails >= 6 && this.followFails % 6 === 0) this.tell(`Still trying to reach you (${this.nav.reason})`);
+            // UNBREAKABLE: on fail, try boat, bridge, or mine blocks
+            if (this.followFails % 3 === 0) {
+                const waterBetween = this.waterAhead ? this.waterAhead(goal) : undefined;
+                if (waterBetween || this.sim.isInWater || this.terrain.waterNear(floor(this.sim.location))) {
+                    const br = this.escaper.boat(tick);
+                    if (br) { this.reason = `Water blocks path to you, making boat (${this.nav.reason})`; return; }
+                }
+                // Try to break obstruction if any
+                try {
+                    const obstruct = this.terrain.findObstructions(this.sim.location, goal);
+                    if (obstruct.length > 0 && obstruct.length <= 3) {
+                        for (const cell of obstruct) {
+                            const b = this.terrain.block(cell);
+                            if (!b || b.isAir) continue;
+                            if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") continue;
+                            if (isUnbreakable(b.typeId)) continue;
+                            const score = retainScore(b.typeId);
+                            if (score >= 80) continue;
+                            const dr = this.digCell(cell, tick);
+                            if (dr === "digging") { this.reason = `Breaking ${b.typeId} to follow you`; return; }
+                        }
+                    }
+                } catch {}
+                // Try bridging
+                if (this.settings.bridge && this.bag.buildBlock() >= 0) {
+                    try {
+                        const p = floor(this.sim.location);
+                        const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
+                        const br = this.builder ? this.builder.bridge(dir, tick) : undefined;
+                        if (br === "placed") { this.reason = "Bridging to follow you"; return; }
+                    } catch {}
+                }
+            }
+            if (this.followFails >= 6 && this.followFails % 6 === 0) this.tell(`Still trying to reach you (${this.nav.reason}) - will make boat/bridge/mine if needed`);
             return;
         }
         this.followFails = 0;
@@ -1991,7 +2070,20 @@ export class Bot {
         const p = floor(this.sim.location);
         const dx = target.x - this.sim.location.x, dz = target.z - this.sim.location.z;
         const len = Math.hypot(dx, dz);
-        if (len < 8) return undefined;
+        // If already in water, any water ahead should trigger boat, even for short distance
+        if (this.sim.isInWater) {
+            // Check if target is across water
+            const hit = this.waterAt(p) ?? this.waterAt({ x: p.x, y: p.y - 1, z: p.z });
+            if (hit) return hit;
+            // Also check path to target for water
+            const ux = len > 0 ? dx / len : 0, uz = len > 0 ? dz / len : 0;
+            for (const n of [1, 2, 3, 4]) {
+                const q = { x: Math.floor(p.x + ux * n), y: p.y, z: Math.floor(p.z + uz * n) };
+                const h = this.waterAt(q);
+                if (h) return h;
+            }
+        }
+        if (len < 5) return undefined; // reduced from 8 to 5 for following
         const ux = dx / len, uz = dz / len;
         let water = 0, first;
         for (const n of [2, 4, 6, 8, 10, 12]) {
@@ -1999,7 +2091,7 @@ export class Bot {
             const hit = this.waterAt(q);
             if (hit) { water++; first ??= hit; }
         }
-        return water >= 4 ? first : undefined;
+        return water >= 3 ? first : undefined; // reduced from 4 to 3
     }
     waterAt(p) {
         for (const y of [p.y, p.y - 1]) {
@@ -2018,19 +2110,37 @@ export class Bot {
         if (existing) { if (this.escaper.mount(existing)) { this.reason = "Boarding a boat for the crossing."; return "boarded"; } return "waiting"; }
         let slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
         if (slot < 0) {
-            if (!this.settings.assistedCrafting) return "none";
-            try { this.craft("minecraft:oak_boat", 1); } catch { return "none"; }
-            slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
+            // Try any boat type, not just oak - unbreakable
+            const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat","minecraft:bamboo_raft"];
+            if (this.settings.assistedCrafting) {
+                for (const bt of boatTypes) {
+                    try { this.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                }
+                // Try craft planks from logs if no boat
+                if (slot < 0) {
+                    const logs = this.bag.find((s) => s.typeId.endsWith("_log") || s.typeId.endsWith("_wood"));
+                    if (logs >= 0) {
+                        try {
+                            const logType = this.bag.get(logs).typeId;
+                            const plankType = logType.includes("_log") ? logType.replace("_log","_planks") : logType.replace("_wood","_planks");
+                            this.craft(plankType, 4);
+                            for (const bt of boatTypes) {
+                                try { this.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                            }
+                        } catch {}
+                    }
+                }
+            }
             if (slot < 0) return "none";
         }
-        const water = this.waterAt(this.sim.location) ?? this.waterAt(floor(this.sim.location));
+        const water = this.waterAt(this.sim.location) ?? this.waterAt(floor(this.sim.location)) ?? this.waterAt({ x: floor(this.sim.location).x, y: floor(this.sim.location).y - 1, z: floor(this.sim.location).z });
         const cell = water ?? this.boatTrip?.water;
         if (!cell) return "none";
         const selected = this.bag.select(slot);
         try {
             this.sim.lookAtBlock(this.host.relative(center(cell)));
             this.sim.useItemInSlot(selected);
-            this.reason = "Floating a boat for the crossing.";
+            this.reason = "Floating a boat for the crossing - unbreakable water travel";
             if (tick - this.boatTrip.since > 120) return "none";
             return "waiting";
         } catch { return "none"; }

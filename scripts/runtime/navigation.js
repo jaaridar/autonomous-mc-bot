@@ -121,6 +121,18 @@ export class Navigator {
     }
 
     go(goal, tick) {
+        // UNBREAKABLE: if in water, don't try normal pathfinding - need boat/swim
+        if (this.sim.isInWater) {
+            return this.fail("In water, need boat or swim to shore - water navigation");
+        }
+        // If start not safe (in water, falling, etc), fail fast
+        const startFloor = floor(this.sim.location);
+        if (!this.terrain.safe(startFloor) && !this.terrain.safe({ x: startFloor.x, y: startFloor.y - 1, z: startFloor.z })) {
+            // Check if water nearby
+            if (this.terrain.waterNear(startFloor)) {
+                return this.fail("Start in water or unsafe, need boat/bridge - water detected");
+            }
+        }
         if (horizontal(this.sim.location, goal) < 0.7 && Math.abs(this.sim.location.y - goal.y) < 1.2) {
             this.reset();
             return "done";

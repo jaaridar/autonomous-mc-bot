@@ -515,7 +515,7 @@ export class Escaper {
     water(tick) {
         const sim = this.sim;
         if (this.riding) {
-            const shore = this.terrain.shoreNear(sim.location, 28);
+            const shore = this.terrain.shoreNear(sim.location, 48);
             if (!sim.isInWater || (shore && shore.distance <= 1.6)) {
                 this.eject();
                 this.lastReason = "Ashore; leaving boat.";
@@ -528,7 +528,7 @@ export class Escaper {
             }
             if (tick - this.boatSince > 200) {
                 this.eject();
-                this.boatTries = 3;
+                this.boatTries = 1; // allow retry, not permanent fail
                 this.lastReason = "Boat not moving; swimming.";
             }
             return "running";
@@ -549,33 +549,68 @@ export class Escaper {
         }
         if (this.terrain.headInWater(sim)) {
             if (this.drowning === undefined) this.drowning = tick;
-            if (tick - this.drowning > 120 && this.boatTries < 3) {
+            if (tick - this.drowning > 40) { // faster boat attempt when drowning
                 const r = this.boat(tick);
                 if (r) return r;
             }
             const p = sim.location;
             sim.jump();
             sim.moveToLocation(this.host.relative({ x: p.x, y: p.y + 1.6, z: p.z }));
-            this.lastReason = "Surfacing to breathe.";
+            this.lastReason = "Surfacing to breathe - will make boat.";
             return "running";
         }
         this.drowning = undefined;
-        const shore = this.terrain.shoreNear(sim.location, 28);
+        // UNBREAKABLE WATER LOGIC: try boat first, then bridge, then swim
+        const shore = this.terrain.shoreNear(sim.location, 48);
         if (!shore) {
-            if (this.boatTries < 3) {
-                const r = this.boat(tick);
-                if (r) return r;
+            // No shore within 48 - try boat aggressively, then bridge with blocks, then swim to owner
+            const r = this.boat(tick);
+            if (r) return r;
+            // If have blocks, try to bridge / pillar out of water
+            if (this.bot.settings.bridge && this.bag.buildBlock() >= 0) {
+                // Try to place block under to make land
+                const p = floor(sim.location);
+                const below = add(p, DOWN);
+                if (this.terrain.waterAt(below) || this.terrain.waterAt(p)) {
+                    // Try to pillar with blocks to create island
+                    const pillarResult = this.pillar(tick);
+                    if (pillarResult !== "failed") {
+                        this.lastReason = "No shore, pillaring with blocks to create land";
+                        return pillarResult;
+                    }
+                }
+                // Try bridging towards owner or nearest land direction
+                const owner = this.bot.owner();
+                const dir = owner ? away(p, floor(owner.location)) : this.escapeDirection();
+                // Actually towards owner
+                const towardOwner = owner ? { x: Math.sign(owner.location.x - sim.location.x), y: 0, z: Math.sign(owner.location.z - sim.location.z) } : dir;
+                const bridgeResult = this.bridge(towardOwner, tick);
+                if (bridgeResult !== "failed") {
+                    this.lastReason = "No shore, bridging with blocks towards target";
+                    return bridgeResult;
+                }
             }
+            // Last resort: swim towards owner
             const owner = this.bot.owner();
-            const toward = owner ? away(owner.location, sim.location) : { x: 0, y: 0, z: 1 };
+            const toward = owner ? { x: owner.location.x - sim.location.x, y: 0, z: owner.location.z - sim.location.z } : { x: 0, y: 0, z: 1 };
+            const len = Math.hypot(toward.x, toward.z) || 1;
             const p = sim.location;
-            sim.moveToLocation(this.host.relative({ x: p.x + toward.x * 2, y: p.y + 0.4, z: p.z + toward.z * 2 }), { faceTarget: true });
-            this.lastReason = "No shore within 28; swimming on.";
+            sim.moveToLocation(this.host.relative({ x: p.x + (toward.x/len) * 3, y: p.y + 0.4, z: p.z + (toward.z/len) * 3 }), { faceTarget: true });
+            if (tick % 20 < 2) sim.jump();
+            this.lastReason = "No shore within 48, swimming towards owner - will craft boat if possible";
             return "running";
+        }
+        // Shore found - try boat if far, else swim
+        if (shore.distance > 8) {
+            const r = this.boat(tick);
+            if (r) {
+                this.lastReason = `Far shore ${shore.distance.toFixed(0)} blocks, using boat`;
+                return r;
+            }
         }
         sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
         if (tick % 20 < 2) sim.jump();
-        this.lastReason = `Swimming to shore (${shore.distance.toFixed(0)} blocks).`;
+        this.lastReason = `Swimming to shore (${shore.distance.toFixed(0)} blocks) - boat fallback if needed`;
         return "running";
     }
 
@@ -602,32 +637,75 @@ export class Escaper {
 
     boat(tick) {
         const b = this.bot, sim = this.sim;
-        if (!b.settings.boat || this.boatTries >= 3) return undefined;
+        if (!b.settings.boat) return undefined;
+        // Allow infinite retries but with cooldown - unbreakable
+        if (this.boatTries >= 5) {
+            if (tick - this.boatSince < 200) return undefined;
+            this.boatTries = 0; // reset after cooldown
+        }
         const existing = this.findBoat();
         if (existing) {
             if (this.mount(existing)) {
                 this.riding = true;
                 this.ridingEntity = existing;
                 this.boatSince = tick;
-                this.boatTries++;
+                this.boatTries = 0;
                 this.lastReason = "Boarding boat to keep afloat.";
                 return "running";
             }
-            this.boatTries = 3;
+            // Don't permanently fail, try again next tick
             return undefined;
         }
         let slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
         if (slot < 0) {
-            if (!b.settings.assistedCrafting) { this.boatTries = 3; return undefined; }
-            try { b.craft("minecraft:oak_boat", 1); } catch (e) { this.lastReason = "Cannot make boat: " + String(e).slice(0, 80); this.boatTries = 3; return undefined; }
+            if (!b.settings.assistedCrafting) {
+                // Try to craft anyway - unbreakable should try to make boat if has wood
+                this.lastReason = "No boat, trying to craft one - need wood";
+                try {
+                    // Try any boat type
+                    const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat"];
+                    for (const bt of boatTypes) {
+                        try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                    }
+                    // If still no boat, try to craft planks from logs
+                    if (slot < 0) {
+                        const logs = b.bag.find((s) => s.typeId.endsWith("_log"));
+                        if (logs >= 0) {
+                            const logType = b.bag.get(logs).typeId;
+                            const plankType = logType.replace("_log","_planks").replace("_wood","_planks");
+                            try { b.craft(plankType, 4); } catch {}
+                            // Try boat again
+                            for (const bt of boatTypes) {
+                                try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                            }
+                        }
+                    }
+                } catch (e) {
+                    this.lastReason = "Cannot make boat yet: " + String(e).slice(0, 80) + " - will try to get wood or swim";
+                    // Don't give up, will try swimming
+                    return undefined;
+                }
+            } else {
+                try {
+                    const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat","minecraft:bamboo_raft"];
+                    for (const bt of boatTypes) {
+                        try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                    }
+                } catch (e) { this.lastReason = "Cannot make boat: " + String(e).slice(0, 80); }
+            }
             slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
-            if (slot < 0) { this.boatTries = 3; return undefined; }
+            if (slot < 0) {
+                // No boat, but don't permanently fail - allow swimming and retry later
+                if (tick % 60 === 0) this.boatTries++;
+                return undefined;
+            }
         }
         this.boatTries++;
+        this.boatSince = tick;
         const selected = this.bag.select(slot);
         const p = sim.location;
         sim.lookAtBlock(this.host.relative(center(floor(p))));
-        try { sim.useItemInSlot(selected); this.lastReason = "Floating a boat."; } catch { this.lastReason = "Engine rejected boat placement."; }
+        try { sim.useItemInSlot(selected); this.lastReason = "Floating a boat - unbreakable water escape"; } catch { this.lastReason = "Engine rejected boat placement, will try again"; }
         return "running";
     }
 
@@ -675,10 +753,22 @@ export class Escaper {
         }
         const floorBlock = this.terrain.block(floorCell);
         if (!floorBlock || floorBlock.isLiquid || !floorBlock.isSolid) {
-            if (this.bot.settings.bridge && this.bag.buildBlock() >= 0 && !this.terrain.dangerous(floorCell)) return { kind: "bridge" };
-            const drop = this.terrain.groundNear(foot.x, foot.z, foot.y - 1, 6);
-            if (drop && !this.terrain.dangerous(drop)) return { kind: "drop" };
-            return { kind: "dead", why: "gap with nothing safe to bridge/drop" };
+            const isWater = floorBlock && floorBlock.isLiquid && /water/.test(floorBlock.typeId);
+            const isLava = floorBlock && /lava/.test(floorBlock.typeId) || this.terrain.lavaNear(floorCell);
+            // Allow bridging over water, but not lava
+            if (this.bot.settings.bridge && this.bag.buildBlock() >= 0 && !isLava) {
+                // If water, still allow bridge - we can place block in water or over it
+                return { kind: "bridge" };
+            }
+            if (!isLava) {
+                const drop = this.terrain.groundNear(foot.x, foot.z, foot.y - 1, 6);
+                if (drop && !this.terrain.dangerous(drop) && !this.terrain.lavaNear(drop)) return { kind: "drop" };
+                // Even if no ground, if we have blocks, try to bridge over water gap
+                if (isWater && this.bot.settings.bridge && this.bag.buildBlock() >= 0) {
+                    return { kind: "bridge" };
+                }
+            }
+            return { kind: "dead", why: isLava ? "lava gap, cannot bridge" : "gap with nothing safe to bridge/drop" };
         }
         return { kind: "walk" };
     }
@@ -741,8 +831,61 @@ export class Escaper {
             this.lastReason = "Walking out.";
             return this.walkTo(center(walk));
         }
-        if (this.bot.settings.bridge && this.bag.buildBlock() >= 0) return this.pillar(tick);
-        return this.giveUp(why.length ? "No way out: " + why[0] + "." : "No escape route and no blocks; need dirt/cobble to bridge/pillar.");
+        // UNBREAKABLE: if have blocks, pillar up to get out
+        if (this.bot.settings.bridge && this.bag.buildBlock() >= 0) {
+            const pillarRes = this.pillar(tick);
+            if (pillarRes !== "failed") return pillarRes;
+        }
+        // UNBREAKABLE: if in or near water, try boat
+        if (this.sim.isInWater || this.terrain.waterNear(p) || this.terrain.waterNear(add(p, DOWN))) {
+            const boatRes = this.boat(tick);
+            if (boatRes) {
+                this.lastReason = "Trapped near water, trying boat - unbreakable";
+                return boatRes;
+            }
+            // Try swimming to shore
+            const shore = this.terrain.shoreNear(this.sim.location, 48);
+            if (shore) {
+                this.lastReason = `Trapped in water, swimming to shore ${shore.distance.toFixed(0)} blocks`;
+                return this.walkTo(center(shore.cell));
+            }
+        }
+        // UNBREAKABLE: no blocks? Try to mine nearby dirt/sand/logs for blocks
+        if (this.bag.buildBlock() < 0) {
+            try {
+                const nearBlocks = this.terrain.scanOres(this.sim.location, 5, (type) => {
+                    return type === "minecraft:dirt" || type === "minecraft:sand" || type === "minecraft:gravel" || type === "minecraft:oak_log" || type === "minecraft:birch_log" || type.endsWith("_log") || type === "minecraft:coarse_dirt";
+                }, 200);
+                if (nearBlocks.length > 0) {
+                    const target = nearBlocks[0];
+                    this.lastReason = `No blocks to escape, mining ${this.terrain.block(target)?.typeId} at ${target.x},${target.y},${target.z} for blocks`;
+                    // Try to dig it
+                    const bot = this.bot;
+                    const digRes = bot.digCell ? bot.digCell(target, tick) : undefined;
+                    if (digRes === "digging") return "running";
+                    // Or navigate to it
+                    const navRes = this.bot.nav.go(center(target), tick);
+                    if (navRes !== "failed") return "running";
+                }
+            } catch {}
+        }
+        // Last resort: try any direction with drop even if dangerous? No, give up but with better message
+        // Instead of giving up immediately, try to break obstruction in any direction
+        for (const dir of this.candidateDirs()) {
+            const foot = add(p, dir);
+            const b = this.terrain.block(foot);
+            if (b && !b.isAir && !b.isLiquid) {
+                const rule = this.terrain.block(foot)?.typeId ? { tier: 0 } : null;
+                try {
+                    const digRes = this.bot.digCell ? this.bot.digCell(foot, tick) : undefined;
+                    if (digRes === "digging") {
+                        this.lastReason = `Last resort: breaking ${b.typeId} to escape`;
+                        return "running";
+                    }
+                } catch {}
+            }
+        }
+        return this.giveUp(why.length ? "No way out: " + why[0] + ". Trying boat/bridge/mine failed." : "No escape route and no blocks; need dirt/cobble to bridge/pillar - tried mining but failed.");
     }
 
     tunnel(dir, tick) {
