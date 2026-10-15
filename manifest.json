@@ -1,0 +1,56 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Verdant Bot 0.8.9 \u2022 Bedrock 1.21.114",
+    "description": "New in 0.8.9: fixed a one-line regression from 0.8.8 (this.scan instead of m.scan in the mining loop) that threw 'cannot read property next of undefined' right as the bot looked for its first block - the 'Task needs attention' stop. The verification suite gained an undef gate: it flags calls to names never imported (the 0.8.7 horizontal crash) and this.<field> reads never assigned or defined in the file (the 0.8.8 this.scan crash). 0.8.8: fixed the crash that paused the bot the moment it locked onto the first block to mine (a missing import threw a reference error every tick until the circuit breaker stopped it - that was the 'it suddenly stops' bug). Tree loot is also matched within 6 blocks of the remembered spot now, so drops that fell from tall trunks are never silently forgotten, and the loot walk runs before the wide sweep instead of after it - no more standing pause after a trunk finishes. 0.8.7: much faster work. Chopping is now uninterrupted - a drop right underfoot is grabbed as it is, but the rest of a tree's loot is remembered and swept up the moment the next block is off the trunk, the way a player chops the whole tree and then walks the loot line (the old version stopped after every single log to fetch). It also sprints on short legs, explores in bigger hops (12-20 blocks), keeps a continuous 10-block watch while walking instead of a radius-8 look every two seconds, finishes scans and the wide 24-block search about 25-50% sooner, and quota tasks sweep strays before reporting done even for item tasks - so speed never costs loot. 0.8.6: the bot feels fast. The brain runs at 20 Hz instead of 10, so everything reacts twice as quickly (threats, aiming, pickups, command replies); resource scans and the wide search finish about twice as fast before it heads out; while exploring or walking home it watches for the resource every second instead of every two; and it no longer stands around on a drop that will not vanish - that stack is left for the task sweep instead of being orbited. 0.8.5: the real cause of 'nothing responds' is fixed - a single invalid line in 0.8.3-0.8.4 (a ++ applied to an assignment expression) made the entire script pack fail to load silently in-game: no chat replies, no commands, nothing. Every file is now parsed in module goal, exactly how the engine parses it, so this class of failure cannot ship again. 0.8.4: spawn can no longer dead-end \u2014 if a Verdant player is left online without its brain (script reload, world rejoin or crash), !bot spawn takes it over instead of refusing (position and inventory kept; !bot remove first for a fresh one), the remote host clears its own leftover ticking area before re-initializing, and the starter kit explores for wood when the spawn area has none. 0.8.3: resource gathering is intentful \u2014 a task searches tight (10 blocks) then wide (24) before exploring; exploring keeps watch for the resource (trees are spotted mid-stroll and chopped) and never silently roams past what it needs; a dead-end search walks home and says so instead of looping. Loose-drop collection and roaming/foraging are now their own modules (drops.js, scouting.js) with a written architecture map in docs/ARCHITECTURE.md. 0.8.2: mining actually collects what it breaks \u2014 block-quota tasks chase the real drop entities after every break and run a bounded sweep for strays before they may finish (break counts alone no longer complete a task), and drop recovery walks the last short stretch to a stack the pathfinder refuses (leaves, fence tops, seams) instead of declaring the grave unreachable. 0.8.1: bridging and pillaring now place real blocks (the old target cell made the engine refuse every placement), and follow/goto are persistent journeys \u2014 they eat, boat, bridge and tunnel their way toward you instead of parking when you are far, reporting retries honestly. Deep mining never hangs on a vein that needs a better pickaxe: it says why, drops the spot and moves on; cobblestone/stone dig straight down where the bot stands instead of hunting caves; corridors that break into caves or ravines sweep wider and loot the exposed ores. Auto survival scouts for villages by their villagers and cats, walks over and loots the stores, and crafts a bed from wool it has gathered (sheep-hunt byproduct; beds are placed at night, vanilla colours do not mix), and combat dodges with strafes and critical hits. Parkour one-block jumps default on. 0.8: one-command setup (!bot spawn), status/mission display, death pipeline, night shelter for working modes, sand/water-tolerant miner, detour looting, boats, golem runs. Beta APIs + cheats. Back up first.",
+    "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
+    "version": [
+      0,
+      8,
+      9
+    ],
+    "min_engine_version": [
+      1,
+      21,
+      114
+    ]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "9dfd46cd-74e7-4bc1-a3be-a13098a5f764",
+      "version": [
+        0,
+        8,
+        9
+      ]
+    },
+    {
+      "type": "script",
+      "language": "javascript",
+      "entry": "scripts/main.js",
+      "uuid": "2547de70-aaa2-4a2e-bd7c-91be2a224d7c",
+      "version": [
+        0,
+        8,
+        9
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "module_name": "@minecraft/server",
+      "version": "2.3.0-beta"
+    },
+    {
+      "module_name": "@minecraft/server-gametest",
+      "version": "1.0.0-beta"
+    }
+  ],
+  "metadata": {
+    "authors": [
+      "Verdant contributors"
+    ],
+    "license": "MIT"
+  }
+}

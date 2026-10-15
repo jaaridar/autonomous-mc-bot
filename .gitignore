@@ -1,0 +1,9 @@
+# suite working copies, rebuilt by tools/run-all.mjs
+tools/load/scripts/
+tools/parse-out/
+
+# OS cruft
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.log
