@@ -21,7 +21,9 @@ export class Explorer {
             if (result === "running" && tick - this.since < 500)
                 return "running";
             const k = key(this.goal);
-            this.visits.set(k, (this.visits.get(k) ?? 0) + 1);
+            const v = this.visits.get(k);
+            if (v) v.n++;
+            else this.visits.set(k, { x: this.goal.x, y: this.goal.y, z: this.goal.z, n: 1 });
             if (result !== "done")
                 this.blocked.set(k, tick + 1200);
             this.goal = undefined;
@@ -41,11 +43,12 @@ export class Explorer {
                         (this.blocked.get(key(p)) ?? 0) > tick ||
                         !terrain.safe(p))
                         continue;
+                    // Visits keep parsed coordinates (this used to split+parse
+                    // every visit key for every candidate).
                     let penalty = 0;
-                    for (const [visited, n] of this.visits) {
-                        const [vx, vy, vz] = visited.split(",").map(Number);
-                        if (distance(p, { x: vx, y: vy, z: vz }) < 12)
-                            penalty += n * 20;
+                    for (const v of this.visits.values()) {
+                        if (distance(p, v) < 12)
+                            penalty += v.n * 20;
                     }
                     options.push({
                         p,

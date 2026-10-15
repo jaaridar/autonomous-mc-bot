@@ -28,6 +28,7 @@ const steps = [
     { name: "survival capability tests", file: "test-capabilities.mjs" },
     { name: "walkable regex guard", file: "walkable.mjs" },
     { name: "drop-flush tests", file: "flush.mjs" },
+    { name: "perf/efficiency tests (native-call + A* budgets, equivalence vs v1.2.4)", file: "perf.test.mjs" },
     { name: "no-undef gate catches its fixtures (expected to fail)", file: "undef.mjs", args: ["tools/selftest"], mustFail: true },
 ];
 

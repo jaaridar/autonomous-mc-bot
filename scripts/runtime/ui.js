@@ -34,10 +34,11 @@ export class UI {
     }
 
     tick(tick) {
-        if (tick - this.lastUpdate < 20) return; // update every 1 sec
+        if (tick - this.lastUpdate < 20) return; // action bar every 1 sec
         this.lastUpdate = tick;
         try {
-            this.updateScoreboard(tick);
+            // Scoreboard every 2 sec and only the lines that changed (see below).
+            if (tick - (this.lastBoard ?? -1000) >= 40) { this.lastBoard = tick; this.updateScoreboard(tick); }
             this.updateActionBar(tick);
         } catch (e) {
             // Don't crash bot on UI failure
@@ -50,6 +51,7 @@ export class UI {
             const sb = world.scoreboard;
             let obj = this.objective;
             if (!obj || !obj.isValid) {
+                this.shown = undefined; // new objective: everything must be written again
                 obj = sb.getObjective("verdant");
                 if (!obj) obj = sb.addObjective("verdant", "Verdant Bot");
                 this.objective = obj;
@@ -136,31 +138,33 @@ export class UI {
                 lines.push({ name: `§aOwner:${b.ownerName} ${d}b`, score: 2 });
             }
             // Line 15: Tick
-            lines.push({ name: `§8Tick:${tick} Log:${b.log.length}`, score: 1 });
+            lines.push({ name: `§8Log:${b.log.length}`, score: 1 });
 
-            // Remove old participants that are not in new lines
-            try {
-                const participants = obj.getParticipants();
-                for (const p of participants) {
-                    const name = p.displayName;
-                    if (!lines.some(l => l.name === name)) {
-                        try { obj.removeParticipant(name); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-                    }
-                }
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-
-            // Set new scores
-            for (const line of lines) {
+            // Diff against what THIS bot wrote last time: remove only our
+            // vanished lines and write only new/changed ones. The old code
+            // listed every participant, removed everything not in this bot's
+            // list (including other bots' lines) and re-set all 15 scores -
+            // ~30 synced scoreboard writes per bot per second.
+            const prev = this.shown ?? new Map();
+            const next = new Map();
+            for (const line of lines) next.set(line.name, line.score);
+            for (const [name] of prev) {
+                if (next.has(name)) continue;
+                try { obj.removeParticipant(name); } catch { /* already gone */ }
+            }
+            for (const [name, score] of next) {
+                if (prev.get(name) === score) continue;
                 try {
-                    obj.setScore(line.name, line.score);
+                    obj.setScore(name, score);
                 } catch (e) {
-                    // Try with rawtext if fails due to invalid chars
+                    // Try with a sanitised name if the engine rejects the characters
                     try {
-                        const safeName = line.name.replace(/[^a-zA-Z0-9 :.,_-]/g, "").slice(0, 30);
-                        obj.setScore(safeName, line.score);
-                    } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                        const safeName = name.replace(/[^a-zA-Z0-9 :.,_-]/g, "").slice(0, 30);
+                        obj.setScore(safeName, score);
+                    } catch (e) { /* skip this line */ }
                 }
             }
+            this.shown = next;
 
         } catch (e) {
             console.warn("[Verdant UI] Scoreboard update failed: " + e.message);

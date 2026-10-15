@@ -5,6 +5,7 @@
 import { floor, add, distance, key, UP, DOWN, CARDINAL } from "../core/math.js";
 import { STRUCTURE_SIGS, detectStructure } from "../core/knowledge.js";
 import { shouldLootChest } from "../core/loot.js";
+import { RollingSweep } from "./world.js";
 
 export class StructureDetector {
     constructor(bot) {
@@ -19,6 +20,31 @@ export class StructureDetector {
         this.lavaPools = []; // {pos, size, tick}
         this.portalCandidates = []; // potential portal builds
         this.lootQueue = []; // chests to loot sorted by priority
+        this.acc = undefined;  // per-sweep accumulator fed by WorldAwareness' shared sweep
+        this.ownSweep = undefined; // fallback when no awareness sweep is running
+        this.fedTick = -1000;
+    }
+
+    /** Called by WorldAwareness when its shared sweep restarts. Chests near the new origin carry over. */
+    beginSweep(origin, tick) {
+        const keep = (this.acc?.chests ?? []).filter((c) => distance(c, origin) <= 24);
+        this.acc = { blockCounts: {}, chests: keep, lava: [], obsidian: [], seen: new Set(keep.map((c) => key(c))) };
+        this.fedTick = tick ?? this.fedTick;
+    }
+
+    /** One non-air cell from the shared sweep. */
+    acceptCell(type, p, tick) {
+        const a = this.acc ?? (this.beginSweep(floor(this.sim.location)), this.acc);
+        a.blockCounts[type] = (a.blockCounts[type] ?? 0) + 1;
+        if (type === "minecraft:chest" || type === "minecraft:trapped_chest" || type === "minecraft:barrel") {
+            const k = key(p);
+            if (!a.seen.has(k)) { a.seen.add(k); a.chests.push({ ...p, type }); }
+        } else if (type === "minecraft:lava" || type === "minecraft:flowing_lava") {
+            if (a.lava.length < 256) a.lava.push({ ...p });
+        } else if (type === "minecraft:obsidian" || type === "minecraft:crying_obsidian") {
+            if (a.obsidian.length < 256) a.obsidian.push({ ...p });
+        }
+        if (tick !== undefined) this.fedTick = tick;
     }
 
     reset() {
@@ -72,34 +98,19 @@ export class StructureDetector {
 
     scan(tick) {
         const origin = floor(this.sim.location);
-        const blockCounts = {};
-        const chestPositions = [];
-        const lavaPositions = [];
-        const obsidianPositions = [];
         const scanR = 20;
-
-        let budget = 400;
-        for (let dx = -scanR; dx <= scanR && budget > 0; dx++) {
-            for (let dz = -scanR; dz <= scanR && budget > 0; dz++) {
-                if (dx*dx + dz*dz > scanR*scanR) continue;
-                for (let dy = -6; dy <= 6 && budget > 0; dy++) {
-                    budget--;
-                    const p = add(origin, { x: dx, y: dy, z: dz });
-                    const b = this.terrain.block(p);
-                    if (!b || b.isAir) continue;
-                    blockCounts[b.typeId] = (blockCounts[b.typeId] ?? 0) + 1;
-                    if (b.typeId === "minecraft:chest" || b.typeId === "minecraft:trapped_chest" || b.typeId === "minecraft:barrel") {
-                        chestPositions.push({ ...p, type: b.typeId });
-                    }
-                    if (b.typeId === "minecraft:lava" || b.typeId === "minecraft:flowing_lava") {
-                        lavaPositions.push({ ...p });
-                    }
-                    if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") {
-                        obsidianPositions.push({ ...p });
-                    }
-                }
-            }
+        // Blocks come from the shared amortised sweep in WorldAwareness. If that
+        // has not fed us recently (awareness disabled/faulting), run our own.
+        if (tick - this.fedTick > 200) {
+            this.ownSweep ??= new RollingSweep(scanR, -6, 6, 300, 24);
+            if (!this.acc || this.ownSweep.needsRestart(this.sim.location)) this.beginSweep(origin, this.fedTick);
+            this.ownSweep.step(this.terrain, this.sim.location, (type, p) => this.acceptCell(type, p));
         }
+        if (!this.acc) return;
+        const blockCounts = this.acc.blockCounts;
+        const chestPositions = this.acc.chests.slice().sort((a, b) => distance(a, origin) - distance(b, origin));
+        const lavaPositions = this.acc.lava;
+        const obsidianPositions = this.acc.obsidian;
 
         // Detect structures
         const detected = detectStructure(blockCounts, scanR);

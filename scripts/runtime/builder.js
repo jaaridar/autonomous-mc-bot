@@ -145,6 +145,9 @@ export class Builder {
             if (options.sneak) this.sim.isSneaking = true;
             this.sim.lookAtBlock(this.host.relative(center(anchor)));
             const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(anchor)), face);
+            // Inventory and the target cell changed: drop the per-tick caches.
+            this.bag.invalidate?.();
+            if (ok) this.terrain.invalidate?.(target);
             this.lastPlace = Date.now();
             this.placeAttempts = 0;
             this.lastTarget = { ...target };
