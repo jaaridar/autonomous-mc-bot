@@ -59,7 +59,39 @@ export class Terrain {
         };
     }
     clear() { this.cache.clear(); }
+    // Fast cached block read - uses read cache for performance, critical for mining speed
     block(p) {
+        try {
+            const fp = floor(p);
+            const k = key(fp);
+            const cached = this.cache.get(k);
+            if (cached && cached.expires > this.tick) {
+                // Return synthetic block from cached read if possible, else fetch
+                if (cached.value && cached.value._block) return cached.value._block;
+            }
+            const b = this.dimension.getBlock(fp);
+            // Cache it
+            if (b) {
+                const hazard = HAZARDS.has(b.typeId) || b.isLiquid;
+                this.cache.set(k, { 
+                    value: {
+                        passable: b.isAir || WALKABLE.test(b.typeId),
+                        support: b.isSolid,
+                        hazard,
+                        type: b.typeId,
+                        isAir: b.isAir,
+                        isLiquid: b.isLiquid,
+                        isSolid: b.isSolid,
+                        _block: b
+                    }, 
+                    expires: this.tick + (b.isSolid ? 40 : 2) 
+                });
+            }
+            return b;
+        } catch { return undefined; }
+    }
+    // Uncached direct read for when you need fresh
+    blockUncached(p) {
         try { return this.dimension.getBlock(floor(p)); } catch { return undefined; }
     }
     solid(p) { const b = this.block(p); return !!b && b.isSolid; }
@@ -269,37 +301,58 @@ export class Terrain {
 }
 
 /**
- * Bounded nearest-first scan with improved budget handling.
+ * Bounded nearest-first scan with improved budget handling - OPTIMIZED FOR SPEED
+ * Precomputes sorted offsets per radius to avoid sorting every scan (was extremely slow)
  */
+const OFFSET_CACHE = new Map(); // radius -> sorted offsets [{x,y,z,distSq}]
+function getSortedOffsets(radius) {
+    if (OFFSET_CACHE.has(radius)) return OFFSET_CACHE.get(radius);
+    const offsets = [];
+    for (let x = -radius; x <= radius; x++)
+        for (let z = -radius; z <= radius; z++)
+            for (let y = -4; y <= 5; y++) {
+                if (x * x + z * z <= radius * radius) {
+                    offsets.push({ x, y, z, distSq: x*x + y*y + z*z });
+                }
+            }
+    offsets.sort((a,b) => a.distSq - b.distSq);
+    OFFSET_CACHE.set(radius, offsets);
+    return offsets;
+}
+
 export class BlockScan {
     constructor(origin, radius = 12) {
-        this.points = [];
+        this.radius = radius;
         this.cursor = 0;
-        const p = floor(origin);
-        for (let x = -radius; x <= radius; x++)
-            for (let z = -radius; z <= radius; z++)
-                for (let y = -4; y <= 5; y++)
-                    if (x * x + z * z <= radius * radius)
-                        this.points.push(add(p, { x, y, z }));
-        this.points.sort((a, b) => distance(a, origin) - distance(b, origin));
+        this.origin = { ...floor(origin) };
+        this.offsets = getSortedOffsets(radius);
+        this.points = null; // lazy computed only if needed, else use offsets directly
     }
     next(terrain, predicate, budget = 384) {
-        while (budget-- > 0 && this.cursor < this.points.length) {
-            const p = this.points[this.cursor++], b = terrain.block(p);
+        // Fast path: iterate offsets directly without creating points array
+        const origin = this.origin;
+        while (budget-- > 0 && this.cursor < this.offsets.length) {
+            const off = this.offsets[this.cursor++];
+            const p = { x: origin.x + off.x, y: origin.y + off.y, z: origin.z + off.z };
+            const b = terrain.block(p);
             if (b && predicate(b.typeId, p)) return p;
         }
         return undefined;
     }
-    get done() { return this.cursor >= this.points.length; }
+    get done() { return this.cursor >= this.offsets.length; }
     reset(origin, radius) {
         this.cursor = 0;
-        const p = floor(origin);
-        this.points = [];
-        for (let x = -radius; x <= radius; x++)
-            for (let z = -radius; z <= radius; z++)
-                for (let y = -4; y <= 5; y++)
-                    if (x * x + z * z <= radius * radius)
-                        this.points.push(add(p, { x, y, z }));
-        this.points.sort((a, b) => distance(a, origin) - distance(b, origin));
+        this.origin = { ...floor(origin) };
+        if (radius !== undefined && radius !== this.radius) {
+            this.radius = radius;
+            this.offsets = getSortedOffsets(radius);
+        }
+    }
+    // For compatibility with code that expects points array
+    getPoints() {
+        if (!this.points) {
+            this.points = this.offsets.map(off => ({ x: this.origin.x + off.x, y: this.origin.y + off.y, z: this.origin.z + off.z }));
+        }
+        return this.points;
     }
 }

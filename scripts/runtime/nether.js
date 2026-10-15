@@ -604,18 +604,28 @@ export class NetherDirector {
     }
 
     countObsidianAround(pos, radius) {
+        // ROBUST QUICK: budgeted scan, radius capped 5, max 400 checks
         let count = 0;
-        for (let dx = -radius; dx <= radius; dx++) for (let dy = -2; dy <= 4; dy++) for (let dz = -radius; dz <= radius; dz++) {
+        let checks = 0;
+        const maxChecks = 400;
+        radius = Math.min(radius, 5);
+        for (let dx = -radius; dx <= radius && checks < maxChecks; dx++) for (let dy = -2; dy <= 4 && checks < maxChecks; dy++) for (let dz = -radius; dz <= radius && checks < maxChecks; dz++) {
             const p = add(pos, { x: dx, y: dy, z: dz });
+            checks++;
             const b = this.terrain.block(p);
             if (b && b.typeId === "minecraft:obsidian") count++;
+            if (count >= 14) return 14;
         }
         return Math.min(count, 14);
     }
 
     hasCryingObsidianAround(pos, radius) {
-        for (let dx = -radius; dx <= radius; dx++) for (let dy = -2; dy <= 4; dy++) for (let dz = -radius; dz <= radius; dz++) {
+        let checks = 0;
+        const maxChecks = 200;
+        radius = Math.min(radius, 5);
+        for (let dx = -radius; dx <= radius && checks < maxChecks; dx++) for (let dy = -2; dy <= 4 && checks < maxChecks; dy++) for (let dz = -radius; dz <= radius && checks < maxChecks; dz++) {
             const p = add(pos, { x: dx, y: dy, z: dz });
+            checks++;
             const b = this.terrain.block(p);
             if (b && b.typeId === "minecraft:crying_obsidian") return true;
         }
@@ -623,9 +633,13 @@ export class NetherDirector {
     }
 
     checkGravelNearby(radius) {
+        // QUICK: budgeted, max 300 checks
         const p = floor(this.sim.location);
-        for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) for (let dy = -3; dy <= 3; dy++) {
+        let checks = 0;
+        const maxChecks = 300;
+        for (let dx = -radius; dx <= radius && checks < maxChecks; dx++) for (let dz = -radius; dz <= radius && checks < maxChecks; dz++) for (let dy = -3; dy <= 3 && checks < maxChecks; dy++) {
             const q = add(p, { x: dx, y: dy, z: dz });
+            checks++;
             const b = this.terrain.block(q);
             if (b && b.typeId === "minecraft:gravel") return true;
         }

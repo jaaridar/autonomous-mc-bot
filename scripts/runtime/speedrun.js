@@ -93,7 +93,7 @@ export class SpeedrunDirector {
             this.lastProgress = tick;
         }
         if (tick - this.lastProgress > 12000) {
-            b.blockTask("No progress for 10m in speedrun; check terrain.", "manual");
+            b.record("No progress for 10m in speedrun, resetting signature robustly"); b.lastProgress = tick; b.signature = ""; return;
             return;
         }
 

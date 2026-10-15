@@ -27,6 +27,7 @@ export class GolemDirector {
         this.pillarPos = null;
         this.fightStage = "idle"; // idle, pillaring, fighting, collecting, disengaged
         this.lastHealthCheck = 0;
+        this.lastScan = 0;
         this.hits = 0;
         this.lastHit = 0;
     }
@@ -41,6 +42,9 @@ export class GolemDirector {
 
     tick(tick) {
         if (!this.bot.settings.defend) return false;
+        // ROBUST QUICK: only scan every 20 ticks unless in active fight
+        if (this.fightStage === "idle" && tick - this.lastScan < 20) return false;
+        this.lastScan = tick;
 
         // Find golem nearby
         const golem = this.findGolemNearby(24);
