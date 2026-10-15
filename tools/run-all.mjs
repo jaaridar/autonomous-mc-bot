@@ -19,16 +19,13 @@ mkdirSync(join(tools, "load", "scripts"), { recursive: true });
 cpSync(join(repo, "scripts"), join(tools, "load", "scripts"), { recursive: true });
 
 const steps = [
-    { name: "module-goal parse (exactly how the engine parses it)", file: "parse.mjs", args: ["scripts"] },
-    { name: "link + evaluate against @minecraft stubs", file: "linkcheck.mjs", args: ["tools/load/scripts"] },
-    { name: "no-undef gate (missing imports + this.<field> typos)", file: "undef.mjs", args: ["scripts"] },
-    { name: "import scan", file: "imports.mjs", args: ["scripts"] },
-    { name: "core unit tests", file: "test.mjs" },
-    { name: "survival capability tests", file: "test-capabilities.mjs" },
-    { name: "walkable regex guard", file: "walkable.mjs" },
-    { name: "drop-flush tests", file: "flush.mjs" },
+    { name: "module-goal parse (exactly how the engine parses it)", file: "gates.mjs", args: ["parse"] },
+    { name: "link + evaluate against @minecraft stubs", file: "gates.mjs", args: ["link"] },
+    { name: "no-undef gate (missing imports + this.<field> typos)", file: "gates.mjs", args: ["undef"] },
+    { name: "import scan", file: "gates.mjs", args: ["imports"] },
+    { name: "unit tests (memory schema, capabilities, walkable guard, drop flush)", file: "tests.mjs" },
     { name: "perf/efficiency tests (native-call + A* budgets, equivalence vs v1.2.4)", file: "perf.test.mjs" },
-    { name: "no-undef gate catches its fixtures (expected to fail)", file: "undef.mjs", args: ["tools/selftest"], mustFail: true },
+    { name: "no-undef gate catches its fixtures (expected to fail)", file: "gates.mjs", args: ["undef", "tools/selftest"], mustFail: true },
 ];
 
 let failed = 0;
