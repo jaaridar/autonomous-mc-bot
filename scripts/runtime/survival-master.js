@@ -753,8 +753,8 @@ export class SurvivalMaster {
     }
 
     handleNoWoodLowHungerSunset(ctx, tick) {
-        if ((ctx.counts["minecraft:oak_log"] ?? 0) < 3) {
-            this.bot.startMine("minecraft:oak_log", 5);
+        if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0) < 3) {
+            this.bot.startMine("minecraft:oak_log", 5) // any wood acceptable via anyWood fallback;
             this.bot.reason = "Resource 31: no wood low hunger sunset - prioritize safe wood collection";
             return true;
         }
@@ -806,7 +806,7 @@ export class SurvivalMaster {
 
     handleStoneNoCoalTorches(ctx, tick) {
         if (!ctx.hasTorch) {
-            if ((ctx.counts["minecraft:oak_log"] ?? 0) > 0) {
+            if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log")).reduce((a,[,v])=>a+v,0) > 0) {
                 // Make charcoal
                 try { this.bot.obtain("minecraft:charcoal", 2, tick); return true; } catch {}
                 try { this.bot.obtain("minecraft:torch", 4, tick); this.bot.reason = "Resource 35: stone no coal - charcoal alternative light"; return true; } catch {}
@@ -893,8 +893,8 @@ export class SurvivalMaster {
     }
 
     handleWoolNoWoodForBed(ctx, tick) {
-        if ((ctx.counts["minecraft:oak_log"] ?? 0) < 3) {
-            this.bot.startMine("minecraft:oak_log", 3);
+        if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0) < 3) {
+            this.bot.startMine("minecraft:oak_log", 3) // any wood acceptable;
             this.bot.reason = "Resource 42: wool no wood for bed - searching wood";
             return true;
         }

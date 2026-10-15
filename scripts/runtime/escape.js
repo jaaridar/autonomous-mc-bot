@@ -514,105 +514,178 @@ export class Escaper {
 
     water(tick) {
         const sim = this.sim;
+        const bot = this.bot;
+        const p = floor(sim.location);
+        
+        // If riding boat
         if (this.riding) {
-            const shore = this.terrain.shoreNear(sim.location, 48);
-            if (!sim.isInWater || (shore && shore.distance <= 1.6)) {
+            const shore = this.terrain.shoreNear(sim.location, 64);
+            if (!sim.isInWater || (shore && shore.distance <= 2)) {
                 this.eject();
-                this.lastReason = "Ashore; leaving boat.";
+                this.lastReason = "Ashore; leaving boat - swimming fix";
                 return "running";
             }
             if (shore) {
                 sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
-                this.lastReason = "Boating to shore.";
+                this.lastReason = "Boating to shore - swimming fix";
                 return "running";
             }
-            if (tick - this.boatSince > 200) {
+            // If in boat but no shore, boat towards owner or goal
+            const owner = bot.owner();
+            const target = owner ? owner.location : bot.home();
+            if (target) {
+                sim.moveToLocation(this.host.relative({ x: target.x, y: sim.location.y, z: target.z }), { faceTarget: true });
+                this.lastReason = "Boating towards owner/home - swimming fix";
+                return "running";
+            }
+            if (tick - this.boatSince > 300) {
                 this.eject();
-                this.boatTries = 1; // allow retry, not permanent fail
-                this.lastReason = "Boat not moving; swimming.";
+                this.boatTries = 0;
+                this.lastReason = "Boat not moving to shore, swimming - fix";
             }
             return "running";
         }
+        
+        // Not in water anymore - done
         if (!sim.isInWater) {
             if (this.swimming) {
                 try { sim.stopSwimming(); } catch {}
                 this.swimming = false;
             }
+            this.drowning = undefined;
             this.reset();
             return "done";
         }
+        
+        // === IN WATER - CRITICAL SWIMMING LOGIC - NEVER DROWN ===
         this.nav.reset();
         sim.isSprinting = false;
+        
+        // Always try to be swimming
         if (!this.swimming) {
             this.swimming = true;
             try { sim.swim(); } catch {}
         }
-        if (this.terrain.headInWater(sim)) {
+        
+        // Check if head in water - DROWNING RISK - must surface immediately
+        const headInWater = this.terrain.headInWater(sim);
+        const feetInWater = this.terrain.waterAt(p);
+        const belowWater = this.terrain.waterAt(add(p, DOWN));
+        
+        if (headInWater) {
             if (this.drowning === undefined) this.drowning = tick;
-            if (tick - this.drowning > 40) { // faster boat attempt when drowning
+            // If drowning more than 20 ticks (1 sec), urgent boat attempt
+            if (tick - this.drowning > 20) {
                 const r = this.boat(tick);
-                if (r) return r;
+                if (r) {
+                    this.lastReason = "DROWNING! Head in water, urgent boat - swimming fix";
+                    return r;
+                }
             }
-            const p = sim.location;
-            sim.jump();
-            sim.moveToLocation(this.host.relative({ x: p.x, y: p.y + 1.6, z: p.z }));
-            this.lastReason = "Surfacing to breathe - will make boat.";
+            // SURFACE IMMEDIATELY: jump + look up + move up
+            try { sim.jump(); } catch {}
+            try { 
+                const lookUp = { x: sim.location.x, y: sim.location.y + 5, z: sim.location.z };
+                sim.lookAtLocation(this.host.relative(lookUp));
+            } catch {}
+            const cur = sim.location;
+            // Move up aggressively
+            try {
+                sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
+            } catch {}
+            this.lastReason = "DROWNING! Surfacing to breathe - swimming fix, never drown";
             return "running";
         }
+        
+        // Not head in water but still in water - try to get to shore or surface
         this.drowning = undefined;
-        // UNBREAKABLE WATER LOGIC: try boat first, then bridge, then swim
-        const shore = this.terrain.shoreNear(sim.location, 48);
-        if (!shore) {
-            // No shore within 48 - try boat aggressively, then bridge with blocks, then swim to owner
-            const r = this.boat(tick);
-            if (r) return r;
-            // If have blocks, try to bridge / pillar out of water
-            if (this.bot.settings.bridge && this.bag.buildBlock() >= 0) {
-                // Try to place block under to make land
-                const p = floor(sim.location);
-                const below = add(p, DOWN);
-                if (this.terrain.waterAt(below) || this.terrain.waterAt(p)) {
-                    // Try to pillar with blocks to create island
-                    const pillarResult = this.pillar(tick);
-                    if (pillarResult !== "failed") {
-                        this.lastReason = "No shore, pillaring with blocks to create land";
-                        return pillarResult;
-                    }
-                }
-                // Try bridging towards owner or nearest land direction
-                const owner = this.bot.owner();
-                const dir = owner ? away(p, floor(owner.location)) : this.escapeDirection();
-                // Actually towards owner
-                const towardOwner = owner ? { x: Math.sign(owner.location.x - sim.location.x), y: 0, z: Math.sign(owner.location.z - sim.location.z) } : dir;
-                const bridgeResult = this.bridge(towardOwner, tick);
-                if (bridgeResult !== "failed") {
-                    this.lastReason = "No shore, bridging with blocks towards target";
-                    return bridgeResult;
-                }
-            }
-            // Last resort: swim towards owner
-            const owner = this.bot.owner();
-            const toward = owner ? { x: owner.location.x - sim.location.x, y: 0, z: owner.location.z - sim.location.z } : { x: 0, y: 0, z: 1 };
-            const len = Math.hypot(toward.x, toward.z) || 1;
-            const p = sim.location;
-            sim.moveToLocation(this.host.relative({ x: p.x + (toward.x/len) * 3, y: p.y + 0.4, z: p.z + (toward.z/len) * 3 }), { faceTarget: true });
-            if (tick % 20 < 2) sim.jump();
-            this.lastReason = "No shore within 48, swimming towards owner - will craft boat if possible";
-            return "running";
-        }
-        // Shore found - try boat if far, else swim
-        if (shore.distance > 8) {
+        
+        // Try boat aggressively if far from shore or deep water
+        const shore = this.terrain.shoreNear(sim.location, 64);
+        const owner = bot.owner();
+        const ownerDist = owner ? distance(owner.location, sim.location) : Infinity;
+        
+        // If in deep water (no shore within 16 or owner far), craft/use boat
+        if (!shore || shore.distance > 12 || ownerDist > 16 || tick % 40 === 0) {
             const r = this.boat(tick);
             if (r) {
-                this.lastReason = `Far shore ${shore.distance.toFixed(0)} blocks, using boat`;
+                this.lastReason = `Deep water ${shore ? Math.round(shore.distance)+'b to shore' : 'no shore'}, using boat - swimming fix`;
                 return r;
             }
         }
-        sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
-        if (tick % 20 < 2) sim.jump();
-        this.lastReason = `Swimming to shore (${shore.distance.toFixed(0)} blocks) - boat fallback if needed`;
+        
+        // If has blocks, try to create island to stand on - pillar from water
+        if (bot.settings.bridge && this.bag.buildBlock() >= 0 && (feetInWater || belowWater)) {
+            // Try to place block below to make land
+            const below = add(p, DOWN);
+            const belowBlock = this.terrain.block(below);
+            if (!belowBlock || belowBlock.isAir || this.terrain.waterAt(below)) {
+                const support = this.builder ? this.builder.findSupportFor(below) : null;
+                // Try place at feet level
+                const feetPos = p;
+                if (this.builder) {
+                    const r = this.builder.placeAt(feetPos, below, { sneak: true, autoAnchor: true, allowFalling: false });
+                    if (r === "placed") {
+                        this.lastReason = "In water, placing block to create island - swimming fix";
+                        return "running";
+                    }
+                }
+                // Try pillar
+                const pillarResult = this.pillar(tick);
+                if (pillarResult !== "failed") {
+                    this.lastReason = "In water, pillaring to create land - swimming fix";
+                    return pillarResult;
+                }
+            }
+        }
+        
+        // Swim to shore if found
+        if (shore) {
+            // If shore is close, swim to it
+            try {
+                sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
+            } catch {}
+            if (tick % 10 === 0) {
+                try { sim.jump(); } catch {}
+            }
+            this.lastReason = `Swimming to shore ${Math.round(shore.distance)}b - swimming fix, jump every 10 ticks`;
+            return "running";
+        }
+        
+        // No shore - swim towards owner or home or random
+        const target = owner ? owner.location : bot.home();
+        if (target) {
+            const dir = { 
+                x: target.x - sim.location.x, 
+                y: 0.3, // slight up to stay at surface
+                z: target.z - sim.location.z 
+            };
+            const len = Math.hypot(dir.x, dir.z) || 1;
+            const cur = sim.location;
+            try {
+                sim.moveToLocation(this.host.relative({ 
+                    x: cur.x + (dir.x/len) * 4, 
+                    y: cur.y + 0.5, 
+                    z: cur.z + (dir.z/len) * 4 
+                }), { faceTarget: true });
+            } catch {}
+            if (tick % 8 === 0) {
+                try { sim.jump(); } catch {}
+            }
+            this.lastReason = `No shore, swimming to ${owner ? 'owner' : 'home'} at surface - swimming fix`;
+            return "running";
+        }
+        
+        // Last resort: just keep swimming up and moving
+        const cur = sim.location;
+        try {
+            sim.moveToLocation(this.host.relative({ x: cur.x + 1, y: cur.y + 0.5, z: cur.z }), { faceTarget: true });
+        } catch {}
+        try { sim.jump(); } catch {}
+        this.lastReason = "Deep water no target, swimming up and moving - never drown fix";
         return "running";
     }
+
 
     findBoat() {
         try { return this.sim.dimension.getEntities({ type: "minecraft:boat", location: this.sim.location, maxDistance: 8 })[0]; } catch { return undefined; }
@@ -638,10 +711,10 @@ export class Escaper {
     boat(tick) {
         const b = this.bot, sim = this.sim;
         if (!b.settings.boat) return undefined;
-        // Allow infinite retries but with cooldown - unbreakable
-        if (this.boatTries >= 5) {
-            if (tick - this.boatSince < 200) return undefined;
-            this.boatTries = 0; // reset after cooldown
+        // Allow infinite retries but with cooldown - unbreakable swimming
+        if (this.boatTries >= 8) {
+            if (tick - this.boatSince < 120) return undefined;
+            this.boatTries = 0;
         }
         const existing = this.findBoat();
         if (existing) {
@@ -650,64 +723,78 @@ export class Escaper {
                 this.ridingEntity = existing;
                 this.boatSince = tick;
                 this.boatTries = 0;
-                this.lastReason = "Boarding boat to keep afloat.";
+                this.lastReason = "Boarding boat - swimming fix, never drown";
                 return "running";
             }
-            // Don't permanently fail, try again next tick
             return undefined;
         }
-        let slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
-        if (slot < 0) {
-            if (!b.settings.assistedCrafting) {
-                // Try to craft anyway - unbreakable should try to make boat if has wood
-                this.lastReason = "No boat, trying to craft one - need wood";
-                try {
-                    // Try any boat type
-                    const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat"];
-                    for (const bt of boatTypes) {
-                        try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
-                    }
-                    // If still no boat, try to craft planks from logs
-                    if (slot < 0) {
-                        const logs = b.bag.find((s) => s.typeId.endsWith("_log"));
-                        if (logs >= 0) {
-                            const logType = b.bag.get(logs).typeId;
-                            const plankType = logType.replace("_log","_planks").replace("_wood","_planks");
-                            try { b.craft(plankType, 4); } catch {}
-                            // Try boat again
-                            for (const bt of boatTypes) {
-                                try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
-                            }
-                        }
-                    }
-                } catch (e) {
-                    this.lastReason = "Cannot make boat yet: " + String(e).slice(0, 80) + " - will try to get wood or swim";
-                    // Don't give up, will try swimming
-                    return undefined;
+        // Check for any boat in inventory
+        let slot = this.bag.find((s) => s.typeId.endsWith("_boat") || s.typeId.endsWith("_raft"));
+        if (slot < 0 && b.settings.assistedCrafting) {
+            this.lastReason = "No boat in inventory, crafting any boat - swimming fix";
+            try {
+                const counts = b.bag.counts();
+                const boatTypes = [
+                    "minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat",
+                    "minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat",
+                    "minecraft:bamboo_raft","minecraft:oak_boat"
+                ];
+                // Try direct craft
+                for (const bt of boatTypes) {
+                    try { 
+                        b.craft(bt, 1); 
+                        slot = this.bag.find((s) => s.typeId.endsWith("_boat") || s.typeId.endsWith("_raft"));
+                        if (slot >=0) break; 
+                    } catch {}
                 }
-            } else {
-                try {
-                    const boatTypes = ["minecraft:oak_boat","minecraft:birch_boat","minecraft:spruce_boat","minecraft:jungle_boat","minecraft:acacia_boat","minecraft:dark_oak_boat","minecraft:mangrove_boat","minecraft:cherry_boat","minecraft:bamboo_raft"];
-                    for (const bt of boatTypes) {
-                        try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat")); if (slot >=0) break; } catch {}
+                // If still no boat, try to make planks from ANY log/wood/stem
+                if (slot < 0) {
+                    const anyLog = Object.keys(counts).find(k => k.endsWith("_log") || k.endsWith("_wood") || k.includes("_stem") || k.includes("_hyphae"));
+                    if (anyLog) {
+                        const plankType = anyLog.replace("_log","_planks").replace("_wood","_planks").replace("_stem","_planks").replace("_hyphae","_planks");
+                        // Also handle crimson/warped
+                        let targetPlank = plankType;
+                        if (anyLog.includes("crimson")) targetPlank = "minecraft:crimson_planks";
+                        if (anyLog.includes("warped")) targetPlank = "minecraft:warped_planks";
+                        if (anyLog.includes("bamboo")) targetPlank = "minecraft:bamboo_planks";
+                        try { b.craft(targetPlank, 1); } catch {}
+                        // Try boat again after planks
+                        for (const bt of boatTypes) {
+                            try { b.craft(bt, 1); slot = this.bag.find((s) => s.typeId.endsWith("_boat") || s.typeId.endsWith("_raft")); if (slot >=0) break; } catch {}
+                        }
+                    } else {
+                        // No logs at all - need to mine wood for boat, but can't while in water
+                        // Signal to get wood - will be handled by follow logic to mine when not in water, or swim to shore first
+                        this.lastReason = "No wood for boat while swimming, need to get to shore to mine wood - swimming to shore first";
+                        return undefined;
                     }
-                } catch (e) { this.lastReason = "Cannot make boat: " + String(e).slice(0, 80); }
-            }
-            slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
-            if (slot < 0) {
-                // No boat, but don't permanently fail - allow swimming and retry later
-                if (tick % 60 === 0) this.boatTries++;
+                }
+            } catch (e) {
+                this.lastReason = "Boat craft failed: " + String(e).slice(0, 80) + " - swimming fix will retry";
                 return undefined;
             }
+        }
+        slot = this.bag.find((s) => s.typeId.endsWith("_boat") || s.typeId.endsWith("_raft"));
+        if (slot < 0) {
+            if (tick % 40 === 0) this.boatTries++;
+            return undefined;
         }
         this.boatTries++;
         this.boatSince = tick;
         const selected = this.bag.select(slot);
         const p = sim.location;
-        sim.lookAtBlock(this.host.relative(center(floor(p))));
-        try { sim.useItemInSlot(selected); this.lastReason = "Floating a boat - unbreakable water escape"; } catch { this.lastReason = "Engine rejected boat placement, will try again"; }
+        try { 
+            sim.lookAtBlock(this.host.relative(center(floor(p)))); 
+        } catch {}
+        try { 
+            sim.useItemInSlot(selected); 
+            this.lastReason = "Floating boat - swimming fix, never drown - unbreakable water"; 
+        } catch { 
+            this.lastReason = "Boat placement rejected, will retry - swimming fix"; 
+        }
         return "running";
     }
+
 
     escapeDirection() {
         const p = floor(this.sim.location);

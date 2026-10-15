@@ -278,20 +278,33 @@ export class SurvivalDirector {
         }
         this.lastProgress = tick;
         this.enter("maintain");
-        b.reason =
-            "Maintaining tools, armour, food reserve and torches; defending and monitoring supplies.";
-        // Established and equipped: the real prize is out there. Scout for
-        // villages and structures to loot; fall back to home duty on failure.
-        if (b.scout.step(tick))
+        // FIXED: maintain should NOT roam without mission when owner nearby - guard instead
+        const owner = b.owner();
+        const ownerDist = owner ? distance(owner.location, b.sim.location) : Infinity;
+        if (owner && ownerDist < 24) {
+            b.reason = `Maintain: fully equipped stage ${this.stage}, guarding near owner ${b.ownerName} ${Math.round(ownerDist)}b - ready for command`;
+            b.nav.reset();
+            try { b.sim.stopMoving(); } catch {}
             return;
+        }
+        // Only scout if no owner nearby and home far, and not in follow mode previously
+        if (ownerDist > 48) {
+            b.reason = "Maintain: fully equipped, scouting for villages/structures - use !bot follow to call back";
+            if (b.scout.step(tick))
+                return;
+        } else {
+            b.reason = `Maintain: fully equipped stage ${this.stage}, guarding home - ${Math.round(distance(b.sim.location, b.home()))}b from base`;
+        }
         if (distance(b.sim.location, b.home()) > 5) {
             if (b.nav.go(b.home(), tick) === "failed") {
                 b.reason =
-                    "Maintenance: home route unavailable; guarding current location.";
+                    "Maintenance: home route unavailable; guarding current location - awaiting command";
                 b.nav.reset();
             }
         }
-        else
+        else {
             b.nav.reset();
+            try { b.sim.stopMoving(); } catch {}
+        }
     }
 }

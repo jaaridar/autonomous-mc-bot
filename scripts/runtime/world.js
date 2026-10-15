@@ -111,10 +111,10 @@ export class Terrain {
         return this.waterAt(floor(h));
     }
 
-    shoreNear(location, radius = 28) {
+    shoreNear(location, radius = 64) { // Increased from 28 to 64 for deep water swimming fix
         const p = floor(location);
         let best, bestD = Infinity;
-        for (const n of [2, 4, 6, 8, 12, 16, 24, 28]) {
+        for (const n of [2, 4, 6, 8, 12, 16, 24, 28, 32, 48, 64]) {
             if (n > radius) break;
             for (const d of COMPASS) {
                 const q = this.groundNear(p.x + d.x * n, p.z + d.z * n, p.y, 4);

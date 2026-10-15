@@ -517,23 +517,40 @@ export class SpeedrunDirector {
 
     woodPhase(tick, counts) {
         const b = this.bot;
-        // Quick tool priority #1 - never bare hand
+        // ULTRA FAST WOOD: get ANY wood ASAP, desert bushes for sticks - unbreakable
         const hasWeapon = b.equipment.hasWeapon();
-        if (!hasWeapon) {
-            b.reason = "Speedrun wood: no weapon - quick tool #1 priority never bare-hand";
-            if ((counts["minecraft:oak_log"] ?? 0) < 2) {
-                if (!b.mining || b.mining.block !== "minecraft:oak_log") b.startMine("minecraft:oak_log", 4);
-                return;
+        const totalLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood") || k.includes("_stem") || k.includes("_hyphae")).reduce((a,[,v])=>a+v,0);
+        const totalPlanks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
+        const sticks = counts["minecraft:stick"] ?? 0;
+        const deadBush = (counts["minecraft:deadbush"] ?? 0) + (counts["minecraft:dead_bush"] ?? 0);
+        if (!hasWeapon && totalLogs < 2 && totalPlanks < 2 && sticks < 1 && deadBush < 1) {
+            b.reason = "Speedrun wood FAST: need ANY wood/logs/bush for weapon - mining any wood quickly - desert fallback";
+            // Try any wood type
+            if (!b.mining || !b.mining.anyWood) {
+                // Scan for any wood
+                try {
+                    const anyWood = b.terrain.scanOres(b.sim.location, 16, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem") || type === "minecraft:bamboo" || type === "minecraft:deadbush" || type === "minecraft:dead_bush" || type === "minecraft:cactus", 400);
+                    if (anyWood.length > 0) {
+                        const t = b.terrain.block(anyWood[0])?.typeId ?? "minecraft:oak_log";
+                        b.startMine(t, 3);
+                    } else {
+                        b.startMine("minecraft:oak_log", 3);
+                    }
+                } catch {
+                    b.startMine("minecraft:oak_log", 3);
+                }
             }
+            return;
+        }
+        if (!hasWeapon) {
+            b.reason = "Speedrun wood: crafting weapon FAST";
             if (!(counts["minecraft:crafting_table"] > 0)) {
                 b.obtain("minecraft:crafting_table", 1, tick);
                 return;
             }
-            if ((counts["minecraft:stick"] ?? 0) < 4) {
-                b.obtain("minecraft:stick", 4, tick);
-                return;
-            }
-            b.obtain("minecraft:wooden_sword", 1, tick);
+            // Try any wooden sword, not just oak
+            try { b.obtain("minecraft:wooden_sword", 1, tick); return; } catch {}
+            b.obtain("minecraft:wooden_axe", 1, tick);
             return;
         }
 
@@ -550,10 +567,21 @@ export class SpeedrunDirector {
             } catch {}
         }
 
-        if ((counts["minecraft:oak_log"] ?? 0) < 6 && (counts["minecraft:birch_log"] ?? 0) < 6 && (counts["minecraft:spruce_log"] ?? 0) < 6) {
-            b.reason = "Speedrun: gathering wood for upskilling, retain important";
-            if (!b.mining || b.mining.block !== "minecraft:oak_log") {
-                b.startMine("minecraft:oak_log", 8);
+        const anyLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0);
+        if (anyLogs < 6) {
+            b.reason = "Speedrun: gathering ANY wood for upskilling - oak/birch/spruce/jungle/acacia/dark/mangrove/cherry - unbreakable";
+            if (!b.mining || !b.mining.anyWood) {
+                try {
+                    const anyWood = b.terrain.scanOres(b.sim.location, 20, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem"), 500);
+                    if (anyWood.length > 0) {
+                        const t = b.terrain.block(anyWood[0])?.typeId ?? "minecraft:oak_log";
+                        b.startMine(t, 8);
+                    } else {
+                        b.startMine("minecraft:oak_log", 8);
+                    }
+                } catch {
+                    b.startMine("minecraft:oak_log", 8);
+                }
             }
             return;
         }

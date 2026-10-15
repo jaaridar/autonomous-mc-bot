@@ -306,7 +306,8 @@ export class Builder {
             this.pillaring = { startY: p.y, col: { x: p.x, z: p.z }, since: tick, placed: 0, lastJump: 0 };
         }
         const state = this.pillaring;
-        if (tick - state.since > 600) {
+        // For 100 block tower, allow much longer - 3000 ticks = 150 sec for 100 blocks
+        if (tick - state.since > 3000) {
             this.resetPillar();
             return "timeout";
         }

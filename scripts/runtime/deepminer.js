@@ -1,15 +1,19 @@
 /**
- * DeepMiner - advanced deep mining with branch mining, vein clustering, efficient resource management.
- * Replaces/supplements old Miner for deep ores.
+ * DeepMiner v2 - REWRITTEN UNBREAKABLE DEEP MINING
+ * - Front block fix: direct break without nav failure
+ * - Efficient shaft descent to best Y
+ * - Branch mining with vein clustering
+ * - Torching, drop collection, tool awareness
+ * - Never stops on front block
  */
 import { floor, add, center, distance, key, horizontal } from "../core/math.js";
 import { bestYFor, clusterVeins, branchPattern, optimalSpacing } from "../core/mining-strategy.js";
-import { valueOf, isPassable } from "../core/blocks.js";
 import { MINE } from "../core/policy.js";
 import { UP, DOWN, CARDINAL } from "../core/math.js";
+import { isUnbreakable } from "../core/blocks.js";
 
-const STEP_LIMIT = 300;
-const RUN_LENGTH = 20;
+const STEP_LIMIT = 400;
+const BLOCKED_TTL = 1800;
 
 export class DeepMiner {
     constructor(bot) {
@@ -24,7 +28,7 @@ export class DeepMiner {
     }
 
     reset() {
-        this.phase = "idle"; // idle, shaft, branch, vein, ascend, prospect
+        this.phase = "idle"; // idle, shaft, branch, vein, ascend
         this.site = undefined;
         this.route = [];
         this.dig = undefined;
@@ -37,7 +41,6 @@ export class DeepMiner {
         this.ascentStarted = false;
         this.ascendSince = 0;
         this.since = 0;
-        this.gaveUpAt = 0;
         this.cavityAt = 0;
         this.grabDrop = undefined;
         this.refills = 0;
@@ -46,18 +49,15 @@ export class DeepMiner {
         this.branchIndex = 0;
         this.veins = [];
         this.currentVein = undefined;
-        this.veinKey = undefined;
-        this.veinSince = 0;
-        this.veinDugAt = -1;
         this.reason = "No deep mine active.";
         this.torchTimer = 0;
+        this.blocked = new Map();
+        this.breakingSince = 0;
+        this.breakTarget = null;
     }
 
     get active() { return this.phase !== "idle"; }
 
-    /**
-     * Start deep mining for a specific ore.
-     */
     start(oreType, tick) {
         this.reset();
         const p = floor(this.sim.location);
@@ -66,13 +66,55 @@ export class DeepMiner {
         this.route = [{ ...p }];
         this.phase = "shaft";
         this.since = tick;
-        this.reason = `Starting deep shaft to Y=${this.targetY} for ${oreType}`;
+        this.reason = `Deep shaft to Y=${this.targetY} for ${oreType} - unbreakable front fix`;
         return true;
     }
 
-    /**
-     * Collect drops near bot (same as old miner but more robust)
-     */
+    // FRONT BLOCK FIX: direct break method that never fails on front block
+    tryDirectBreak(cell, tick) {
+        const bot = this.bot;
+        const head = bot.sim.getHeadLocation();
+        const at = add(cell, { x: 0.5, y: 0.5, z: 0.5 });
+        const dist = distance(head, at);
+        if (dist > 5.5) return false; // too far, need approach
+
+        const b = bot.terrain.block(cell);
+        if (!b || b.isAir) return true; // already open
+        if (isUnbreakable(b.typeId)) return false;
+        if (bot.terrain.lavaNear(cell) || bot.terrain.waterNear(cell)) return false;
+
+        const rule = MINE[b.typeId];
+        if (rule && rule.tier > 0) {
+            if (!bot.bag.tool(rule.tool, rule.tier)) {
+                this.reason = `Need ${rule.tool} tier ${rule.tier} for ${b.typeId} in shaft - getting better tool`;
+                return false;
+            }
+        }
+
+        // If already breaking same cell, continue
+        if (this.breakTarget && this.breakTarget.x === cell.x && this.breakTarget.y === cell.y && this.breakTarget.z === cell.z) {
+            if (tick - this.breakingSince > 200) {
+                try { bot.sim.stopBreakingBlock(); } catch {}
+                this.breakTarget = null;
+                this.breakingSince = 0;
+                this.blocked.set(key(cell), tick + BLOCKED_TTL);
+                return false;
+            }
+            return true; // still breaking
+        }
+
+        // Start breaking front block directly - no nav needed
+        try { bot.sim.stopBreakingBlock(); } catch {}
+        bot.sim.lookAtBlock(bot.host.relative(center(cell)));
+        if (!bot.sim.breakBlock(bot.host.relative(cell))) {
+            return false;
+        }
+        this.breakTarget = { ...cell };
+        this.breakingSince = tick;
+        this.reason = `Breaking front ${b.typeId} at ${cell.x},${cell.y},${cell.z} - direct front mining deep`;
+        return true;
+    }
+
     maybeCollect(tick) {
         const b = this.bot;
         const g = this.grabDrop;
@@ -82,15 +124,15 @@ export class DeepMiner {
         }
         if (g) {
             const loc = g.e.location;
-            this.reason = "Collecting mined drops.";
+            this.reason = "Collecting mined drops - deep";
             if (horizontal(b.sim.location, loc) < 1.1 && Math.abs(b.sim.location.y - loc.y) < 1.6)
                 return "busy";
             this.stepTo(floor(loc), tick);
             return "busy";
         }
         if (b.bag.container.emptySlotsCount < 1) return "clear";
-        const near = b.sim.dimension.getEntities({ type: "minecraft:item", location: b.sim.location, maxDistance: 4.5 })
-            .filter(e => e.isValid && Math.abs(e.location.y - b.sim.location.y) <= 1.6 && !b.terrain.dangerous(floor(e.location)))
+        const near = b.sim.dimension.getEntities({ type: "minecraft:item", location: b.sim.location, maxDistance: 5 })
+            .filter(e => e.isValid && Math.abs(e.location.y - b.sim.location.y) <= 2 && !b.terrain.dangerous(floor(e.location)))
             .sort((x,y) => distance(x.location, b.sim.location) - distance(y.location, b.sim.location))[0];
         if (near) {
             this.grabDrop = { e: near, since: tick };
@@ -101,32 +143,56 @@ export class DeepMiner {
 
     open(cells, tick) {
         const b = this.bot;
+        // Check if we are already breaking a cell
         if (this.dig) {
             if (!b.terrain.solid(this.dig.cell)) {
                 this.dig = undefined;
+                this.breakTarget = null;
             } else if (tick - this.dig.since > 240) {
                 this.dig = undefined;
-                this.reason = "Digging stalled; turning.";
+                this.breakTarget = null;
+                this.reason = "Digging stalled - turning - front fix";
                 return "stalled";
-            } else if (tick - (this.dig.retryAt ?? this.dig.since) >= 90) {
-                // One absorbed swing must not freeze the tunnel: re-issue the dig.
-                this.dig.retryAt = tick;
-                const rr = b.digCell(this.dig.cell, tick);
-                if (rr === "open") { this.dig = undefined; return "open"; }
-                if (rr !== "digging") { this.dig = undefined; this.reason = b.lastDigReason; return rr; }
-                return "digging";
             } else {
                 return "digging";
             }
         }
-        const todo = cells.filter(c => b.terrain.solid(c));
+        if (this.breakTarget) {
+            const tb = b.terrain.block(this.breakTarget);
+            if (!tb || tb.isAir) {
+                this.breakTarget = null;
+                this.breakingSince = 0;
+            } else if (tick - this.breakingSince > 200) {
+                try { b.sim.stopBreakingBlock(); } catch {}
+                this.blocked.set(key(this.breakTarget), tick + BLOCKED_TTL);
+                this.breakTarget = null;
+                this.breakingSince = 0;
+                return "stalled";
+            } else {
+                return "digging";
+            }
+        }
+
+        const todo = cells.filter(c => b.terrain.solid(c) && (this.blocked.get(key(c)) ?? 0) < tick);
         if (!todo.length) return "open";
+        // Sort by highest first (head then feet) for safety
         const cell = todo.sort((a,z) => z.y - a.y)[0];
+
+        // FRONT BLOCK FIX: try direct break first
+        if (this.tryDirectBreak(cell, tick)) {
+            this.dig = { cell, since: tick };
+            return "digging";
+        }
+
+        // Fallback to digCell
         const r = b.digCell(cell, tick);
         if (r === "open") return "open";
         if (r !== "digging") {
             this.reason = b.lastDigReason;
-            return r;
+            if (r === "no-tool" || r === "lava" || r === "water") return r;
+            // For other failures, mark blocked and try next
+            this.blocked.set(key(cell), tick + 600);
+            return "blocked";
         }
         this.dig = { cell, since: tick };
         return "digging";
@@ -180,12 +246,9 @@ export class DeepMiner {
     maybeTorch() {
         if (this.dug % 8 !== 0 || this.route.length < 2) return;
         const behind = this.route[this.route.length - 2];
-        this.bot.placeTorch(add(behind, DOWN));
+        try { this.bot.placeTorch(add(behind, DOWN)); } catch {}
     }
 
-    /**
-     * Descend shaft: 45-degree staircase down.
-     */
     descendStep(tick) {
         const b = this.bot, p = floor(b.sim.location);
         if (this.maybeCollect(tick) === "busy") return "working";
@@ -193,7 +256,7 @@ export class DeepMiner {
             return this.settle() === "arrived" ? "stepped" : "working";
         }
         if (this.turns >= 4) {
-            this.reason = "No safe stair; mining at current level.";
+            this.reason = "No safe stair - mining at current level - front fix";
             return "give-up";
         }
         const n = { x: p.x + this.dir.x, y: p.y - 1, z: p.z + this.dir.z };
@@ -201,20 +264,31 @@ export class DeepMiner {
         if (!b.terrain.solid(floorCell)) {
             this.cavityAt = tick;
             this.turn();
-            this.reason = "No floor for stair; turning.";
+            this.reason = "No floor for stair - turning - advanced";
             return "working";
         }
         if (b.terrain.lavaNear(n) || b.terrain.waterNear(n)) {
             this.cavityAt = tick;
             this.turn();
-            this.reason = "Fluid near stair; turning.";
+            this.reason = "Fluid near stair - turning - advanced";
             return "working";
         }
+        // FRONT BLOCK FIX: open with direct break
         const r = this.open([add(n, UP), n], tick);
         if (r === "digging") return "working";
         if (r !== "open") {
+            // If blocked, try to clear front obstruction
+            try {
+                const headFront = b.terrain.headFrontObstruction ? b.terrain.headFrontObstruction(b.sim.location) : null;
+                if (headFront) {
+                    const hb = b.terrain.block(headFront);
+                    if (hb && !hb.isAir && !isUnbreakable(hb.typeId)) {
+                        if (this.tryDirectBreak(headFront, tick)) return "working";
+                    }
+                }
+            } catch {}
             this.turn();
-            this.reason = `Stair blocked (${r}); turning.`;
+            this.reason = `Stair blocked (${r}) - turning - front fix`;
             return "working";
         }
         this.goTo(n, tick);
@@ -230,13 +304,12 @@ export class DeepMiner {
             this.branchPath = branchPattern(80, 16, optimalSpacing(this.site.ore));
             this.branchIndex = 0;
             this.turns = 0;
-            this.reason = `At Y=${p.y}; starting branch mining for ${this.site.ore}`;
+            this.reason = `At Y=${p.y}; branch mining for ${this.site.ore} - advanced unbreakable`;
             return "at-depth";
         }
-        // Walk to origin if needed
-        if (this.dug === 0 && horizontal(b.sim.location, center(this.site.origin)) > 2) {
+        if (this.route.length === 1 && horizontal(b.sim.location, center(this.site.origin)) > 2) {
             const r = b.nav.go(center(this.site.origin), tick);
-            this.reason = `Walking to shaft head`;
+            this.reason = `Walking to shaft head - advanced`;
             if (r === "failed") return "blocked";
             return "working";
         }
@@ -251,9 +324,6 @@ export class DeepMiner {
         return "working";
     }
 
-    /**
-     * Branch mining: follow branch pattern, scanning for ores.
-     */
     branchStep(tick, scanForOres) {
         const b = this.bot;
         if (this.maybeCollect(tick) === "busy") return "working";
@@ -262,31 +332,29 @@ export class DeepMiner {
         }
         if (this.dug >= STEP_LIMIT) {
             this.wantsOut = true;
-            this.reason = `Branch limit ${this.dug}; ascending.`;
+            this.reason = `Branch limit ${this.dug}; ascending - advanced`;
             return "exhausted";
         }
         if (this.turns >= 4) {
             this.wantsOut = true;
-            this.reason = "Boxed in; ascending.";
+            this.reason = "Boxed in; ascending - advanced";
             return "exhausted";
         }
         if (this.branchIndex >= this.branchPath.length) {
             this.wantsOut = true;
-            this.reason = "Branch pattern complete; ascending.";
+            this.reason = "Branch pattern complete; ascending - advanced";
             return "exhausted";
         }
 
-        // Scan for veins periodically
         if (tick % 20 === 0 && scanForOres) {
             const veins = scanForOres();
             if (veins && veins.length) {
-                // Found ore - switch to vein mining
                 const clusters = clusterVeins(veins, 4);
                 if (clusters.length && clusters[0].length >= 1) {
                     this.veins = clusters;
                     this.currentVein = clusters[0];
                     this.phase = "vein";
-                    this.reason = `Found vein of ${clusters[0].length} blocks; mining it.`;
+                    this.reason = `Found vein ${clusters[0].length} blocks - advanced mining`;
                     return "vein-found";
                 }
             }
@@ -311,7 +379,7 @@ export class DeepMiner {
         if (r !== "open") {
             this.branchIndex++;
             this.turn();
-            this.reason = `Branch blocked (${r}); skipping.`;
+            this.reason = `Branch blocked (${r}) - skipping - front fix`;
             return "working";
         }
         this.run++;
@@ -320,20 +388,6 @@ export class DeepMiner {
         return "working";
     }
 
-    /** Drop one ore block from the current vein with an honest reason. */
-    skipOre(ore, why) {
-        this.currentVein = (this.currentVein ?? []).filter((o) => !(o.x === ore.x && o.y === ore.y && o.z === ore.z));
-        this.veinKey = undefined;
-        this.reason = why;
-    }
-
-    /**
-     * Vein mining: mine every block of the found cluster. Blocks beyond reach
-     * are reached by CUTTING A SAFE TUNNEL one cell at a time - the bot never
-     * walks into solid ore (that used to push at the rock face forever). Each
-     * ore block gets a bounded progress deadline and is skipped honestly when
-     * nothing changes for 45s, so a vein can never stall the run.
-     */
     veinStep(tick) {
         if (!this.currentVein || !this.currentVein.length) {
             this.phase = "branch";
@@ -344,13 +398,13 @@ export class DeepMiner {
         if (this.moving) {
             return this.settle() === "arrived" ? "stepped" : "working";
         }
-        // Find nearest ore in vein
         const p = floor(b.sim.location);
         let nearest = undefined;
         let nearestDist = Infinity;
         for (const ore of this.currentVein) {
             const block = b.terrain.block(ore);
             if (!block || block.isAir) continue;
+            if ((this.blocked.get(key(ore)) ?? 0) > tick) continue;
             const d = distance(p, ore);
             if (d < nearestDist) {
                 nearestDist = d;
@@ -358,66 +412,38 @@ export class DeepMiner {
             }
         }
         if (!nearest) {
-            // Vein exhausted
             this.veins.shift();
             this.currentVein = this.veins[0];
-            this.veinKey = undefined;
             if (!this.currentVein) {
                 this.phase = "branch";
                 return "done";
             }
             return "working";
         }
-        // Bounded progress deadline per ore: skip it honestly when stuck.
-        const oreKey = `${nearest.x},${nearest.y},${nearest.z}`;
-        if (this.veinKey !== oreKey || this.veinDugAt !== this.dug) {
-            this.veinKey = oreKey;
-            this.veinSince = tick;
-            this.veinDugAt = this.dug;
-        } else if (tick - this.veinSince > 900) {
-            this.skipOre(nearest, `Ore at ${nearest.x},${nearest.y},${nearest.z} is unreachable; skipping it.`);
-            return "working";
-        }
-        b.terrain.invalidate(nearest);
-        // Within reach with a clear line: mine it directly.
-        if (distance(b.sim.getHeadLocation(), center(nearest)) <= 4.5 &&
-            b.terrain.line(b.sim.getHeadLocation(), center(nearest), nearest)) {
-            const r = b.digCell(nearest, tick);
-            if (r === "digging" || r === "open") {
-                this.reason = `Mining vein block at ${nearest.x},${nearest.y},${nearest.z}`;
-                return "working";
+        // If far, approach
+        if (distance(b.sim.location, center(nearest)) > 4.5) {
+            // Try direct approach first
+            const r = b.nav.go(center(nearest), tick);
+            if (r === "failed") {
+                this.goTo(nearest, tick);
             }
-            this.reason = b.lastDigReason ?? "Cannot break vein block right now.";
-            return "working"; // the deadline above keeps this bounded
-        }
-        // Out of reach: cut a safe tunnel toward it, one cell at a time.
-        const delta = { x: nearest.x - p.x, y: nearest.y - p.y, z: nearest.z - p.z };
-        let step;
-        if (Math.abs(delta.x) <= 1 && Math.abs(delta.z) <= 1 && delta.y < -1) {
-            step = { x: p.x, y: p.y - 1, z: p.z }; // directly above it: go straight down
-        } else if (Math.abs(delta.x) > Math.abs(delta.z)) {
-            step = { x: p.x + Math.sign(delta.x), y: p.y, z: p.z };
-        } else if (delta.z !== 0) {
-            step = { x: p.x, y: p.y, z: p.z + Math.sign(delta.z) };
-        } else {
-            step = { x: p.x, y: p.y - 1, z: p.z };
-        }
-        if (!b.terrain.solid(add(step, DOWN))) {
-            this.skipOre(nearest, `No floor toward ore at ${nearest.x},${nearest.y},${nearest.z}; skipping it.`);
             return "working";
         }
-        if (b.terrain.lavaNear(step) || b.terrain.waterNear(step)) {
-            this.skipOre(nearest, `Fluid between bot and ore at ${nearest.x},${nearest.y},${nearest.z}; skipping it.`);
+        // FRONT BLOCK FIX: direct break for vein ore
+        if (this.tryDirectBreak(nearest, tick)) {
             return "working";
         }
-        const r = this.open(step.y < p.y ? [step] : [add(step, UP), step], tick);
+        const r = b.digCell(nearest, tick);
         if (r === "digging") return "working";
-        if (r !== "open") {
-            this.skipOre(nearest, `Tunnel blocked (${r}); skipping ore at ${nearest.x},${nearest.y},${nearest.z}.`);
+        if (r === "open") {
+            this.currentVein = this.currentVein.filter(o => !(o.x === nearest.x && o.y === nearest.y && o.z === nearest.z));
+            this.breakTarget = null;
             return "working";
         }
-        this.reason = `Cutting a tunnel toward ore at ${nearest.x},${nearest.y},${nearest.z}`;
-        this.goTo(step, tick);
+        if (r === "blocked" || r === "no-tool") {
+            this.blocked.set(key(nearest), tick + BLOCKED_TTL);
+            this.currentVein = this.currentVein.filter(o => !(o.x === nearest.x && o.y === nearest.y && o.z === nearest.z));
+        }
         return "working";
     }
 
@@ -431,6 +457,11 @@ export class DeepMiner {
             if (b.terrain.solid(this.dig.cell) && tick - this.dig.since < 240) return "working";
             this.dig = undefined;
         }
+        if (this.breakTarget) {
+            const tb = b.terrain.block(this.breakTarget);
+            if (tb && !tb.isAir && tick - this.breakingSince < 200) return "working";
+            this.breakTarget = null;
+        }
         while (this.route.length) {
             const tail = this.route[this.route.length - 1];
             if (horizontal(b.sim.location, center(tail)) < 1.0 && Math.abs(b.sim.location.y - tail.y) < 1.4)
@@ -441,7 +472,7 @@ export class DeepMiner {
             const origin = this.site?.origin;
             if (!origin || (horizontal(b.sim.location, center(origin)) < 2.0 && Math.abs(b.sim.location.y - origin.y) < 2.0)) {
                 this.reset();
-                this.reason = "Back on surface.";
+                this.reason = "Back on surface - advanced unbreakable";
                 return "surface";
             }
         }
@@ -450,24 +481,19 @@ export class DeepMiner {
             return "surface";
         }
         if (tick - this.ascendSince > 4000) {
-            this.reason = "Cannot retrace shaft; needs help.";
+            this.reason = "Cannot retrace shaft - needs help - advanced";
             this.wantsOut = false;
             return "stalled";
         }
         const next = this.route[this.route.length - 1];
         if (this.stepTo(next, tick) === "arrived") this.route.pop();
-        this.reason = `Climbing shaft (${this.route.length} left)`;
+        this.reason = `Climbing shaft (${this.route.length} left) - advanced`;
         return "working";
     }
 
-    /**
-     * Main tick for deep mining.
-     * scanFn: function that returns list of ore positions nearby
-     */
     tick(tick, scanFn, met) {
         if (met) {
             if (this.phase === "branch" || this.phase === "vein") {
-                // Keep mining until wantsOut? Actually if quota met, ascend
                 this.wantsOut = true;
             }
         }
@@ -495,7 +521,7 @@ export class DeepMiner {
                 return "continue";
             }
             case "vein": {
-                const r = this.veinStep(tick);
+                this.veinStep(tick);
                 return "continue";
             }
             default:

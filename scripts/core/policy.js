@@ -198,6 +198,18 @@ for (const [block, drops] of [
     ["oak_leaves", "oak_sapling"],
     ["birch_leaves", "birch_sapling"],
     ["spruce_leaves", "spruce_sapling"],
+    // Desert / any wood fallback
+    ["deadbush", "stick"],
+    ["dead_bush", "stick"],
+    ["short_grass", "wheat_seeds"],
+    ["tallgrass", "wheat_seeds"],
+    ["fern", "wheat_seeds"],
+    ["crimson_stem", "crimson_stem"],
+    ["warped_stem", "warped_stem"],
+    ["crimson_hyphae", "crimson_stem"],
+    ["warped_hyphae", "warped_stem"],
+    ["bamboo_block", "bamboo"],
+    ["bamboo_mosaic", "bamboo"],
 ]) {
     MINE["minecraft:" + block] = {
         drops: "minecraft:" + drops,

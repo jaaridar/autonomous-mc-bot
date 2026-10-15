@@ -137,20 +137,28 @@ export class Equipment {
         const counts = this.bag.counts();
         const hasWeapon = this.hasWeapon();
 
-        // If no weapon at all, emergency quick tool
+        // If no weapon at all, emergency quick tool - UNBREAKABLE: any wood, desert bushes
         if (!hasWeapon) {
-            // Check what we can craft immediately
-            const logs = (counts["minecraft:oak_log"] ?? 0) + (counts["minecraft:birch_log"] ?? 0) + (counts["minecraft:spruce_log"] ?? 0);
+            // Check what we can craft immediately - any log type, any wood, even desert
+            const logs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood") || k.includes("_stem") || k.includes("_hyphae")).reduce((a,[,v])=>a+v,0);
             const planks = Object.entries(counts).filter(([k]) => k.includes("_planks")).reduce((a,[,v])=>a+v,0);
             const sticks = counts["minecraft:stick"] ?? 0;
             const cobble = counts["minecraft:cobblestone"] ?? 0;
             const iron = counts["minecraft:iron_ingot"] ?? 0;
+            const hasDeadBush = (counts["minecraft:deadbush"] ?? 0) + (counts["minecraft:dead_bush"] ?? 0);
 
-            if (logs >= 1 && planks < 4) return { need: "minecraft:oak_planks", reason: "need planks for quick weapon", priority: 1000 };
-            if (planks >= 2 && sticks < 2) return { need: "minecraft:stick", reason: "need sticks for quick weapon", priority: 1000 };
-            if (planks >= 2 && sticks >= 2 && !hasWeapon) {
-                // Can craft wooden sword or axe
-                return { need: "minecraft:wooden_sword", reason: "no weapon - craft wooden sword #1 priority", priority: 1000, craft: true };
+            if (logs >= 1 && planks < 4) return { need: "minecraft:oak_planks", reason: "need planks for quick weapon - any wood works", priority: 1000 };
+            if (planks >= 2 && sticks < 2) return { need: "minecraft:stick", reason: "need sticks for quick weapon - any wood works", priority: 1000 };
+            if ((planks >= 2 || hasDeadBush >= 1) && sticks < 2) {
+                // In desert, dead bush gives sticks - try to get sticks via mining dead bush
+                if (sticks < 2 && hasDeadBush === 0) {
+                    // Need to mine dead bush
+                    return { need: "minecraft:stick", reason: "need sticks from dead bush in desert", priority: 1000 };
+                }
+            }
+            if ((planks >= 2 && sticks >= 1) || (sticks >= 1 && hasDeadBush >= 1) && !hasWeapon) {
+                // Can craft wooden sword or axe - any wood works
+                return { need: "minecraft:wooden_sword", reason: "no weapon - craft wooden sword #1 priority - any wood", priority: 1000, craft: true };
             }
             if (cobble >= 3 && sticks >= 2) {
                 return { need: "minecraft:stone_sword", reason: "upgrade to stone sword", priority: 900, craft: true };
