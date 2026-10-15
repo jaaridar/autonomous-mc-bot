@@ -606,6 +606,28 @@ export class Bot {
         // Allow all dimensions: overworld, nether, end - for full-game speedrun
         this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
+
+        // ANTI-DROWN: if in water, immediately handle swimming - never drown
+        if (this.sim.isInWater) {
+            // Force swimming behavior - jump every tick to stay at surface
+            if (tick % 5 === 0) {
+                try { this.sim.jump(); } catch {}
+            }
+            // If head in water, urgent surface
+            try {
+                if (this.terrain.headInWater(this.sim)) {
+                    this.reason = "In water head submerged - urgent surfacing - anti-drown swimming fix";
+                    try { this.sim.jump(); } catch {}
+                    const cur = this.sim.location;
+                    try {
+                        this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
+                    } catch {}
+                    // Try boat immediately when drowning
+                    const boatRes = this.escaper.boat(tick);
+                    if (boatRes) return;
+                }
+            } catch {}
+        }
         this.nav.parkour = this.settings.parkour;
         this.nav.allowBridge = this.settings.bridge;
         this.observe(tick);
@@ -1543,6 +1565,26 @@ export class Bot {
      * - Deep mining delegates to AdvancedMiner / DeepMiner
      */
     mine(m, tick) {
+        // ANTI-DROWN: if in water while mining, surface first - never drown
+        if (this.sim.isInWater) {
+            try { this.sim.jump(); } catch {}
+            if (this.terrain.headInWater(this.sim)) {
+                this.reason = "Mining interrupted - in water head submerged, surfacing - anti-drown";
+                const cur = this.sim.location;
+                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch {}
+                const boatRes = this.escaper.boat(tick);
+                if (boatRes) return false;
+                return false;
+            }
+            // Try to get to shore while mining
+            const shore = this.terrain.shoreNear(this.sim.location, 32);
+            if (shore) {
+                this.reason = "Mining interrupted - in water, swimming to shore first - anti-drown";
+                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch {}
+                if (tick % 10 === 0) { try { this.sim.jump(); } catch {} }
+                return false;
+            }
+        }
         const stock = this.bag.counts();
         // Met check
         let met = false;
