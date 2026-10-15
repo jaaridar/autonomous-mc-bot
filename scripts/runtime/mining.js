@@ -71,8 +71,7 @@ export class Miner {
         }
 
         try { bot.sim.stopBreakingBlock(); } catch {}
-        bot.sim.lookAtBlock(bot.host.relative(center(cell)));
-        if (!bot.sim.breakBlock(bot.host.relative(cell))) return false;
+        if (bot.breakThrough(cell) !== "digging") return false;
         this.breakTarget = { ...cell };
         this.breakingSince = tick;
         this.reason = `Breaking front ${b.typeId} at ${cell.x},${cell.y},${cell.z} - miner front fix`;
@@ -134,7 +133,16 @@ export class Miner {
                 this.dig = undefined;
                 this.reason = "Digging stalled; turning - front fix";
                 return "stalled";
-            } else {
+            }
+            else if (tick - (this.dig.retryAt ?? this.dig.since) >= 90) {
+                // One absorbed swing must not freeze the tunnel: re-issue the dig.
+                this.dig.retryAt = tick;
+                const rr = b.digCell(this.dig.cell, tick);
+                if (rr === "open") { this.dig = undefined; return "open"; }
+                if (rr !== "digging") { this.dig = undefined; this.reason = b.lastDigReason; return rr; }
+                return "digging";
+            }
+            else {
                 return "digging";
             }
         }

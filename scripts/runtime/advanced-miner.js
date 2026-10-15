@@ -52,6 +52,7 @@ export class AdvancedMiner {
         this.dig = null;
         this.cavityAt = 0;
         this.refills = 0;
+        this.startCount = 0;
     }
 
     reset() {
@@ -93,6 +94,7 @@ export class AdvancedMiner {
         this.dig = null;
         this.cavityAt = 0;
         this.refills = 0;
+        this.startCount = 0;
     }
 
     start(block, amount, tick) {
@@ -100,6 +102,8 @@ export class AdvancedMiner {
         this.requestedBlock = block;
         this.requestedItem = MINE[block]?.drops;
         this.amount = amount;
+        const startStock = this.bot.bag.counts();
+        this.startCount = Object.entries(startStock).filter(([k]) => k === this.requestedItem || (this.requestedBlock && k === this.requestedBlock)).reduce((a, [, v]) => a + v, 0);
         this.treeMode = /(_log|_wood|_stem|_hyphae)$/.test(block);
         this.underground = !!(this.requestedItem && (this.isUndergroundOre(this.requestedItem) || this.isBulk(this.requestedItem)));
         this.scan = new BlockScan(this.bot.sim.location, this.underground ? 8 : 12);
@@ -117,7 +121,8 @@ export class AdvancedMiner {
     }
 
     isUndergroundOre(item) {
-        return /_(ore|debris)/.test(item) || ["minecraft:raw_iron","minecraft:raw_gold","minecraft:raw_copper","minecraft:diamond","minecraft:redstone","minecraft:lapis_lazuli"].includes(item);
+        const orePattern = /(_ore|_debris)/;
+        return orePattern.test(item) || ["minecraft:raw_iron","minecraft:raw_gold","minecraft:raw_copper","minecraft:diamond","minecraft:redstone","minecraft:lapis_lazuli"].includes(item);
     }
 
     isBulk(item) {

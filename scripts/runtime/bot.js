@@ -426,6 +426,40 @@ export class Bot {
             return (this.safeToMine(p) && (this.mode === "survival" || this.mode === "starter" ? [...CARDINAL, { x: 0, y: 1, z: 0 }].some((d) => this.terrain.block(add(p, d))?.isAir) : this.terrain.line(this.sim.getHeadLocation(), add(p, { x: 0.5, y: 0.5, z: 0.5 }), p)));
         });
     }
+    /**
+     * Start breaking `cell`. If the swing is absorbed by a solid block right in
+     * front of the head - the classic "cannot mine the front block, it stops"
+     * report - clear that one blocker and let the caller retry the real cell.
+     * Only reacts on actual failure, and only when digging below the feet, so
+     * shaft walls are never dug preemptively.
+     */
+    breakThrough(cell) {
+        const c = this.host.relative(center(cell));
+        this.sim.lookAtBlock(c);
+        let started = false;
+        try { started = this.sim.breakBlock(c); } catch { started = false; }
+        if (started) return "digging";
+        if (cell.y < floor(this.sim.location).y) {
+            const blocker = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+            if (blocker && !(blocker.x === cell.x && blocker.y === cell.y && blocker.z === cell.z)) {
+                const bb = this.terrain.block(blocker);
+                const worthBreaking = bb && !bb.isAir && !bb.isLiquid && !isUnbreakable(bb.typeId) &&
+                    bb.typeId !== "minecraft:obsidian" && bb.typeId !== "minecraft:crying_obsidian" &&
+                    retainScore(bb.typeId) < 80;
+                if (worthBreaking) {
+                    const bc = this.host.relative(center(blocker));
+                    this.sim.lookAtBlock(bc);
+                    try {
+                        if (this.sim.breakBlock(bc)) {
+                            this.lastDigReason = `Cleared ${bb.typeId} blocking the swing.`;
+                            return "digging";
+                        }
+                    } catch {}
+                }
+            }
+        }
+        return "blocked";
+    }
     digCell(cell, tick) {
         const b = this.terrain.block(cell);
         if (!b || b.isAir) return "open";
@@ -438,8 +472,7 @@ export class Bot {
             if (!this.bag.tool(rule.tool, rule.tier)) { this.lastDigReason = `Need a ${rule.tool} tier ${rule.tier} to dig ${b.typeId}.`; return "no-tool"; }
         } else if (rule.tool === "axe") this.bag.tool("axe");
         else if (rule.tool === "shovel") this.bag.tool("shovel");
-        this.sim.lookAtBlock(this.host.relative(center(cell)));
-        if (!this.sim.breakBlock(this.host.relative(center(cell)))) { this.lastDigReason = `${b.typeId} is out of reach.`; return "unreachable"; }
+        if (this.breakThrough(cell) !== "digging") { this.lastDigReason = `${b.typeId} is out of reach.`; return "unreachable"; }
         return "digging";
     }
     placeTorch(support) {
@@ -496,7 +529,7 @@ export class Bot {
             if (r === "surface") {
                 const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
                 this.miner.reset();
-                if (why) { this.blockTask(why + " Climbed out; resume to try a new shaft.", "manual"); return "blocked"; }
+                if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
                 return "done";
             }
             if (r === "stalled") { this.record("Miner stalled: " + this.miner.reason + ", retrying"); this.miner.reset(); return "done"; }
@@ -655,6 +688,17 @@ export class Bot {
             }
         }
 
+        // Cached threatInfo for this tick. Declared before first use: referencing
+        // it earlier in the temporal dead zone threw a ReferenceError that was
+        // swallowed by the catch and silently disabled the danger fast-path.
+        let cachedThreatInfo = null;
+        const getCachedThreat = () => {
+            if (!cachedThreatInfo) {
+                try { cachedThreatInfo = this.terrain.threatInfo(this.sim, owner); } catch { cachedThreatInfo = { list: [], count: 0, nearest: null, closest: Infinity, ranged:0, explosive:0, melee:0, bombNear:false, underFire:false }; }
+            }
+            return cachedThreatInfo;
+        };
+
         // WORLD-CLASS SURVIVAL MASTER - handles all 80 scenarios first - ROBUST QUICK: tick every 10 ticks unless danger
         try {
             const shouldTickSurvival = (tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || (this.survivalMaster.fallStartY !== null);
@@ -716,14 +760,7 @@ export class Bot {
             } catch {}
         }
 
-        // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING - ROBUST QUICK: cache threatInfo to avoid double entity scan
-        let cachedThreatInfo = null;
-        const getCachedThreat = () => {
-            if (!cachedThreatInfo) {
-                try { cachedThreatInfo = this.terrain.threatInfo(this.sim, owner); } catch { cachedThreatInfo = { list: [], count: 0, nearest: null, closest: Infinity, ranged:0, explosive:0, melee:0, bombNear:false, underFire:false }; }
-            }
-            return cachedThreatInfo;
-        };
+        // WORLD-CLASS FOOD & COMBAT READINESS + ADAPTIVE PLANNING
         try {
             const counts = this.bag.counts();
             const curHealth = this.sim.getComponent(EntityComponentTypes.Health)?.currentValue ?? 20;
@@ -851,9 +888,10 @@ export class Bot {
             if (this.settings.defend && this.golem && this.golem.tick(tick)) return;
         } catch {}
 
-        // FOOD HEALING COMBAT READINESS
+        // FOOD HEALING COMBAT READINESS (10-tick cadence; it counted the whole
+        // inventory and read components on every single tick before)
         try {
-            if (this.food && this.food.tick(tick)) return;
+            if (this.food && tick % 10 === 0 && this.food.tick(tick)) return;
         } catch {}
 
         // BUCKET ACQUISITION & NETHER PREPARATION
@@ -1547,7 +1585,7 @@ export class Bot {
      * Enhanced mining with obstruction clearing, tree handling, bridging, etc.
      */
     /**
-     * Enhanced mining - ROBUST QUICK EXTREMELY v1.2.1
+     * Enhanced mining - ROBUST QUICK EXTREMELY v1.2.3 (front-block fix merged with reactive clearing, vein tunneling, bounded skips)
      * Fixes: idle after breaking log, extremely slow, auto shutdown
      * - Fast treeMode: after breaking log, immediately scan adjacent logs within 3 blocks
      * - Reduced timeouts: wood 80 ticks, stone 150, ore 200 (was 450)
@@ -1765,9 +1803,12 @@ export class Bot {
             const r = this.digCell(cell, tick);
             if (r === "digging") { this.reason = `Clearing obstruction ${b.typeId} to reach ${m.block} - advanced`; return false; }
             if (r === "open") { obs.cells.shift(); return false; }
-            if (r === "no-tool" || r === "lava" || r === "water") {
-                m.blocked.set(key(obs.target), tick + BLOCKED_TTL); m.target = undefined; this.obstructionClear = undefined; return false;
+            if (r === "no-tool" || r === "lava" || r === "water" || r === "unreachable" || r === "refused") {
+                m.blocked.set(key(obs.target), tick + BLOCKED_TTL);
+                m.target = undefined; this.obstructionClear = undefined; return false;
             }
+            obs.tries = (obs.tries ?? 0) + 1;
+            if (obs.tries > 8) { m.blocked.set(key(obs.target), tick + BLOCKED_TTL); m.target = undefined; this.obstructionClear = undefined; }
             return false;
         }
 
@@ -1846,7 +1887,6 @@ export class Bot {
             m.scan = this.newScan(m);
             return false;
         }
-
         // ===== FRONT BLOCK FIX: directly handle front block without nav failure =====
         // If target is front block (within 5.5 blocks, same level +/-2, horizontal <=4), try direct break
         const head = this.sim.getHeadLocation();
@@ -1856,20 +1896,10 @@ export class Bot {
         const isFrontBlock = distHead <= 5.5 && Math.abs(target.y - selfFloor.y) <= 2 && horizontal(target, selfFloor) <= 4;
 
         if (isFrontBlock) {
-            // Check head front obstruction first - clear it if not target itself
-            try {
-                const headObstruct = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
-                if (headObstruct && !(headObstruct.x === target.x && headObstruct.y === target.y && headObstruct.z === target.z)) {
-                    const hb = this.terrain.block(headObstruct);
-                    if (hb && !hb.isAir && hb.isSolid) {
-                        const r = this.digCell(headObstruct, tick);
-                        if (r === "digging") {
-                            this.reason = `Clearing front ${hb.typeId} at ${headObstruct.x},${headObstruct.y},${headObstruct.z} to reach ${m.block} - front fix`;
-                            return false;
-                        }
-                    }
-                }
-            } catch {}
+            // Front blocks are NOT cleared preemptively here - that dug the shaft
+            // walls on every descent and could loop forever when the clear dig
+            // came back "unreachable". breakThrough() below clears a blocker only
+            // when a swing is actually absorbed, then retries the real target.
             // Check obstructions below if mining down
             if (target.y < selfFloor.y) {
                 try {
@@ -1902,8 +1932,7 @@ export class Bot {
                 }
             }
             if (!m.breakingSince) {
-                this.sim.lookAtBlock(this.host.relative(target));
-                if (!this.sim.breakBlock(this.host.relative(target))) {
+                if (this.breakThrough(target) !== "digging") {
                     // If direct break fails, fall through to normal approach logic
                 } else {
                     m.breakingSince = tick;
@@ -1922,19 +1951,9 @@ export class Bot {
             }
         }
 
-        // Normal safeToMine check (non-front)
+        // Normal safeToMine check (non-front). Head-front walls are not cleared
+        // preemptively - breakThrough() handles a real absorbed swing.
         if (!isFrontBlock) {
-            if (target.y < selfFloor.y) {
-                const headObstruct = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
-                if (headObstruct) {
-                    const hb = this.terrain.block(headObstruct);
-                    if (hb && !hb.isAir) {
-                        this.obstructionClear = { target: { ...target }, cells: [headObstruct], since: tick };
-                        this.reason = `Clearing head front ${hb.typeId} at ${headObstruct.x},${headObstruct.y},${headObstruct.z} blocks going down - front fix`;
-                        return false;
-                    }
-                }
-            }
             if (!this.safeToMine(target)) {
                 const obstructions = this.terrain.obstructionsBelow(this.sim.location, target);
                 if (obstructions.length > 0 && obstructions.length <= 3) {
@@ -2036,8 +2055,7 @@ export class Bot {
             }
         }
         if (!m.breakingSince) {
-            this.sim.lookAtBlock(this.host.relative(target));
-            if (!this.sim.breakBlock(this.host.relative(target))) { m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; return false; }
+            if (this.breakThrough(target) !== "digging") { m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; return false; }
             m.breakingSince = tick;
         } else {
             const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
