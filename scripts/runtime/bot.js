@@ -22,6 +22,7 @@ import { Combat } from "./combat.js";
 import { Looting } from "./looting.js";
 import { Parkour } from "./parkour.js";
 import { DeepMiner } from "./deepminer.js";
+import { AdvancedMiner } from "./advanced-miner.js";
 import { ResourceManager } from "./resource.js";
 import { SpeedrunDirector } from "./speedrun.js";
 import { WorldAwareness } from "./world-awareness.js";
@@ -151,6 +152,7 @@ export class Bot {
         this.looting = new Looting(this);
         this.parkour = new Parkour(this);
         this.deepMiner = new DeepMiner(this);
+        this.advancedMiner = new AdvancedMiner(this);
         this.resource = new ResourceManager(this);
         this.speedrun = new SpeedrunDirector(this);
         this.awareness = new WorldAwareness(this);
@@ -227,6 +229,7 @@ export class Bot {
         this.escaper.reset();
         this.miner.reset();
         this.deepMiner.reset();
+        this.advancedMiner?.reset();
         this.builder.resetPillar?.();
         this.combat.reset();
         this.looting.reset();
@@ -334,6 +337,7 @@ export class Bot {
         this.escaper.reset();
         this.miner.reset();
         this.deepMiner.reset();
+        this.advancedMiner?.reset();
         this.combat.reset();
         this.builder.resetPillar?.();
         this.awareness?.reset();
@@ -1305,9 +1309,17 @@ export class Bot {
      * - NoTaskSince 200 for wood, 400 for others (was 800)
      * - Fast adjacent log search to avoid idle
      */
+    /**
+     * REWRITTEN MINING - UNBREAKABLE FRONT BLOCK FIX + DEEP MINING
+     * - Front block: directly break if within 5.5 blocks, no nav approach needed
+     * - Head front obstruction: clear it before trying to break front
+     * - Tree mode: fast adjacent log scan
+     * - Any wood fallback + desert bushes
+     * - Deep mining delegates to AdvancedMiner / DeepMiner
+     */
     mine(m, tick) {
         const stock = this.bag.counts();
-        // ROBUST: For treeMode, count broken + loot + inventory gained to avoid idle waiting for drops
+        // Met check
         let met = false;
         if (m.item) {
             const gained = amountOf(stock, m.item) - m.startCount;
@@ -1320,25 +1332,34 @@ export class Bot {
             met = m.broken >= m.amount;
         }
         if (met && this.bag.container.emptySlotsCount > 0) {
-            // FAST: for tree mode, don't wait for drops if adjacent logs exist
             if (m.treeMode) {
                 const adj = this.findAdjacentLogs(m, tick);
                 if (adj) {
                     m.sweepUntil = undefined;
                     m.target = adj;
                     m.type = this.terrain.block(adj)?.typeId;
-                    this.reason = `Tree: fast continue to adjacent log ${adj.x},${adj.y},${adj.z}`;
+                    this.reason = `Tree: fast continue to adjacent log ${adj.x},${adj.y},${adj.z} - advanced`;
                     return false;
                 }
             }
-            if (m.sweepUntil === undefined) m.sweepUntil = tick + 20; // FAST: was 60, now 20 = 1 sec
+            if (m.sweepUntil === undefined) m.sweepUntil = tick + 20;
             if (tick < m.sweepUntil) {
                 const stray = this.drops.near(m, this.sim.location, 10, tick);
-                if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 15; } // FAST: was 40, now 15
+                if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 15; }
                 if (this.drops.run(m, tick)) return false;
             }
         }
+        // Delegate underground to deep miners (new AdvancedMiner preferred)
         if (m.underground) {
+            // Try AdvancedMiner if active or we want to use it for new deep logic
+            if (this.advancedMiner && this.advancedMiner.phase !== "idle" && this.advancedMiner.requestedBlock) {
+                const done = this.advancedMiner.tick(tick);
+                if (done) {
+                    this.advancedMiner.reset();
+                    return true;
+                }
+                return false;
+            }
             const deep = this.deepMine(m, tick, met);
             if (deep === "done") return true;
             if (deep === "blocked") { 
@@ -1356,69 +1377,62 @@ export class Bot {
             return false; 
         }
 
-        // ULTRA FAST: noTargetSince 80 for wood, 150 for others - avoid idle watching
         const noTargetThreshold = m.treeMode ? 80 : m.cropMode ? 80 : 150;
         if (tick - m.noTargetSince > noTargetThreshold && !m.returning) {
             if (m.underground) {
                 if (!this.deepMiner.active) {
                     this.miner.wantsOut = true;
                     m.noTargetSince = tick;
-                    this.reason = "No ore in range for a while; climbing out to try elsewhere.";
+                    this.reason = "No ore in range, climbing out - advanced";
                     return false;
                 }
             }
-            // UNBREAKABLE: if oak_log not found, try ANY wood, then desert bushes for sticks, then widen
             if (isWoodRequest(m.block)) {
-                // Try to find ANY wood type nearby, not just oak
                 try {
                     const anyWood = this.terrain.scanOres(this.sim.location, 16, (type) => isAnyWood(type), 400);
                     if (anyWood.length > 0) {
                         m.target = anyWood[0];
                         m.type = this.terrain.block(anyWood[0])?.typeId;
                         m.noTargetSince = tick;
-                        this.reason = `No ${m.block} but found ${m.type} at ${anyWood[0].x},${anyWood[0].y},${anyWood[0].z} - any wood acceptable - unbreakable`;
+                        this.reason = `No ${m.block} but found ${m.type} at ${anyWood[0].x},${anyWood[0].y},${anyWood[0].z} - any wood - unbreakable`;
                         return false;
                     }
-                    // Desert fallback: dead bush for sticks
                     const bushes = this.terrain.scanOres(this.sim.location, 16, (type) => type === "minecraft:deadbush" || type === "minecraft:dead_bush" || type === "minecraft:bamboo" || type === "minecraft:cactus", 300);
                     if (bushes.length > 0) {
                         m.target = bushes[0];
                         m.type = this.terrain.block(bushes[0])?.typeId;
                         m.noTargetSince = tick;
-                        this.reason = `No wood, but found ${m.type} for sticks/planks in desert - unbreakable fallback`;
+                        this.reason = `No wood, found ${m.type} desert fallback - unbreakable`;
                         return false;
                     }
                 } catch {}
             }
-            // ROBUST: never manual block for mine mode, always retry with exploring
             if ((this.mode === "survival" || this.mode === "starter" || this.mode === "mine") && m.failures < 40) {
                 m.failures = (m.failures ?? 0) + 1;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
                 try { this.sim.stopBreakingBlock(); } catch {}
                 this.explorer.reset(); this.nav.reset();
-                this.reason = `No ${m.item ?? m.block} nearby, exploring further for ANY wood (${m.failures}/40) - unbreakable`;
+                this.reason = `No ${m.item ?? m.block} nearby, exploring (${m.failures}/40) - advanced`;
                 return false;
             } else {
-                // After many failures, try any wood and widen range
                 try {
                     const anyWood = this.terrain.scanOres(this.sim.location, 32, (type) => isAnyWood(type) || type === "minecraft:deadbush" || type === "minecraft:dead_bush", 600);
                     if (anyWood.length > 0) {
                         m.target = anyWood[0];
                         m.type = this.terrain.block(anyWood[0])?.typeId;
                         m.noTargetSince = tick;
-                        this.reason = `Still no ${m.block}, found ${m.type} in wider 32b search - unbreakable`;
+                        this.reason = `Still no ${m.block}, found ${m.type} 32b - unbreakable`;
                         return false;
                     }
                 } catch {}
                 m.failures = 0;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
                 this.explorer.reset(); this.nav.reset();
-                // Increase range if following and failing
                 if (this.mode === "follow") {
                     this.settings.range = Math.min(512, (this.settings.range ?? 256) + 32);
-                    this.reason = `Still searching for ${m.item ?? m.block}, widening range to ${this.settings.range} - following ${this.ownerName} - unbreakable`;
+                    this.reason = `Still searching for ${m.item ?? m.block}, widening to ${this.settings.range} - following ${this.ownerName} - unbreakable`;
                 } else {
-                    this.reason = `Still searching for ${m.item ?? m.block}, widening search - will take ANY wood - unbreakable`;
+                    this.reason = `Still searching for ${m.item ?? m.block}, widening - ANY wood - unbreakable`;
                 }
                 return false;
             }
@@ -1430,26 +1444,17 @@ export class Bot {
                 const spot = m.peek.next(this.terrain, (type, p) => this.wantedToMine(m, type, p, tick));
                 if (spot) {
                     m.returning = false; m.peek = undefined; m.target = spot; m.approach = undefined; m.approachTry = 0;
-                    this.nav.reset(); this.reason = `Spotted ${m.item ?? m.block} on the way home; going for it.`; return false;
+                    this.nav.reset(); this.reason = `Spotted ${m.item ?? m.block} on way home - advanced`; return false;
                 }
             }
             const home = this.home();
-            this.reason = "Heading home after a fruitless search";
+            this.reason = "Heading home after fruitless search - advanced";
             if (distance(this.sim.location, home) < 4 || this.navTo(home, tick, 3) === "done") {
-                m.returning = false;
-                // ROBUST: retry not manual
-                m.exploring = true; m.noTargetSince = tick;
-                this.explorer.reset();
-                return false;
+                m.returning = false; m.exploring = true; m.noTargetSince = tick; this.explorer.reset(); return false;
             }
             if (this.nav.stuck) {
                 m.returnFails = (m.returnFails ?? 0) + 1;
-                if (m.returnFails >= 8) { 
-                    m.returning = false; 
-                    m.exploring = true;
-                    m.returnFails = 0;
-                    this.explorer.reset();
-                }
+                if (m.returnFails >= 8) { m.returning = false; m.exploring = true; m.returnFails = 0; this.explorer.reset(); }
             } else m.returnFails = 0;
             return false;
         }
@@ -1464,22 +1469,16 @@ export class Bot {
                 if (spot) {
                     m.exploring = false; m.peek = undefined; m.target = spot; m.approach = undefined; m.approachTry = 0;
                     this.explorer.reset(); this.nav.reset();
-                    this.reason = `Spotted ${m.item ?? m.block} while scouting; going for it.`; return false;
+                    this.reason = `Spotted ${m.item ?? m.block} while scouting - advanced`; return false;
                 }
             }
-            this.reason = `Exploring for ${m.item ?? m.block}; visited ${this.explorer.trips} areas`;
+            this.reason = `Exploring for ${m.item ?? m.block}; visited ${this.explorer.trips} areas - advanced`;
             const result = this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, this.settings.range);
             if (result === "blocked") {
                 m.exploring = false; m.peek = undefined;
                 const home = this.home();
-                if (distance(this.sim.location, home) > 24) {
-                    m.returning = true;
-                } else {
-                    // ROBUST: don't block with manual, keep exploring with wider range
-                    m.exploring = true;
-                    this.explorer.reset();
-                    this.reason = `Searched area, widening for ${m.item ?? m.block}`;
-                }
+                if (distance(this.sim.location, home) > 24) m.returning = true;
+                else { m.exploring = true; this.explorer.reset(); this.reason = `Searched area, widening for ${m.item ?? m.block} - advanced`; }
                 return false;
             }
             if (result === "arrived") { m.exploring = false; m.target = undefined; m.approach = undefined; m.scan = this.newScan(m); m.far = undefined; m.blocked.clear(); m.noTargetSince = tick; }
@@ -1488,45 +1487,36 @@ export class Bot {
 
         if (this.drops.run(m, tick)) return false;
 
-        // Handle obstruction clearing phase - QUICK timeout 150 not 300
         if (this.obstructionClear) {
             const obs = this.obstructionClear;
-            if (tick - obs.since > 150) { this.obstructionClear = undefined; this.reason = "Obstruction clear timeout, retrying"; return false; }
+            if (tick - obs.since > 150) { this.obstructionClear = undefined; this.reason = "Obstruction clear timeout - advanced"; return false; }
             if (!obs.cells.length) { this.obstructionClear = undefined; return false; }
             const cell = obs.cells[0];
             const b = this.terrain.block(cell);
-            if (!b || b.isAir || isPassable(b.typeId)) {
-                obs.cells.shift();
-                return false;
-            }
+            if (!b || b.isAir || isPassable(b.typeId)) { obs.cells.shift(); return false; }
             const r = this.digCell(cell, tick);
-            if (r === "digging") { this.reason = `Clearing obstruction ${b.typeId} to reach ${m.block}`; return false; }
+            if (r === "digging") { this.reason = `Clearing obstruction ${b.typeId} to reach ${m.block} - advanced`; return false; }
             if (r === "open") { obs.cells.shift(); return false; }
             if (r === "no-tool" || r === "lava" || r === "water") {
-                m.blocked.set(key(obs.target), tick + BLOCKED_TTL);
-                m.target = undefined; this.obstructionClear = undefined; return false;
+                m.blocked.set(key(obs.target), tick + BLOCKED_TTL); m.target = undefined; this.obstructionClear = undefined; return false;
             }
             return false;
         }
 
         if (!m.target) {
-            // FAST PATH FOR TREE: immediately check adjacent logs within 3 blocks after breaking one
             if (m.treeMode && m.broken > 0) {
                 const adj = this.findAdjacentLogs(m, tick);
                 if (adj) {
-                    m.target = adj;
-                    m.type = this.terrain.block(adj)?.typeId;
-                    m.noTargetSince = tick;
-                    this.reason = `Tree: adjacent log found at ${adj.x},${adj.y},${adj.z} - quick continue`;
-                    return false;
+                    m.target = adj; m.type = this.terrain.block(adj)?.typeId; m.noTargetSince = tick;
+                    this.reason = `Tree: adjacent log ${adj.x},${adj.y},${adj.z} - quick`; return false;
                 }
             }
             if (m.underground && this.miner.active && (tick - this.miner.cavityAt < 500 || this.miner.turns >= 3)) m.target = this.veinScan(m, tick);
-            if (!m.target) m.target = m.scan.next(this.terrain, (type, p) => this.wantedToMine(m, type, p, tick), 384); // QUICK: budget 384 not 600
+            if (!m.target) m.target = m.scan.next(this.terrain, (type, p) => this.wantedToMine(m, type, p, tick), 384);
             const lootReady = m.loot.size > 0 && ((!m.target && m.scan.done) || (m.target && horizontal(m.target, this.sim.location) > 2.5) || tick - (m.lootSince ?? tick) > 120);
             if (lootReady && this.drops.flush(m, tick, 6, 20)) return false;
             if (!m.target && m.scan.done && !m.underground) {
-                if (!m.far || distance(m.farAt, this.sim.location) > 10) { m.far = new BlockScan(this.sim.location, 20); m.farAt = { ...this.sim.location }; m.farUntil = tick + 200; this.reason = `Nothing within 12; sweeping wider for ${m.item ?? m.block}`; }
+                if (!m.far || distance(m.farAt, this.sim.location) > 10) { m.far = new BlockScan(this.sim.location, 20); m.farAt = { ...this.sim.location }; m.farUntil = tick + 200; this.reason = `Nothing within 12; sweeping wider for ${m.item ?? m.block} - advanced`; }
                 if (!m.far.done && tick < m.farUntil) m.target = m.far.next(this.terrain, (type, p) => this.wantedToMine(m, type, p, tick), 512);
             }
             if (!m.target) {
@@ -1540,9 +1530,8 @@ export class Bot {
                         else if (r === "stepped") { m.scan = this.newScan(m); m.wide = undefined; m.far = undefined; }
                     }
                 } else {
-                    // ROBUST: always exploring, never manual block
                     m.exploring = true; m.peek = undefined; this.explorer.reset(); this.nav.reset(); 
-                    this.reason = `Nothing within 20 blocks; exploring for ${m.item ?? m.block}`;
+                    this.reason = `Nothing within 20 blocks; exploring for ${m.item ?? m.block} - advanced`;
                 }
                 return false;
             }
@@ -1561,17 +1550,10 @@ export class Bot {
             if (wasBreaking) {
                 m.broken++; m.noTargetSince = tick;
                 if (m.underground) this.miner.turns = 0;
-                this.record(`blockChanged:${m.type}`);
-                // FAST TREE: after breaking, immediately look for adjacent logs
+                this.record(`blockChanged:${m.type} - advanced`);
                 if (m.treeMode) {
                     const adj = this.findAdjacentLogs(m, tick);
-                    if (adj) {
-                        m.target = adj;
-                        m.type = this.terrain.block(adj)?.typeId;
-                        m.approach = undefined; m.approachTry = 0;
-                        this.reason = `Tree: log broken, next adjacent ${adj.x},${adj.y},${adj.z}`;
-                        return false;
-                    }
+                    if (adj) { m.target = adj; m.type = this.terrain.block(adj)?.typeId; m.approach = undefined; m.approachTry = 0; this.reason = `Tree: log broken, next ${adj.x},${adj.y},${adj.z} - advanced`; return false; }
                 }
             }
             m.target = undefined; m.approach = undefined; m.approachTry = 0;
@@ -1583,110 +1565,192 @@ export class Bot {
             m.scan = this.newScan(m);
             return false;
         }
-        // ROBUST: Check head front obstruction specifically when mining down - user reported block front of head gets in between
-        if (target.y < floor(this.sim.location).y) {
-            const headObstruct = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
-            if (headObstruct) {
-                const b = this.terrain.block(headObstruct);
-                if (b && !b.isAir) {
-                    this.obstructionClear = { target: { ...target }, cells: [headObstruct], since: tick };
-                    this.reason = `Clearing head front block ${b.typeId} at ${headObstruct.x},${headObstruct.y},${headObstruct.z} that blocks going down`;
+
+        // ===== FRONT BLOCK FIX: directly handle front block without nav failure =====
+        // If target is front block (within 5.5 blocks, same level +/-2, horizontal <=4), try direct break
+        const head = this.sim.getHeadLocation();
+        const at = add(target, { x: 0.5, y: 0.5, z: 0.5 });
+        const distHead = distance(head, at);
+        const selfFloor = floor(this.sim.location);
+        const isFrontBlock = distHead <= 5.5 && Math.abs(target.y - selfFloor.y) <= 2 && horizontal(target, selfFloor) <= 4;
+
+        if (isFrontBlock) {
+            // Check head front obstruction first - clear it if not target itself
+            try {
+                const headObstruct = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+                if (headObstruct && !(headObstruct.x === target.x && headObstruct.y === target.y && headObstruct.z === target.z)) {
+                    const hb = this.terrain.block(headObstruct);
+                    if (hb && !hb.isAir && hb.isSolid) {
+                        const r = this.digCell(headObstruct, tick);
+                        if (r === "digging") {
+                            this.reason = `Clearing front ${hb.typeId} at ${headObstruct.x},${headObstruct.y},${headObstruct.z} to reach ${m.block} - front fix`;
+                            return false;
+                        }
+                    }
+                }
+            } catch {}
+            // Check obstructions below if mining down
+            if (target.y < selfFloor.y) {
+                try {
+                    const obs = this.terrain.obstructionsBelow ? this.terrain.obstructionsBelow(this.sim.location, target) : [];
+                    if (obs.length > 0 && obs.length <= 2) {
+                        for (const cell of obs.slice(0,1)) {
+                            if (cell.x === target.x && cell.y === target.y && cell.z === target.z) continue;
+                            const ob = this.terrain.block(cell);
+                            if (ob && !ob.isAir) {
+                                const r = this.digCell(cell, tick);
+                                if (r === "digging") { this.reason = `Clearing below ${ob.typeId} to reach front ${m.block} - front fix`; return false; }
+                            }
+                        }
+                    }
+                } catch {}
+            }
+            // Direct break attempt for front block - skip nav approach entirely
+            // Tool check
+            const ruleFront = MINE[b.typeId];
+            if (ruleFront && ruleFront.tier > 0) {
+                if (!this.bag.tool(ruleFront.tool, ruleFront.tier)) {
+                    // Try to obtain better tool
+                    try {
+                        if (ruleFront.tier >= 2) { const c = this.bag.counts(); if ((c["minecraft:cobblestone"]??0)>=3) { this.obtain("minecraft:stone_pickaxe",1,tick); return false; } }
+                        if (ruleFront.tier >= 3) { const c = this.bag.counts(); if ((c["minecraft:iron_ingot"]??0)>=3) { this.obtain("minecraft:iron_pickaxe",1,tick); return false; } }
+                    } catch {}
+                    m.target = undefined; m.approach = undefined; m.breakingSince = undefined;
+                    this.blockTask(`Need ${ruleFront.tool} tier ${ruleFront.tier} for front ${b.typeId}`, "retry");
                     return false;
                 }
             }
-        }
-        if (!this.safeToMine(target)) {
-            const obstructions = this.terrain.obstructionsBelow(this.sim.location, target);
-            if (obstructions.length > 0 && obstructions.length <= 3) {
-                this.obstructionClear = { target: { ...target }, cells: obstructions.slice(0,3), since: tick };
-                this.reason = `Clearing ${obstructions.length} block(s) to get below (including head front)`;
+            if (!m.breakingSince) {
+                this.sim.lookAtBlock(this.host.relative(target));
+                if (!this.sim.breakBlock(this.host.relative(target))) {
+                    // If direct break fails, fall through to normal approach logic
+                } else {
+                    m.breakingSince = tick;
+                    m.approach = undefined; m.approachTry = 0;
+                    this.nav.reset();
+                    this.reason = `Breaking front ${m.block} at ${target.x},${target.y},${target.z} - direct front fix`;
+                    return false;
+                }
+            } else {
+                const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
+                if (tick - m.breakingSince > timeout) {
+                    try { this.sim.stopBreakingBlock(); } catch {}
+                    m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout front - advanced");
+                }
                 return false;
             }
-            m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined;
-            try { this.sim.stopBreakingBlock(); } catch {}
-            m.breakingSince = undefined;
-            return false;
         }
 
-        const at = add(target, { x: 0.5, y: 0.5, z: 0.5 });
-        if (m.treeMode && target.y > floor(this.sim.location).y + 2) {
-            const scaffold = this.builder.scaffoldTo(target, tick);
-            if (scaffold === "placed" || scaffold === "jumping") { this.reason = "Scaffolding to reach high log"; return false; }
-        }
-
-        if (distance(this.sim.getHeadLocation(), at) > 4.6 || !this.terrain.line(this.sim.getHeadLocation(), at, target)) {
-            const options = CARDINAL.map((d) => add(target, d)).flatMap((q) => [q, { ...q, y: q.y + 1 }, { ...q, y: q.y - 1 }]).filter((q) => this.terrain.safe(q) && this.terrain.line(add(center(q), { x: 0, y: 1.62, z: 0 }), at, target));
-            options.sort((a, b) => distance(a, this.sim.location) - distance(b, this.sim.location));
-            const tries = m.approachTry ?? 0;
-            if (!m.approach) {
-                if (!options.length || tries >= 3) {
-                    const obs = this.terrain.findObstructions(this.sim.location, center(target));
-                    if (obs.length > 0 && obs.length <= 2 && tries < 2) {
-                        this.obstructionClear = { target: { ...target }, cells: obs.slice(0,2), since: tick };
-                        m.approachTry = tries + 1;
+        // Normal safeToMine check (non-front)
+        if (!isFrontBlock) {
+            if (target.y < selfFloor.y) {
+                const headObstruct = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+                if (headObstruct) {
+                    const hb = this.terrain.block(headObstruct);
+                    if (hb && !hb.isAir) {
+                        this.obstructionClear = { target: { ...target }, cells: [headObstruct], since: tick };
+                        this.reason = `Clearing head front ${hb.typeId} at ${headObstruct.x},${headObstruct.y},${headObstruct.z} blocks going down - front fix`;
                         return false;
                     }
-                    m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approachTry = 0; m.scan = this.newScan(m); return false;
                 }
-                m.approach = options[Math.min(tries, options.length - 1)];
             }
-            const r = this.nav.go(center(m.approach), tick);
-            if (r === "failed" || r === "done") { m.approach = undefined; m.approachTry = tries + 1; }
-            return false;
+            if (!this.safeToMine(target)) {
+                const obstructions = this.terrain.obstructionsBelow(this.sim.location, target);
+                if (obstructions.length > 0 && obstructions.length <= 3) {
+                    this.obstructionClear = { target: { ...target }, cells: obstructions.slice(0,3), since: tick };
+                    this.reason = `Clearing ${obstructions.length} block(s) to get below - front fix`;
+                    return false;
+                }
+                m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined;
+                try { this.sim.stopBreakingBlock(); } catch {} m.breakingSince = undefined; return false;
+            }
         }
+
+        if (m.treeMode && target.y > selfFloor.y + 2) {
+            const scaffold = this.builder.scaffoldTo(target, tick);
+            if (scaffold === "placed" || scaffold === "jumping") { this.reason = "Scaffolding to reach high log - advanced"; return false; }
+        }
+
+        // Approach logic only if not front block or front block direct break failed
+        if (!isFrontBlock || (isFrontBlock && !m.breakingSince)) {
+            if (distance(this.sim.getHeadLocation(), at) > 4.6) {
+                // Check line lenient for front - if front block, ignore line and try break anyway
+                let lineOk = false;
+                try { lineOk = this.terrain.line(this.sim.getHeadLocation(), at, target); } catch { lineOk = false; }
+                if (!lineOk && !isFrontBlock) {
+                    const options = CARDINAL.map((d) => add(target, d)).flatMap((q) => [q, { ...q, y: q.y + 1 }, { ...q, y: q.y - 1 }]).filter((q) => this.terrain.safe(q) && (()=>{ try { return this.terrain.line(add(center(q), { x: 0, y: 1.62, z: 0 }), at, target); } catch { return false; } })());
+                    options.sort((a, b) => distance(a, this.sim.location) - distance(b, this.sim.location));
+                    const tries = m.approachTry ?? 0;
+                    if (!m.approach) {
+                        if (!options.length || tries >= 3) {
+                            const obs = this.terrain.findObstructions(this.sim.location, center(target));
+                            if (obs.length > 0 && obs.length <= 2 && tries < 2) {
+                                this.obstructionClear = { target: { ...target }, cells: obs.slice(0,2), since: tick };
+                                m.approachTry = tries + 1; return false;
+                            }
+                            m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approachTry = 0; m.scan = this.newScan(m); return false;
+                        }
+                        m.approach = options[Math.min(tries, options.length - 1)];
+                    }
+                    const r = this.nav.go(center(m.approach), tick);
+                    if (r === "failed" || r === "done") { m.approach = undefined; m.approachTry = tries + 1; }
+                    return false;
+                }
+            } else if (!isFrontBlock) {
+                // Within 4.6 but line fails - try obstruction clear for non-front
+                let lineOk = false;
+                try { lineOk = this.terrain.line(this.sim.getHeadLocation(), at, target); } catch { lineOk = false; }
+                if (!lineOk) {
+                    try {
+                        const obs = this.terrain.findObstructions(this.sim.location, center(target));
+                        if (obs.length > 0 && obs.length <= 2) {
+                            this.obstructionClear = { target: { ...target }, cells: obs.slice(0,2), since: tick };
+                            return false;
+                        }
+                    } catch {}
+                    const options = CARDINAL.map((d) => add(target, d)).flatMap((q) => [q, { ...q, y: q.y + 1 }, { ...q, y: q.y - 1 }]).filter((q) => this.terrain.safe(q) && (()=>{ try { return this.terrain.line(add(center(q), { x: 0, y: 1.62, z: 0 }), at, target); } catch { return false; } })());
+                    options.sort((a, b) => distance(a, this.sim.location) - distance(b, this.sim.location));
+                    if (options.length) {
+                        const tries = m.approachTry ?? 0;
+                        if (!m.approach) m.approach = options[Math.min(tries, options.length - 1)];
+                        const r = this.nav.go(center(m.approach), tick);
+                        if (r === "failed" || r === "done") { m.approach = undefined; m.approachTry = tries + 1; }
+                        return false;
+                    }
+                }
+            }
+        }
+
         m.approach = undefined; m.approachTry = 0; this.nav.reset();
         const rule = MINE[b.typeId];
-        // TOOL TIER AWARENESS: found iron should not mine with wooden, should know best way, if not then make it
         if (rule && rule.tier > 0) {
             const hasTool = this.bag.tool(rule.tool, rule.tier);
             if (!hasTool) {
-                // Don't just block - try to make better tool and furnace if needed
-                const neededTier = rule.tier;
-                const toolName = rule.tool;
-                // What ore to mine what is best way - if iron ore needs stone pickaxe tier 2
+                const neededTier = rule.tier; const toolName = rule.tool;
                 if (neededTier >= 2 && toolName === "pickaxe") {
                     const counts = this.bag.counts();
-                    // Check if we have cobblestone for stone pickaxe
                     if ((counts["minecraft:cobblestone"] ?? 0) >= 3 || (counts["minecraft:cobbled_deepslate"] ?? 0) >= 3) {
-                        this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, crafting stone pickaxe - tool tier awareness`;
+                        this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, crafting stone pickaxe - tier awareness`;
                         try { this.obtain("minecraft:stone_pickaxe", 1, tick); return false; } catch {}
                     } else {
-                        // Need to mine cobblestone first
-                        this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need cobblestone for stone pickaxe`;
+                        this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need cobblestone`;
                         m.target = undefined;
-                        // Temporarily switch to mining cobblestone
                         try { 
-                            if (!this.mining || this.mining.block !== "minecraft:cobblestone") {
-                                // Don't override current mining, just find cobblestone nearby
-                                const cobbleSpot = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:cobblestone" || type === "minecraft:stone", 200);
-                                if (cobbleSpot.length) {
-                                    m.target = cobbleSpot[0];
-                                    m.type = "minecraft:cobblestone";
-                                    return false;
-                                }
-                            }
+                            const cobbleSpot = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:cobblestone" || type === "minecraft:stone", 200);
+                            if (cobbleSpot.length) { m.target = cobbleSpot[0]; m.type = "minecraft:cobblestone"; return false; }
                         } catch {}
                     }
                 }
                 if (neededTier >= 3 && toolName === "pickaxe") {
-                    // Diamond needs iron pickaxe
-                    this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need iron pickaxe - tool tier awareness, furnace use`;
+                    this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need iron pickaxe`;
                     try { 
                         const counts = this.bag.counts();
-                        if ((counts["minecraft:iron_ingot"] ?? 0) >= 3) {
-                            this.obtain("minecraft:iron_pickaxe", 1, tick); return false;
-                        } else if ((counts["minecraft:raw_iron"] ?? 0) >= 3) {
-                            // Need furnace to smelt
-                            this.reason = `Found iron but need furnace to smelt raw_iron for iron pickaxe tier 3`;
-                            try { this.autonomy.produce("minecraft:raw_iron", 3, tick); return false; } catch {}
-                        }
+                        if ((counts["minecraft:iron_ingot"] ?? 0) >= 3) { this.obtain("minecraft:iron_pickaxe", 1, tick); return false; }
+                        else if ((counts["minecraft:raw_iron"] ?? 0) >= 3) { try { this.autonomy.produce("minecraft:raw_iron", 3, tick); return false; } catch {} }
                     } catch {}
                 }
                 m.target = undefined; m.approach = undefined; m.approachTry = 0;
-                if (rule.tier > 0) { 
-                    this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3. Crafting better tool.`, "retry"); 
-                    return false; 
-                }
+                if (rule.tier > 0) { this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3.`, "retry"); return false; }
                 try { this.bag.emptyHand(); } catch {}
             }
         }
@@ -1695,11 +1759,10 @@ export class Bot {
             if (!this.sim.breakBlock(this.host.relative(target))) { m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; return false; }
             m.breakingSince = tick;
         } else {
-            // QUICK: timeout 80 for wood, 150 stone, 200 ore (was 450)
             const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
             if (tick - m.breakingSince > timeout) {
                 try { this.sim.stopBreakingBlock(); } catch {}
-                m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout quick");
+                m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout quick - advanced");
             }
         }
         const held = this.bag.get(this.sim.selectedSlotIndex);
@@ -1709,6 +1772,8 @@ export class Bot {
         }
         return false;
     }
+
+
 
     findAdjacentLogs(m, tick) {
         // FAST: after breaking log, check 3x3x4 cube around last target for adjacent logs to avoid idle
@@ -1828,7 +1893,7 @@ export class Bot {
         return r;
     }
     canCamp() {
-        if (this.miner.active || this.deepMiner.active) return false;
+        if (this.miner.active || this.deepMiner.active || this.advancedMiner?.active) return false;
         switch (this.mode) {
             case "idle": case "guard": case "goto": case "collect": case "starter": case "survival": case "mine": case "speedrun": return true;
             case "follow": { const o = this.owner(); return !o || distance(o.location, this.sim.location) > 48; }
@@ -2089,7 +2154,7 @@ export class Bot {
     attach(sim) {
         this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
         this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag); this.autonomy = new SurvivalDirector(this);
-        this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
+        this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.advancedMiner = new AdvancedMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
         this.nav.builder = this.builder; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;
     }
     aliveSim() {
@@ -2141,7 +2206,7 @@ export class Bot {
         return { block: this.mineRequest.block, count: Math.max(1, left) };
     }
     maybeLoot(tick) {
-        if (!this.settings.loot || this.mode === "loot" || this.miner.active || this.deepMiner.active) return false;
+        if (!this.settings.loot || this.mode === "loot" || this.miner.active || this.deepMiner.active || this.advancedMiner?.active) return false;
         if (!["goto", "follow", "survival", "recover", "collect", "idle", "speedrun"].includes(this.mode)) return false;
         if (this.sim.isInWater) return false;
         if (this.bag.container.emptySlotsCount < 2) return false;
@@ -2204,7 +2269,7 @@ export class Bot {
     boatTravel(tick) {
         const t = this.boatTrip;
         const target = this.mode === "goto" ? this.goal : this.mode === "follow" ? this.owner()?.location : this.mode === "recover" ? this.recoverTarget : this.mode === "collect" ? this.goal?.anchor : undefined;
-        if (!this.settings.boat || !target || this.miner.active || this.deepMiner.active) { if (t) this.abortBoat("Water route over; continuing on foot."); return false; }
+        if (!this.settings.boat || !target || this.miner.active || this.deepMiner.active || this.advancedMiner?.active) { if (t) this.abortBoat("Water route over; continuing on foot."); return false; }
         if (!t) {
             if (this.boatIgnore > tick || tick % 20 !== 0) return false;
             const cell = this.waterAhead(target);
