@@ -61,10 +61,10 @@ export class Navigator {
         const allowPillar = allowBridge; // For 100 block tower, allow pillar but throttled to avoid lag
         const verticalDiff = Math.abs(floor(this.sim.location).y - floor(this.target).y);
         const horiz = horizontal(this.sim.location, this.target);
-        // FIX: lag when 100 block - reduce nodes/radius, precise column handling in follow() instead of huge A*
+        // ULTRA EFFICIENT: lag when 100 block - drastically reduce nodes/radius, precise column handling in follow()
         const isHighTower = verticalDiff > 20 || horiz > 50;
-        const maxNodes = isHighTower ? 3000 : 2000; // was 8000, now 3000 to avoid lag
-        const radius = isHighTower ? 64 : 32; // was 128, now 64 precise
+        const maxNodes = isHighTower ? 1500 : 1200; // was 8000, now 1500/1200 ultra efficient
+        const radius = isHighTower ? 48 : 24; // was 128, now 48/24 ultra efficient
         this.search = new PathSearch(
             this.terrain.read,
             floor(this.sim.location),
@@ -160,7 +160,7 @@ export class Navigator {
 
         if (this.search) {
             const before = this.search.expanded;
-            const result = this.search.step(this.fast ? 120 : 50);
+            const result = this.search.step(this.fast ? 80 : 30); // ultra efficient: fewer steps per tick
             this.expansions += this.search.expanded - before;
             if (result === "searching") return "running";
             if (result !== "found" && result !== "partial") return this.fail(`Path ${result}; no safe route.`);

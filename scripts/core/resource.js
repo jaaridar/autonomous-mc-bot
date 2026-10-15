@@ -4,6 +4,7 @@
  * Main goal upskilling itself, retains important stuff, aware of surroundings.
  */
 import { retainScore, isCritical } from "./knowledge.js";
+import { amountOf } from "./recipes.js";
 
 export const PHASES = {
     WOOD: 0,
@@ -55,8 +56,8 @@ export const CHECKLIST = {
 
 export function currentPhase(inventory) {
     const has = (type, count = 1) => (inventory[type] ?? 0) >= count;
-    // Wood phase: need logs + table + wooden pick + sword (never bare hand)
-    if (!has("minecraft:oak_log", 3) && !has("minecraft:birch_log", 3) && !has("minecraft:spruce_log", 3) && !has("minecraft:crafting_table", 1)) return PHASES.WOOD;
+    // Wood phase: any logs >=3 + table - ultra efficient, never oak-only
+    if (amountOf(inventory, "#logs") < 3 && !has("minecraft:crafting_table", 1)) return PHASES.WOOD;
     if (!has("minecraft:cobblestone", 8) || !has("minecraft:stone_pickaxe", 1)) return PHASES.STONE;
     if (!has("minecraft:iron_pickaxe", 1) || !has("minecraft:iron_ingot", 4)) return PHASES.IRON;
     if (!has("minecraft:diamond", 3) || !has("minecraft:diamond_pickaxe", 1)) return PHASES.DIAMOND;
@@ -68,20 +69,18 @@ export function nextNeeded(inventory, phase) {
     const list = CHECKLIST[phase] ?? [];
     for (const need of list) {
         if (need.optional) continue;
-        const have = inventory[need.item] ?? 0;
+        const have = need.item.startsWith("#") ? amountOf(inventory, need.item) : (inventory[need.item] ?? 0);
         if (have < need.count) {
             return { ...need, have, need: need.count - have };
         }
     }
-    // Check optional if critical
     for (const need of list) {
         if (!need.optional) continue;
-        const have = inventory[need.item] ?? 0;
+        const have = need.item.startsWith("#") ? amountOf(inventory, need.item) : (inventory[need.item] ?? 0);
         if (have < need.count && isCritical(need.item)) {
             return { ...need, have, need: need.count - have };
         }
     }
-    // If phase complete, look to next phase
     if (phase < PHASES.NETHER) {
         return nextNeeded(inventory, phase + 1);
     }
@@ -89,7 +88,6 @@ export function nextNeeded(inventory, phase) {
 }
 
 export function priorityOf(item) {
-    // Use retainScore from knowledge for exhaustive mapping
     const score = retainScore(item);
     if (score >= 90) return 100;
     if (score >= 80) return 90;
@@ -101,16 +99,14 @@ export function priorityOf(item) {
 
 export function shouldGather(item, inventory, freeSlots) {
     if (freeSlots < 1) {
-        // Even if full, gather if critical
         if (isCritical(item)) return true;
         return false;
     }
     if (freeSlots < 2 && !isCritical(item)) return false;
     const score = retainScore(item);
-    if (score >= 80) return true; // always gather high value - retain important
-    // Don't over-gather but retain reasonable
-    const have = inventory[item] ?? 0;
-    if (item.includes("log") && have >= 32) return false;
+    if (score >= 80) return true;
+    const have = item.startsWith("#") ? amountOf(inventory, item) : (inventory[item] ?? 0);
+    if ((item.includes("log") || item === "#logs") && have >= 32) return false;
     if (item.includes("cobblestone") && have >= 64) return false;
     if (item.includes("dirt") && have >= 32) return false;
     return true;
@@ -127,7 +123,6 @@ export function shouldRetain(item, have, freeSlots) {
 }
 
 export function upskillGoal(inventory) {
-    // Main goal is upskilling itself - return what to do next to upskill
     const phase = currentPhase(inventory);
     const need = nextNeeded(inventory, phase);
     if (!need) return { goal: "explore", reason: "upskill complete, explore for better" };
