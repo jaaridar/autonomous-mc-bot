@@ -41,7 +41,8 @@ export const HEALTH_THRESHOLDS = {
     safe: 18, // safe to fight
 };
 
-export function assessFoodReserves(inventory) {
+export function assessFoodReserves(inventory, context = {}) {
+    // context may contain hunger, health for richer reasoning, but inventory is primary
     let totalHunger = 0;
     let totalSaturation = 0;
     let foodCount = 0;
@@ -61,16 +62,25 @@ export function assessFoodReserves(inventory) {
         }
     }
 
+    // If context provides current hunger/health, use for status
+    const curHunger = context.hunger ?? 20;
+    const curHealth = context.health ?? 20;
+
+    let status = "ok";
+    if (totalHunger < 10 || curHunger <= COMBAT_FOOD_THRESHOLD.critical) status = "critical";
+    else if (totalHunger < 20 || curHunger <= COMBAT_FOOD_THRESHOLD.low) status = "low";
+
     return {
         totalHunger,
         totalSaturation,
         foodCount,
         bestFood,
+        status,
         sufficientForExploration: totalHunger >= 20,
         sufficientForCombat: totalHunger >= 30,
         sufficientForEmergency: totalHunger >= 10,
         needMore: totalHunger < 20,
-        reason: `food reserves: ${foodCount} items, ${totalHunger} hunger, ${totalSaturation.toFixed(1)} saturation, best ${bestFood}`
+        reason: `food reserves: ${foodCount} items, ${totalHunger} hunger, ${totalSaturation.toFixed(1)} saturation, best ${bestFood}, status ${status} (cur hunger ${curHunger} health ${curHealth})`
     };
 }
 

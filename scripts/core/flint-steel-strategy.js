@@ -269,8 +269,9 @@ export function evaluateRuinedPortalForIgnitionAndObsidian(ruinedPortal, context
     };
 }
 
-export function ensureIronForBothBucketAndFlintSteel(inventory) {
+export function ensureIronForBothBucketAndFlintSteel(inventory, context = {}) {
     // Ensure enough iron remains for flint and steel after satisfying bucket requirement, unless another viable ignition method available
+    // context optional for richer reasoning (hasWaterNearby etc)
     const hasBucket = (inventory["minecraft:bucket"] ?? 0) > 0 || (inventory["minecraft:water_bucket"] ?? 0) > 0;
     const hasFlintAndSteel = (inventory["minecraft:flint_and_steel"] ?? 0) > 0;
     const hasFireCharge = (inventory["minecraft:fire_charge"] ?? 0) > 0;
@@ -284,30 +285,38 @@ export function ensureIronForBothBucketAndFlintSteel(inventory) {
         // Fire charge available, no need iron for flint and steel
         return {
             needFlintSteel: false,
+            enough: true,
+            sufficient: true,
             reason: "have fire charge, no need iron for flint and steel",
             totalNeeded: ironNeededForBucket,
             ironHave,
-            sufficient: ironHave >= ironNeededForBucket
+            need: 0
         };
     }
 
     if (ironHave >= totalNeeded) {
         return {
             needFlintSteel: !hasFlintAndSteel,
+            enough: true,
+            sufficient: true,
             reason: `have ${ironHave} iron, need ${totalNeeded} for bucket+flint and steel, sufficient`,
             totalNeeded,
             ironHave,
             sufficient: true,
-            remainingAfter: ironHave - totalNeeded
+            remainingAfter: ironHave - totalNeeded,
+            need: 0
         };
     } else {
         return {
             needFlintSteel: true,
+            enough: false,
+            sufficient: false,
             reason: `have ${ironHave} iron, need ${totalNeeded} for bucket+flint and steel, need ${totalNeeded - ironHave} more`,
             totalNeeded,
             ironHave,
             sufficient: false,
-            needMore: totalNeeded - ironHave
+            needMore: totalNeeded - ironHave,
+            need: totalNeeded - ironHave
         };
     }
 }

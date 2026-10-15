@@ -112,6 +112,9 @@ export class VillageDirector {
         const threats = this.bot.terrain.threatInfo(this.sim, this.bot.owner());
         const phase = this.bot.speedrun?.phase ?? 0;
 
+        // Cache sheep lookup to avoid double entity scan
+        let sheepNearby = null;
+        try { sheepNearby = this.findSheepNearby(32); } catch {}
         return {
             hasWood,
             hasStone,
@@ -129,9 +132,9 @@ export class VillageDirector {
             hasMinimumEquipment: hasWood && (hasFood || foodAmount >= 3),
             phase,
             time: this.getTimeOfDay(),
-            distanceToSheep: this.findSheepNearby(64) ? distance(this.findSheepNearby(64).pos, this.sim.location) : 100,
-            sheepCount: this.countSheepNearby(64),
-            hasVillage: this.findNearestVillage(128),
+            distanceToSheep: sheepNearby ? distance(sheepNearby.pos, this.sim.location) : 100,
+            sheepCount: sheepNearby ? 1 : 0,
+            hasVillage: null, // avoid recursive expensive scan in buildContext
             netherRoute: this.bot.nether?.currentRoute,
             health: this.sim.getComponent("minecraft:health")?.currentValue ?? 20,
             equipment: { weaponTier: this.getWeaponTier(), armorValue: 0 },
@@ -140,37 +143,86 @@ export class VillageDirector {
     }
 
     findNearestVillage(radius) {
+        // Fast path: check awareness and structures first (bounded, cheap)
+        try {
+            const awareVillage = this.bot.awareness?.villageSpots?.[0];
+            if (awareVillage) {
+                const dist = distance(awareVillage, this.sim.location);
+                if (dist <= radius) {
+                    return {
+                        pos: awareVillage,
+                        distance: dist,
+                        hasFood: true,
+                        hasBeds: true,
+                        hasHay: true,
+                        hasCrafting: true,
+                        hasChest: true,
+                        hasGolem: false,
+                        hasWool: false,
+                        dangerLevel: { hostileCount: 0 },
+                        villageScore: 5,
+                    };
+                }
+            }
+            const structVillage = this.bot.structures?.found?.find(f => f.name === "village");
+            if (structVillage) {
+                const dist = distance(structVillage.pos, this.sim.location);
+                if (dist <= radius) {
+                    return {
+                        pos: structVillage.pos,
+                        distance: dist,
+                        hasFood: true,
+                        hasBeds: true,
+                        hasHay: true,
+                        hasCrafting: true,
+                        hasChest: true,
+                        hasGolem: false,
+                        hasWool: false,
+                        dangerLevel: { hostileCount: 0 },
+                        villageScore: 5,
+                    };
+                }
+            }
+        } catch {}
+
         try {
             // Try /locate if commands available
             const located = this.tryLocateVillage();
             if (located) return located;
         } catch {}
 
-        // Environmental detection: find village via blocks and entities
+        // Environmental detection: find village via blocks and entities - BUDGETED (max 800 block checks per call)
         const p = floor(this.sim.location);
         const villageBlocks = ["minecraft:hay_block","minecraft:bell","minecraft:farmland","minecraft:composter","minecraft:blast_furnace","minecraft:smoker","minecraft:bed"];
         let villageScore = 0;
         let centerPos = null;
+        let checks = 0;
+        const budget = 800;
 
-        // Scan for village blocks
-        for (let dx = -radius; dx <= radius; dx += 4) {
-            for (let dz = -radius; dz <= radius; dz += 4) {
+        // Scan for village blocks - bounded
+        for (let dx = -radius; dx <= radius && checks < budget; dx += 8) {
+            for (let dz = -radius; dz <= radius && checks < budget; dz += 8) {
                 if (dx*dx + dz*dz > radius*radius) continue;
-                for (let dy = -4; dy <= 4; dy++) {
+                for (let dy = -2; dy <= 2 && checks < budget; dy++) {
                     const q = add(p, { x: dx, y: dy, z: dz });
+                    checks++;
                     const b = this.terrain.block(q);
                     if (!b) continue;
                     if (villageBlocks.includes(b.typeId)) {
                         villageScore++;
                         if (!centerPos) centerPos = { ...q };
+                        if (villageScore >= 4) break;
                     }
                 }
+                if (villageScore >= 4) break;
             }
+            if (villageScore >= 4) break;
         }
 
-        // Scan for villagers
+        // Scan for villagers - limited radius 48 for performance, not full 128
         try {
-            const entities = this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: radius });
+            const scanRadius = Math.min(radius, 48);
+            const entities = this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: scanRadius });
             let villagerCount = 0;
             let villagerPos = null;
             for (const e of entities) {
@@ -186,8 +238,8 @@ export class VillageDirector {
                     pos,
                     distance: dist,
                     hasFood: villageScore >= 2,
-                    hasBeds: true, // village has beds
-                    hasHay: true, // assume hay
+                    hasBeds: true,
+                    hasHay: true,
                     hasCrafting: true,
                     hasChest: villageScore >= 1,
                     hasGolem: entities.some(e => e.typeId === "minecraft:iron_golem"),
@@ -201,7 +253,7 @@ export class VillageDirector {
             }
         } catch {}
 
-        if (villageScore >= 4) {
+        if (villageScore >= 4 && centerPos) {
             const dist = distance(centerPos, this.sim.location);
             return {
                 pos: centerPos,
