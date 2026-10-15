@@ -1495,7 +1495,6 @@ export class Bot {
         if (rule && rule.tier > 0) {
             const hasTool = this.bag.tool(rule.tool, rule.tier);
             if (!hasTool) {
-                m.blocked.set(key(target), tick + BLOCKED_TTL);
                 // Don't just block - try to make better tool and furnace if needed
                 const neededTier = rule.tier;
                 const toolName = rule.tool;
