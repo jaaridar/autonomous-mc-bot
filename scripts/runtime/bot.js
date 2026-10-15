@@ -23,7 +23,7 @@ import { FoodDirector, SurvivalDirector } from "./survival.js";
 import { UI } from "./ui.js";
 import { GolemDirector, VillageDirector } from "./village.js";
 import { StructureDetector, WorldAwareness } from "./world-awareness.js";
-import { BlockScan, Terrain } from "./world.js";
+import { BlockScan, Terrain, findBoat } from "./world.js";
 import { Direction, EntityComponentTypes, system, world } from "@minecraft/server";
 // New advanced modules
 
@@ -2651,7 +2651,7 @@ export class Bot {
     }
     onGround(boat) { try { return this.sim.isOnGround || (boat?.isOnGround ?? false); } catch { return false; } }
     boardBoat(tick) {
-        const existing = this.escaper.findBoat();
+        const existing = findBoat(this.sim);
         if (existing) { if (this.escaper.mount(existing)) { this.reason = "Boarding a boat for the crossing."; return "boarded"; } return "waiting"; }
         let slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
         if (slot < 0) {

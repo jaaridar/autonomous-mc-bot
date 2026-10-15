@@ -368,8 +368,97 @@ function importsGate(root) {
 }
 
 
-const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate };
-const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts" };
+
+/**
+ * Component-method gate: every `<this|bot|b>.<component>.<method>(` call - and
+ * every `host.<method>(` / `memory.<method>(` call in main.js - must resolve to
+ * a member that component's class actually defines.
+ *
+ * Member calls are invisible to the no-undef gate (it only looks at bare call
+ * names), so this is the class of regression a method-hoisting refactor can
+ * introduce silently: moving `escaper.findBoat()` to a free `findBoat(sim)`
+ * left one live caller behind and nothing in the suite noticed.
+ */
+const COMPONENTS = {
+    escaper: "escape.js", escape: "escape.js",
+    builder: "builder.js", hands: "builder.js",
+    terrain: "world.js",
+    bag: "inventory.js", resource: "inventory.js",
+    nav: "navigation.js", parkour: "navigation.js",
+    combat: "combat.js", equipment: "equipment.js", furnace: "equipment.js",
+    awareness: "world-awareness.js",
+    looting: "looting.js", drops: "looting.js",
+    miner: "mining.js", deepMiner: "mining.js",
+    survivalMaster: "survival-master.js",
+    speedrun: "speedrun.js", nether: "nether.js", bucket: "nether.js",
+    village: "village.js", golem: "village.js",
+    food: "survival.js", autonomy: "survival.js", forager: "survival.js",
+    scout: "scouting.js",
+    memory: "memory.js", host: "host.js", ui: "ui.js",
+};
+/** Instances held directly in main.js rather than reached through the bot. */
+const DIRECT = { host: "host.js", memory: "memory.js" };
+/** Engine objects, plain arrays/fields and locals - not one of our components. */
+const NOT_COMPONENTS = new Set(["sim", "player", "owner", "dimension", "world", "system", "structures", "explorer", "arbiter", "scan", "cache", "p"]);
+/** Built-in methods: a component field holding an array/Map/String can still be called through. */
+const BUILTIN_METHODS = new Set(["slice", "filter", "find", "findIndex", "map", "forEach", "sort", "push", "pop", "shift", "unshift", "splice", "includes", "indexOf", "join", "keys", "values", "entries", "has", "get", "set", "add", "delete", "some", "every", "reduce", "concat", "replace", "split", "trim", "startsWith", "endsWith", "toLowerCase", "toUpperCase", "toFixed", "toString", "flat", "flatMap", "reverse", "fill", "test"]);
+
+const membersOfComponent = (runtimeDir, file) => {
+    const src = readFileSync(join(runtimeDir, file), "utf8");
+    return new Set([
+        ...[...src.matchAll(/^ {4}(?:get\s+|set\s+|async\s+|static\s+|\*\s*)*([A-Za-z_$][\w$]*)\s*\(/gm)].map((m) => m[1]),
+        ...[...src.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=/g)].map((m) => m[1]),
+    ]);
+};
+
+function collectJs(dir, out = []) {
+    for (const entry of readdirSync(dir)) {
+        const p = join(dir, entry);
+        if (statSync(p).isDirectory())
+            collectJs(p, out);
+        else if (p.endsWith(".js"))
+            out.push(p);
+    }
+    return out;
+}
+
+function componentGate(dir) {
+    const runtimeDir = join(dir, "runtime");
+    const cache = new Map();
+    const members = (comp) => {
+        if (!cache.has(comp))
+            cache.set(comp, membersOfComponent(runtimeDir, COMPONENTS[comp] ?? DIRECT[comp]));
+        return cache.get(comp);
+    };
+    const check = (src, file, comp, method, index) => {
+        if (NOT_COMPONENTS.has(comp) || BUILTIN_METHODS.has(method) || !(COMPONENTS[comp] ?? DIRECT[comp]))
+            return 0;
+        if (members(comp).has(method))
+            return 0;
+        const line = src.slice(0, index).split("\n").length;
+        console.error(`${relative(dir, file)}:${line}: ${comp}.${method}() is not defined on ${COMPONENTS[comp] ?? DIRECT[comp]}`);
+        return 1;
+    };
+    let bad = 0;
+    let files = 0;
+    for (const file of collectJs(dir)) {
+        files++;
+        const src = readFileSync(file, "utf8");
+        for (const m of src.matchAll(/(?:this|bot|b)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g))
+            bad += check(src, file, m[1], m[2], m.index);
+        for (const m of src.matchAll(/(?<![\w.$])(host|memory)\.([A-Za-z_$][\w$]*)\s*\(/g))
+            bad += check(src, file, m[1], m[2], m.index);
+    }
+    if (bad) {
+        console.error(`\ncomponents: FAIL - ${bad} unresolved component call(s) across ${files} files`);
+        return 1;
+    }
+    console.log(`components: OK - every component call resolves across ${files} files`);
+    return 0;
+}
+
+const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate, components: componentGate };
+const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts", components: "scripts" };
 
 const mode = process.argv[2];
 if (!MODES[mode]) {

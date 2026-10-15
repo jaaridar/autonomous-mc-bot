@@ -210,22 +210,6 @@ export class Arbiter {
             }
         } catch (e) { console.warn("[Verdant] mission eval "+e); }
 
-        // Looting - single implementation via Looting director, not 3 times
-        try {
-            if (bot.settings.loot && !bot.miner.active && !bot.deepMiner.active) {
-                const lootScore = bot.looting?.evaluate ? bot.looting.evaluate(tick) : 0;
-                if (lootScore > 30) {
-                    candidates.push({
-                        id: "looting",
-                        director: bot.looting,
-                        score: lootScore,
-                        reason: "nearby valuable chest/loot - single looting implementation",
-                        tags: ["resource", "optional"]
-                    });
-                }
-            }
-        } catch (e) { console.warn("[Verdant] looting eval "+e); }
-
         // Village - called once via arbiter, not twice
         try {
             if (bot.village && (bot.mode === "survival" || bot.mode === "starter" || bot.mode === "speedrun" || bot.mode === "idle")) {
