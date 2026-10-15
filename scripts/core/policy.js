@@ -165,12 +165,46 @@ for (const wood of [
     "mangrove",
     "cherry",
     "pale_oak",
-])
+]) {
     MINE[`minecraft:${wood}_log`] = {
         drops: `minecraft:${wood}_log`,
         tool: "axe",
         tier: 0,
     };
+    MINE[`minecraft:${wood}_wood`] = {
+        drops: `minecraft:${wood}_log`,
+        tool: "axe",
+        tier: 0,
+    };
+    MINE[`minecraft:stripped_${wood}_log`] = {
+        drops: `minecraft:stripped_${wood}_log`,
+        tool: "axe",
+        tier: 0,
+    };
+}
+for (const [block, drops] of [
+    ["wheat", "wheat"],
+    ["carrots", "carrot"],
+    ["potatoes", "potato"],
+    ["beetroots", "beetroot"],
+    ["sweet_berry_bush", "sweet_berries"],
+    ["melon_block", "melon_slice"],
+    ["pumpkin", "pumpkin"],
+    ["sugar_cane", "sugar_cane"],
+    ["cactus", "cactus"],
+    ["kelp", "kelp"],
+    ["bamboo", "bamboo"],
+    ["hay_block", "wheat"],
+    ["oak_leaves", "oak_sapling"],
+    ["birch_leaves", "birch_sapling"],
+    ["spruce_leaves", "spruce_sapling"],
+]) {
+    MINE["minecraft:" + block] = {
+        drops: "minecraft:" + drops,
+        tool: "hand",
+        tier: 0,
+    };
+}
 for (const [block, drops, tier] of [
     ["stone", "cobblestone", 1],
     ["cobblestone", "cobblestone", 1],
