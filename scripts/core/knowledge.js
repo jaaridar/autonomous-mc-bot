@@ -183,35 +183,6 @@ export const ITEMS = {
 };
 
 // ===== SITUATIONAL BEST USE =====
-export const SITUATION_USE = {
-    combat_melee: { best: ["minecraft:netherite_sword","minecraft:diamond_sword","minecraft:iron_sword","minecraft:stone_sword","minecraft:wooden_sword","minecraft:iron_axe"], need: "weapon" },
-    combat_ranged: { best: ["minecraft:bow","minecraft:crossbow","minecraft:shield"], need: "ranged_defense" },
-    combat_skeleton_swarm: { best: ["minecraft:shield","minecraft:iron_sword","minecraft:bow"], tactic: "cover_wall", need: "shield+weapon" },
-    combat_blaze: { best: ["minecraft:bow","minecraft:shield","minecraft:water_bucket"], tactic: "strafe_water", need: "ranged+water" },
-    combat_enderman: { best: ["minecraft:water_bucket","minecraft:shield","minecraft:iron_sword"], tactic: "low_roof_water", need: "water+low_roof" },
-    combat_creeper: { best: ["minecraft:bow","minecraft:shield","minecraft:iron_sword"], tactic: "hit_and_retreat", need: "shield" },
-    mining_stone: { best: ["minecraft:wooden_pickaxe"], need: "pickaxe_tier1" },
-    mining_iron: { best: ["minecraft:stone_pickaxe","minecraft:iron_pickaxe"], need: "pickaxe_tier2" },
-    mining_diamond: { best: ["minecraft:iron_pickaxe","minecraft:diamond_pickaxe"], need: "pickaxe_tier3" },
-    mining_obsidian: { best: ["minecraft:diamond_pickaxe","minecraft:netherite_pickaxe"], need: "pickaxe_tier4" },
-    bridging_gap: { best: ["minecraft:cobblestone","minecraft:dirt","minecraft:cobbled_deepslate","minecraft:oak_planks"], tactic: "arbitrary_support_check", need: "blocks" },
-    bridging_lava: { best: ["minecraft:cobblestone","minecraft:stone"], tactic: "sneak_place", need: "blast_resistant" },
-    pillaring_up: { best: ["minecraft:dirt","minecraft:cobblestone","minecraft:netherrack"], tactic: "jump_place", need: "blocks" },
-    parkour_gap: { best: ["sprint_jump","bridge"], tactic: "momentum", need: "speed" },
-    portal_lava_pool: { best: ["minecraft:water_bucket","minecraft:bucket","minecraft:obsidian"], tactic: "water_on_lava", need: "water_bucket+lava_pool", critical: true },
-    portal_build: { best: ["minecraft:obsidian","minecraft:flint_and_steel","minecraft:fire_charge"], tactic: "frame_10_min", need: "obsidian_10+flint_and_steel" },
-    escape_water: { best: ["minecraft:boat","minecraft:oak_boat","swim"], tactic: "boat_or_swim", need: "boat" },
-    escape_lava: { best: ["minecraft:water_bucket","minecraft:fire_resistance"], tactic: "water_clutch", need: "water_bucket" },
-    escape_pit: { best: ["minecraft:cobblestone","minecraft:dirt"], tactic: "pillar", need: "blocks_20+" },
-    food_low: { best: ["minecraft:cooked_beef","minecraft:bread","minecraft:apple","minecraft:golden_apple"], need: "food" },
-    light_dark: { best: ["minecraft:torch"], need: "torch" },
-    sheep: { best: ["shears","minecraft:iron_sword"], uses: ["wool","bed","mutton"], retain: true },
-    iron_ore_found: { action: "remember", priority: 95, reason: "critical for tools/armor/bucket/shield", retain: true },
-    diamond_found: { action: "remember", priority: 100, reason: "critical for obsidian/endgame", retain: true },
-    lava_pool_found: { action: "remember", priority: 100, reason: "portal opportunity", retain: true, portal: true },
-    village_found: { action: "loot_priority", priority: 95, reason: "chests, beds, food, iron", retain: true },
-    structure_found: { action: "loot_priority", priority: 90, reason: "treasure", retain: true },
-};
 
 // ===== QUICK TOOL PRIORITY - NEVER FIGHT BARE HAND =====
 export const QUICK_TOOL_CHAIN = [
@@ -271,20 +242,8 @@ export function isCritical(typeId) {
     return (ITEMS[typeId]?.critical || BLOCKS[typeId]?.critical || RETAIN_SCORE[typeId] >= 90) ?? false;
 }
 
-export function isQuickTool(typeId) {
-    return (ITEMS[typeId]?.quickTool || BLOCKS[typeId]?.quickTool) ?? false;
-}
-
-export function bestFor(situation) {
-    return SITUATION_USE[situation] ?? null;
-}
-
 export function getBlockInfo(typeId) {
     return BLOCKS[typeId] ?? { cat: "unknown", hardness: 1, retain: 10, uses: ["unknown"] };
-}
-
-export function getItemInfo(typeId) {
-    return ITEMS[typeId] ?? { cat: "unknown", retain: 10, uses: ["unknown"] };
 }
 
 export function shouldRetain(typeId, haveCount, freeSlots) {
@@ -556,12 +515,6 @@ export function isValuable(typeId) {
     return (LOOT_VALUE[typeId] ?? retainScore(typeId) ?? 0) >= 200 || isCritical(typeId);
 }
 
-export function isUpgrade(currentType, candidateType) {
-    const cur = LOOT_VALUE[currentType] ?? retainScore(currentType) ?? 0;
-    const cand = LOOT_VALUE[candidateType] ?? retainScore(candidateType) ?? 0;
-    return cand > cur * 1.2;
-}
-
 /**
  * Decide which items to take from a chest given current inventory.
  * Structure loot main priority.
@@ -613,13 +566,6 @@ export function shouldLootChest(distance, homeDistance, freeSlots, structure = n
 }
 
 // For lava pool portal
-export function shouldMakePortal(inventory, hasLavaPool, hasWaterBucket) {
-    const obsidian = inventory["minecraft:obsidian"] ?? 0;
-    if (obsidian >= 10) return false;
-    if (hasLavaPool && hasWaterBucket) return true;
-    if (hasLavaPool && (inventory["minecraft:bucket"] ?? 0) > 0) return true; // need water
-    return false;
-}
 
 // ---------------------------------------------------------------- world-awareness.js
 
@@ -738,46 +684,7 @@ export function prioritizeGoal(currentInventory, surrounding, structures, hp, hu
     return goals[0] ?? { goal: "explore", priority: 100, reason: "no urgent goal, explore to upskill" };
 }
 
-export function shouldRemember(typeId, distance, inventory, freeSlots) {
-    const score = retainScore(typeId);
-    if (score >= 90) return true;
-    if (score >= 80 && distance < 32) return true;
-    if (score >= 70 && freeSlots > 2) return true;
-    return false;
-}
-
-export function filterRetain(inventory, freeSlots) {
-    // Returns list of items to keep vs drop when full
-    const entries = Object.entries(inventory).map(([type, count]) => ({ type, count, score: retainScore(type) }));
-    entries.sort((a,b) => b.score - a.score);
-    const keep = [];
-    const drop = [];
-    let slotsUsed = 0;
-    for (const e of entries) {
-        if (e.score >= 70 || slotsUsed < 20) {
-            keep.push(e);
-            slotsUsed++;
-        } else {
-            drop.push(e);
-        }
-    }
-    return { keep, drop };
-}
-
 // ===== DEATH RECOVERY =====
-export function planDeathRecovery(deathPos, currentPos, inventory, lastItems) {
-    // If died, remember position and important items lost
-    const criticalLost = Object.entries(lastItems ?? {}).filter(([type]) => isCritical(type));
-    const distance = Math.hypot(deathPos.x - currentPos.x, deathPos.y - currentPos.y, deathPos.z - currentPos.z);
-    return {
-        goal: "recover_death",
-        priority: criticalLost.length > 0 ? 950 : 700,
-        reason: `died at ${deathPos.x},${deathPos.y},${deathPos.z}, lost ${criticalLost.length} critical items, distance ${distance.toFixed(0)}`,
-        pos: deathPos,
-        criticalLost,
-        distance
-    };
-}
 
 // ===== BRIDGING / PARKOUR DECISION =====
 export function bridgingPlan(from, to, terrainInfo) {

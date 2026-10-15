@@ -12,9 +12,6 @@ import { RollingSweep } from "./world.js";
  */
 
 
-
-
-
 export class WorldAwareness {
     constructor(bot) {
         this.bot = bot;
@@ -356,8 +353,6 @@ export class WorldAwareness {
  * Structure detector - runtime that prioritizes loot from structures.
  * Lava pool -> portal logic included. Main priority if found.
  */
-
-
 
 
 export class StructureDetector {

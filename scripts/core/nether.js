@@ -391,28 +391,6 @@ export const WATER_MECHANICS = {
     escape: "water for enderman, blaze fire",
 };
 
-export const LAVA_MECHANICS = {
-    sourceVsFlowing: "source lava (still) makes obsidian with water, flowing makes cobble/stone",
-    detection: "source has no flow, check if lava block is source",
-    poolSize: "need at least 10 lava sources for portal (10 obsidian min, 14 full frame)",
-    groundLevel: "y >= 60 ideal, minimal digging, safe",
-    caveLevel: "y < 40 often, but danger and travel cost must be acceptable",
-    hazards: "lava spread, fire, fall, hostile mobs in caves",
-};
-
-export const PORTAL_FRAME = {
-    minObsidian: 10, // without corners: 4 bottom, 3+3 sides, 4 top = 14? Actually 10 min is 4x5 hollow without corners: bottom 4, sides 3 each (6), top 4 = 14? Wait 10 min is with corners missing: bottom 2 + sides 3+3 + top 2 = 10? Let's use 10 as game minimum
-    fullFrame: 14, // with corners
-    dimensions: { width: 4, height: 5, interior: { width: 2, height: 3 } },
-    constructionMethods: {
-        bucket_lava_pool: "place water on ground lava pool to make obsidian, mine obsidian, build frame",
-        ruined_portal_repair: "inspect existing frame, fill missing obsidian, replace crying obsidian",
-        cave_lava_bucket: "bucket lava from cave pool, place in frame mold with water",
-        lava_pool_mold: "build dirt mold, place lava with bucket, water to make obsidian in place",
-    },
-    fastestViable: "depends on resources: if ruined portal has >=6 obsidian and ignition, repair is fastest; if ground lava pool + water bucket, bucket method minimal digging; if no bucket, find ruined portal",
-};
-
 export function evaluateBucketPriority(inventory, context) {
     const hasBucket = (inventory["minecraft:bucket"] ?? 0) > 0;
     const hasWaterBucket = (inventory["minecraft:water_bucket"] ?? 0) > 0;
@@ -591,61 +569,6 @@ export function planObsidianFormation(lavaPool, hasWaterBucket, hasBucket) {
     };
 }
 
-export function planPortalConstruction(availableObsidian, hasRuinedPortal, ruinedPortalInfo, context) {
-    // Know how to construct Nether portal using available resources fastest viable method
-    const obsidianHave = availableObsidian ?? 0;
-
-    if (hasRuinedPortal && ruinedPortalInfo) {
-        const missing = Math.max(0, 10 - ruinedPortalInfo.obsidianCount);
-        if (missing <= 6 && obsidianHave >= missing) {
-            return {
-                method: "repair_ruined_portal",
-                reason: `ruined portal has ${ruinedPortalInfo.obsidianCount}/10 obsidian, missing ${missing}, faster than building new`,
-                steps: [
-                    `inspect frame at ${ruinedPortalInfo.pos.x},${ruinedPortalInfo.pos.y},${ruinedPortalInfo.pos.z}`,
-                    `replace crying obsidian if any (${ruinedPortalInfo.hasCryingObsidian ? "yes need replace" : "no"})`,
-                    `place ${missing} obsidian to complete frame`,
-                    "ignite portal"
-                ],
-                obsidianNeeded: missing,
-                isFastest: true,
-                timeCost: 5 + missing * 2
-            };
-        }
-    }
-
-    if (obsidianHave >= 10) {
-        return {
-            method: "build_new_portal",
-            reason: `have ${obsidianHave} obsidian, build new portal 4x5 frame (10 min without corners, 14 full)`,
-            steps: [
-                "find flat ground 4x5 area",
-                "build frame: bottom 4, sides 3 each, top 4 = 10 min (corners optional) or 14 full",
-                "ensure interior 2x3 empty",
-                "ignite portal"
-            ],
-            dimensions: PORTAL_FRAME.dimensions,
-            obsidianNeeded: 0,
-            isFastest: !hasRuinedPortal,
-            timeCost: 15
-        };
-    }
-
-    // Need more obsidian
-    return {
-        method: "gather_obsidian",
-        reason: `have ${obsidianHave}/10 obsidian, need ${10 - obsidianHave} more from lava pool`,
-        steps: [
-            "find ground-level lava pool (y>=60) minimal digging",
-            "use water bucket to make obsidian: water + lava source",
-            "mine obsidian with diamond pickaxe",
-            `gather ${10 - obsidianHave} more obsidian`
-        ],
-        obsidianNeeded: 10 - obsidianHave,
-        timeCost: 10 + (10 - obsidianHave) * 3
-    };
-}
-
 export function chooseFastestViableMethod(options, context) {
     // Evaluate ground-level lava pools, cave lava pools, ruined portals as alternative routes rather than single rigid strategy
     const methods = [];
@@ -690,14 +613,6 @@ export function chooseFastestViableMethod(options, context) {
  * Do not waste time searching for flint and steel if faster reliable ignition method already available.
  * If no ignition resource available, plan shortest safe route to obtain missing material before committing to portal location.
  */
-
-export const IGNITION_METHODS = {
-    flint_and_steel: { priority: 95, iron: 1, flint: 1, time: 3, reliability: 95, craftable: true },
-    fire_charge: { priority: 80, time: 1, reliability: 90, craftable: false, lootOnly: true, note: "from ruined portal chest or blaze+gunpowder+coal" },
-    lava_and_wood: { priority: 50, time: 20, reliability: 60, craftable: false, note: "place lava next to wood to ignite portal - slow, unreliable" },
-    flaming_arrow: { priority: 40, time: 15, reliability: 50, craftable: false, note: "enchanted bow with flame, rare" },
-    ghast_fireball: { priority: 30, time: 30, reliability: 30, note: "ghast fireball ignites portal, very unreliable" },
-};
 
 export function evaluateIgnitionOptions(inventory, ruinedPortalLoot, context) {
     const hasFlintAndSteel = (inventory["minecraft:flint_and_steel"] ?? 0) > 0;
@@ -870,86 +785,6 @@ export function shouldObtainFlintAndSteelBeforePortal(context) {
     return { should: false, reason: "no unnecessary delay for ignition, commit to portal then gather ignition if needed", priority: 20 };
 }
 
-export function evaluateRuinedPortalForIgnitionAndObsidian(ruinedPortal, context) {
-    // Check nearby ruined portals for usable obsidian, flint and steel, fire charges, useful loot
-    // Evaluate chest contents and portal condition to determine whether repairing existing portal faster than constructing new
-    if (!ruinedPortal) return null;
-
-    const { obsidianCount, hasCryingObsidian, chestItems, distance, frameCompleteness } = ruinedPortal;
-    let score = 50;
-    let reasons = [];
-
-    // Obsidian evaluation
-    if (obsidianCount >= 10) {
-        score += 30;
-        reasons.push(`frame has ${obsidianCount}/10 obsidian, complete or near complete`);
-    } else if (obsidianCount >= 6) {
-        score += 15;
-        reasons.push(`frame has ${obsidianCount}/10 obsidian, missing ${10 - obsidianCount}, repair faster than new`);
-    } else if (obsidianCount >= 3) {
-        score += 5;
-        reasons.push(`frame has ${obsidianCount}/10 obsidian, moderate repair needed`);
-    } else {
-        score -= 10;
-        reasons.push(`frame has only ${obsidianCount}/10 obsidian, significant repair needed`);
-    }
-
-    if (hasCryingObsidian) {
-        score -= 15;
-        reasons.push("has crying obsidian, need to replace with obsidian (cannot use crying for portal)");
-    }
-
-    // Chest contents
-    let hasFlintAndSteel = false;
-    let hasFireCharge = false;
-    let hasObsidianInChest = 0;
-    let hasGold = 0;
-    let hasUsefulLoot = 0;
-
-    if (chestItems) {
-        for (const item of chestItems) {
-            if (item.typeId === "minecraft:flint_and_steel") { hasFlintAndSteel = true; score += 25; reasons.push("chest has flint and steel"); }
-            if (item.typeId === "minecraft:fire_charge") { hasFireCharge = true; score += 15; reasons.push("chest has fire charge"); }
-            if (item.typeId === "minecraft:obsidian") { hasObsidianInChest += item.amount; score += 10; reasons.push(`chest has ${item.amount} obsidian`); }
-            if (item.typeId === "minecraft:gold_ingot" || item.typeId === "minecraft:gold_block") { hasGold += item.amount; score += 5; }
-            if (item.typeId.includes("enchanted_golden_apple") || item.typeId.includes("totem")) { hasUsefulLoot++; score += 10; }
-        }
-    }
-
-    // Distance
-    if (distance > 128) score -= 20;
-    else if (distance < 32) score += 10;
-
-    const missingObsidian = Math.max(0, 10 - obsidianCount);
-    const totalObsidianAvailable = obsidianCount + hasObsidianInChest;
-    const canComplete = totalObsidianAvailable >= 10;
-
-    const isFasterThanNew = missingObsidian <= 6 && (hasFlintAndSteel || hasFireCharge) && canComplete;
-    const timeCost = Math.ceil(distance / 10) + missingObsidian * 2 + (hasFlintAndSteel || hasFireCharge ? 1 : 5);
-
-    return {
-        pos: ruinedPortal.pos,
-        distance,
-        obsidianCount,
-        hasCryingObsidian,
-        hasFlintAndSteel,
-        hasFireCharge,
-        hasObsidianInChest,
-        hasGold,
-        hasUsefulLoot,
-        missingObsidian,
-        totalObsidianAvailable,
-        canComplete,
-        isFasterThanNew,
-        score: Math.max(0, score + (isFasterThanNew ? 20 : 0)),
-        reasons: reasons.join("; "),
-        timeCost,
-        feasibility: score > 70 ? "high" : score > 40 ? "medium" : "low",
-        recommendation: isFasterThanNew ? "repair_ruined_portal_faster" : canComplete ? "repair_ruined_portal" : "gather_more_obsidian_then_repair",
-        action: isFasterThanNew ? "repair_ruined_portal" : "evaluate_vs_new_portal"
-    };
-}
-
 export function ensureIronForBothBucketAndFlintSteel(inventory, context = {}) {
     // Ensure enough iron remains for flint and steel after satisfying bucket requirement, unless another viable ignition method available
     // context optional for richer reasoning (hasWaterNearby etc)
@@ -1000,66 +835,6 @@ export function ensureIronForBothBucketAndFlintSteel(inventory, context = {}) {
             need: totalNeeded - ironHave
         };
     }
-}
-
-export function planShortestSafeRouteToIgnition(missing, context) {
-    // If no ignition resource available, plan shortest safe route to obtain missing material before committing to portal location
-    const { needFlint, needIron, hasGravelNearby, distanceToGravel, hasIronNearby, distanceToIron, hostileCount } = missing;
-
-    const options = [];
-
-    if (needFlint) {
-        if (hasGravelNearby) {
-            options.push({
-                action: "mine_gravel_nearby",
-                distance: distanceToGravel,
-                timeCost: Math.ceil(distanceToGravel / 10) + 3,
-                risk: hostileCount >= 2 ? "medium" : "low",
-                reason: `gravel nearby ${distanceToGravel.toFixed(0)} blocks, mine for flint 10% drop`,
-                priority: 80
-            });
-        } else {
-            options.push({
-                action: "find_gravel",
-                distance: 100, // unknown
-                timeCost: 15,
-                risk: "medium",
-                reason: "find gravel to get flint",
-                priority: 60
-            });
-        }
-    }
-
-    if (needIron) {
-        if (hasIronNearby) {
-            options.push({
-                action: "mine_iron_nearby",
-                distance: distanceToIron,
-                timeCost: Math.ceil(distanceToIron / 10) + 5,
-                risk: hostileCount >= 2 ? "medium" : "low",
-                reason: `iron nearby ${distanceToIron.toFixed(0)} blocks`,
-                priority: 85
-            });
-        } else {
-            options.push({
-                action: "find_iron",
-                distance: 100,
-                timeCost: 20,
-                risk: "medium",
-                reason: "find iron ore for bucket and flint and steel",
-                priority: 70
-            });
-        }
-    }
-
-    options.sort((a,b) => a.timeCost - b.timeCost || b.priority - a.priority);
-
-    return {
-        bestRoute: options[0] ?? null,
-        alternatives: options.slice(1),
-        reason: options[0] ? `Shortest safe route to ignition: ${options[0].action} - ${options[0].reason}` : "no route found, explore",
-        action: options[0]?.action ?? "explore"
-    };
 }
 
 export function shouldNotWasteTimeSearchingFlintSteel(context) {

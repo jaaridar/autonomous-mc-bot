@@ -552,7 +552,6 @@ export class NativeInventory {
  */
 
 
-
 export class ResourceManager {
     constructor(bot) {
         this.bot = bot;

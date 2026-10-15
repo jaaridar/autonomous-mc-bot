@@ -515,8 +515,6 @@ export class Navigator {
  */
 
 
-
-
 export class Parkour {
     constructor(bot) {
         this.bot = bot;

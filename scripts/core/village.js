@@ -21,53 +21,6 @@ export const VILLAGE_BENEFITS = {
     trades: { score: 10, items: ["minecraft:emerald"] },
 };
 
-export const FOOD_EFFICIENCY = {
-    // Accessibility, saturation, hunger restoration, time efficiency
-    "minecraft:bread": { hunger: 5, saturation: 6, accessibility: 90, time: 5, efficiency: 85 }, // village hay -> bread easy
-    "minecraft:hay_block": { hunger: 0, saturation: 0, accessibility: 95, time: 3, efficiency: 90, note: "9 wheat = 3 bread, best village food" },
-    "minecraft:potato": { hunger: 1, saturation: 0.6, accessibility: 80, time: 4, efficiency: 60 },
-    "minecraft:baked_potato": { hunger: 5, saturation: 6, accessibility: 60, time: 15, efficiency: 75 }, // need furnace
-    "minecraft:carrot": { hunger: 3, saturation: 3.6, accessibility: 80, time: 4, efficiency: 70 },
-    "minecraft:beetroot": { hunger: 1, saturation: 1.2, accessibility: 70, time: 4, efficiency: 50 },
-    "minecraft:cooked_beef": { hunger: 8, saturation: 12.8, accessibility: 50, time: 20, efficiency: 85 }, // need cow + furnace
-    "minecraft:apple": { hunger: 4, saturation: 2.4, accessibility: 60, time: 10, efficiency: 65 },
-    "minecraft:sweet_berries": { hunger: 2, saturation: 0.4, accessibility: 70, time: 5, efficiency: 55 },
-};
-
-export function evaluateFoodSource(foodType, distance, hasFurnace, hasFuel) {
-    const info = FOOD_EFFICIENCY[foodType];
-    if (!info) return { efficiency: 30, reason: "unknown food" };
-
-    let efficiency = info.efficiency;
-    // Adjust for distance
-    if (distance > 64) efficiency -= 20;
-    else if (distance > 32) efficiency -= 10;
-    else if (distance < 16) efficiency += 10;
-
-    // Adjust for furnace requirement
-    if (foodType === "minecraft:baked_potato" || foodType === "minecraft:cooked_beef") {
-        if (!hasFurnace) efficiency -= 15;
-        if (!hasFuel) efficiency -= 10;
-    }
-
-    return {
-        foodType,
-        efficiency: Math.max(0, efficiency),
-        hunger: info.hunger,
-        saturation: info.saturation,
-        accessibility: info.accessibility,
-        timeCost: info.time + Math.ceil(distance / 10),
-        reason: `${foodType} hunger ${info.hunger} sat ${info.saturation} access ${info.accessibility} time ${info.time} distance ${distance.toFixed(0)} efficiency ${efficiency}`
-    };
-}
-
-export function findBestFoodOption(availableFoods, context) {
-    // availableFoods: [{type, distance, amount}]
-    const evaluations = availableFoods.map(f => evaluateFoodSource(f.type, f.distance, context.hasFurnace, context.hasFuel));
-    evaluations.sort((a,b) => b.efficiency - a.efficiency || a.timeCost - b.timeCost);
-    return evaluations[0] ?? null;
-}
-
 export function evaluateVillage(village, context) {
     // village: {pos, distance, hasFood, hasBeds, hasHay, hasCrafting, hasChest, hasGolem, hasWool, dangerLevel, timeCostEstimate}
     // context: {phase, hasWood, hasStone, hasFood, hasBed, hasWool, inventory, currentGoal, health, equipment}
@@ -500,19 +453,4 @@ export function shouldDisengageDuringFight(context) {
     if (golemHealth && golemHealth < 20 && health > 10) return { disengage: false, reason: "golem low health, continue" };
 
     return { disengage: false, reason: "situation okay, continue fight" };
-}
-
-export function collectIronDropsEfficiently(dropPositions, context) {
-    // After golem kill, collect iron drops efficiently, prioritize bucket
-    const hasBucket = context.hasBucket;
-    const ironNeeded = hasBucket ? 0 : 3;
-
-    return {
-        action: "collect_iron_drops",
-        priority: ironNeeded > 0 ? 95 : 70,
-        reason: hasBucket ? "collect remaining iron for tools/armor" : "collect iron for bucket - major progression milestone",
-        positions: dropPositions,
-        shouldCraftBucketImmediately: !hasBucket && (context.ironAmount + 3) >= 3,
-        nextStep: !hasBucket ? "craft_bucket" : "continue_nether_prep"
-    };
 }

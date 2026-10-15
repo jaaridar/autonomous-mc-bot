@@ -12,8 +12,6 @@ import { MINE, bestYFor, branchPattern, bulkLevel, clusterVeins, isBulk, isUnbre
  */
 
 
-
-
 const STEP_LIMIT = 250;
 const RUN_LENGTH = 16;
 const BLOCKED_TTL = 1800;
@@ -404,9 +402,6 @@ export class Miner {
  * - Torching, drop collection, tool awareness
  * - Never stops on front block
  */
-
-
-
 
 
 const DEEP_STEP_LIMIT = 400;

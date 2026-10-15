@@ -730,21 +730,6 @@ export function priorityOf(item) {
     return 10;
 }
 
-export function shouldGather(item, inventory, freeSlots) {
-    if (freeSlots < 1) {
-        if (isCritical(item)) return true;
-        return false;
-    }
-    if (freeSlots < 2 && !isCritical(item)) return false;
-    const score = retainScore(item);
-    if (score >= 80) return true;
-    const have = item.startsWith("#") ? amountOf(inventory, item) : (inventory[item] ?? 0);
-    if ((item.includes("log") || item === "#logs") && have >= 32) return false;
-    if (item.includes("cobblestone") && have >= 64) return false;
-    if (item.includes("dirt") && have >= 32) return false;
-    return true;
-}
-
 export function shouldRetain(item, have, freeSlots) {
     const score = retainScore(item);
     if (isCritical(item)) return true;
@@ -753,11 +738,4 @@ export function shouldRetain(item, have, freeSlots) {
     if (score >= 40 && freeSlots > 5) return true;
     if (score < 20 && have > 16) return false;
     return have < 32;
-}
-
-export function upskillGoal(inventory) {
-    const phase = currentPhase(inventory);
-    const need = nextNeeded(inventory, phase);
-    if (!need) return { goal: "explore", reason: "upskill complete, explore for better" };
-    return { goal: `gather_${need.item}`, phase, need, reason: need.reason };
 }

@@ -8,11 +8,6 @@ import { Explorer } from "./scouting.js";
 // One module now: runtime/survival.js + runtime/foraging.js + runtime/food.js (see docs/ARCHITECTURE.md).
 
 
-
-
-
-
-
 // ---------------------------------------------------------------- survival.js
 
 /** Observation-driven survival loop. No fabricated items or claimed speedrun completion. */

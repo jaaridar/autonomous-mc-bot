@@ -18,7 +18,6 @@ import { timeOfDay, weaponTierLoose } from "./world.js";
  */
 
 
-
 export class VillageDirector {
     constructor(bot) {
         this.bot = bot;

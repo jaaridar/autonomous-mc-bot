@@ -14,9 +14,6 @@ import { Direction } from "@minecraft/server";
  */
 
 
-
-
-
 const FACES = new Map([
     ["1,0,0", Direction.East],
     ["-1,0,0", Direction.West],

@@ -28,8 +28,6 @@ export const COMPASS = [
 ];
 export const UP = { x: 0, y: 1, z: 0 };
 export const DOWN = { x: 0, y: -1, z: 0 };
-export const scale = (a, n) => ({ x: a.x * n, y: a.y * n, z: a.z * n });
-export const negate = (a) => ({ x: -a.x, y: -a.y, z: -a.z });
 /** Unit flat vector pointing from `from` to `to` (cardinal approximation). */
 export function away(from, to) {
     const dx = from.x - to.x, dz = from.z - to.z;

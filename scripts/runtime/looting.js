@@ -13,8 +13,6 @@ import { NativeInventory } from "./inventory.js";
  */
 
 
-
-
 export class Looting {
     constructor(bot) {
         this.bot = bot;

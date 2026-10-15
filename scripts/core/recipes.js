@@ -259,7 +259,6 @@ export const RAW_TO_COOKED = Object.fromEntries([
     ["cod", "cooked_cod"],
     ["salmon", "cooked_salmon"],
 ].map(([a, b]) => [id(a), id(b)]));
-export const EMERGENCY_FOOD = new Set(["beef", "porkchop", "mutton", "rabbit", "cod", "salmon"].map(id));
 export const PREY = new Set(["cow", "pig", "sheep", "chicken"].map(id));
 export function fuelCount(type, inputs) {
     const seconds = type === id("coal") || type === id("charcoal")

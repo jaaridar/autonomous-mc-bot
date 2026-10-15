@@ -13,9 +13,6 @@ import { timeOfDay } from "./world.js";
  */
 
 
-
-
-
 export class NetherDirector {
     constructor(bot) {
         this.bot = bot;
@@ -729,7 +726,6 @@ export class NetherDirector {
  * Account depth accessibility surrounding terrain water availability hostile mobs escape routes when choosing lava pool.
  * Avoid entering cave solely because contains lava if unnecessary danger excessive travel.
  */
-
 
 
 export class BucketDirector {

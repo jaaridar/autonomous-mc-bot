@@ -71,19 +71,6 @@ export function getMobStat(typeId) {
     return { damage: 3, speed: 0.25, range: 1.5, tactic: "kite", priority: 2, fear: 4, groupFear: 0.5, kite: true };
 }
 
-export function combatThreatScore(entities, botPos) {
-    let score = 0;
-    for (const e of entities) {
-        const stat = getMobStat(e.typeId);
-        const dist = Math.hypot(e.location.x - botPos.x, e.location.y - botPos.y, e.location.z - botPos.z);
-        const distFactor = dist < 3 ? 2.5 : dist < 6 ? 1.8 : dist < 10 ? 1.2 : dist < 16 ? 0.7 : 0.3;
-        let fear = stat.fear * distFactor;
-        if (entities.length > 1) fear *= (1 + (entities.length - 1) * stat.groupFear * 0.15);
-        score += fear;
-    }
-    return score;
-}
-
 export function shouldRetreat(hp, threatScore, count, hasWeapon, armor, hasShield, hasWater, threats) {
     // NEVER fight bare hand - priority #1 quick tool
     if (!hasWeapon) return true;
@@ -138,10 +125,6 @@ export function strafeDirection(botPos, targetPos, left) {
     return { x: dz, z: -dx };
 }
 
-export function critWindow(isOnGround, lastCritTick, currentTick) {
-    return isOnGround && currentTick - lastCritTick > 20;
-}
-
 export function dodgePattern(tick, threatType, botPos, threatPos) {
     const stat = getMobStat(threatType);
     if (!stat.strafe && !stat.cover && !MOB_ADAPTIVE.isRanged(threatType)) return null;
@@ -159,36 +142,6 @@ export function dodgePattern(tick, threatType, botPos, threatPos) {
 
 export function endermanSafeLook(targetPos) {
     return { x: targetPos.x, y: targetPos.y - 1.5, z: targetPos.z };
-}
-
-export function findCoverPosition(botPos, threats, terrainCheck) {
-    let best = null;
-    let bestScore = -Infinity;
-    const dirs = [
-        { x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 },
-        { x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }
-    ];
-    for (const dir of dirs) {
-        for (const dist of [3, 5, 7]) {
-            const pos = { x: botPos.x + dir.x * dist, y: botPos.y, z: botPos.z + dir.z * dist };
-            let score = 0;
-            let blocksLOS = 0;
-            for (const t of threats) {
-                const stat = getMobStat(t.typeId);
-                if (!stat.cover && !MOB_ADAPTIVE.isRanged(t.typeId)) continue;
-                const d = Math.hypot(pos.x - t.location.x, pos.z - t.location.z);
-                if (d > 12) score += 5;
-                else if (d < 4) score -= 10;
-                if (terrainCheck) {
-                    const check = terrainCheck(pos, t.location);
-                    if (check.blocksLOS) { score += 15; blocksLOS++; }
-                }
-            }
-            if (blocksLOS > 0) score += blocksLOS * 10;
-            if (score > bestScore) { bestScore = score; best = pos; }
-        }
-    }
-    return best;
 }
 
 // Quick tool check - never bare hand
@@ -304,112 +257,4 @@ export function assess(hp, threats, resources, botPos) {
         closest, threatCount: threats.length, types: [...types], decision,
         resources
     };
-}
-
-/**
- * Choose best cover direction.
- * For ranged swarm, cover is essential - find direction that maximizes blocking.
- */
-export function chooseCoverDirection(botPos, threats, terrainCheck) {
-    // terrainCheck is function(pos) => {hasCover, isSafe}
-    const dirs = [
-        { x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 },
-        { x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }
-    ];
-    let best = null;
-    let bestScore = -Infinity;
-    for (const dir of dirs) {
-        let score = 0;
-        for (const t of threats) {
-            const prof = getProfile(t.typeId);
-            if (!prof.cover) continue;
-            // If we move in dir, does it put cover between us and threat?
-            // Simplified: dot product - moving away from threat is good, but for ranged we want cover not just distance
-            const toThreat = { x: t.location.x - botPos.x, z: t.location.z - botPos.z };
-            const dot = dir.x * toThreat.x + dir.z * toThreat.z;
-            // Negative dot = moving away
-            if (dot < 0) score += prof.fear * 0.5;
-            // Bonus if terrainCheck says cover there
-            const checkPos = { x: botPos.x + dir.x * 3, y: botPos.y, z: botPos.z + dir.z * 3 };
-            const check = terrainCheck ? terrainCheck(checkPos) : { hasCover: false, isSafe: true };
-            if (check.hasCover) score += 10;
-            if (!check.isSafe) score -= 20;
-        }
-        if (score > bestScore) { bestScore = score; best = dir; }
-    }
-    return best;
-}
-
-/**
- * Bunker design for emergency.
- * Returns plan: {type: "low_roof" for enderman, "full" for swarm, "wall" for skeletons}
- */
-export function bunkerPlan(assessment) {
-    if (assessment.hasEnderman) {
-        return { type: "low_roof", height: 2, roof: true, water: assessment.resources.hasWater, description: "2-high roof for enderman, water inside" };
-    }
-    if (assessment.hasSkeletonSwarm) {
-        return { type: "wall", height: 2, length: 3, roof: false, description: "2-high wall to block skeleton LOS" };
-    }
-    if (assessment.threatCount >= 6) {
-        return { type: "full", size: 3, height: 2, roof: true, door: false, description: "3x3x2 bunker with roof for swarm" };
-    }
-    if (assessment.rangedCount > 0) {
-        return { type: "wall", height: 2, length: 2, roof: false, description: "quick wall for ranged" };
-    }
-    return { type: "none", description: "no bunker needed" };
-}
-
-/**
- * Tactical positioning for fighting.
- */
-export function tacticalPosition(botPos, threats, mode) {
-    if (mode === "skeleton_swarm") {
-        // Find position that minimizes exposure: maximize cover, minimize number of skeletons with LOS
-        // For now, return direction with fewest threats
-        const dirs = [{ x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 }];
-        let best = null;
-        let minExposure = Infinity;
-        for (const dir of dirs) {
-            const pos = { x: botPos.x + dir.x * 5, y: botPos.y, z: botPos.z + dir.z * 5 };
-            let exposure = 0;
-            for (const t of threats) {
-                const dist = Math.hypot(pos.x - t.location.x, pos.z - t.location.z);
-                if (dist < 16) exposure++;
-            }
-            if (exposure < minExposure) { minExposure = exposure; best = pos; }
-        }
-        return best;
-    }
-    if (mode === "enderman") {
-        // Find low roof spot or water
-        return { x: botPos.x, y: botPos.y, z: botPos.z, tactic: "low_roof" };
-    }
-    return null;
-}
-
-export function shouldUseShield(threats, hasShield) {
-    if (!hasShield) return false;
-    return threats.some(t => {
-        const p = getProfile(t.typeId);
-        return p.shield && p.type.includes("ranged");
-    });
-}
-
-export function shouldUseWater(threats, hasWater) {
-    if (!hasWater) return false;
-    return threats.some(t => t.typeId === "minecraft:enderman" || getProfile(t.typeId).fire);
-}
-
-export function strafePattern(tick, threatType) {
-    // Return strafe direction that changes every N ticks to dodge arrows
-    const prof = getProfile(threatType);
-    if (prof.type.includes("ranged")) {
-        const cycle = Math.floor(tick / 10) % 4;
-        if (cycle === 0) return { x: 1, z: 0 };
-        if (cycle === 1) return { x: -1, z: 0 };
-        if (cycle === 2) return { x: 0, z: 1 };
-        return { x: 0, z: -1 };
-    }
-    return null;
 }
