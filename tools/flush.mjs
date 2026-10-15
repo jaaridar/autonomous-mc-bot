@@ -2,7 +2,7 @@
 // the load copy, which has @minecraft/* stubs available. Drops itself imports
 // only core modules, so no stub is strictly needed, but the copy keeps every
 // import path exactly as the pack ships them.
-import { Drops } from "./load/scripts/runtime/drops.js";
+import { Drops } from "./load/scripts/runtime/looting.js";
 const mkBot = (loc, entities) => ({
     sim: {
         location: loc,

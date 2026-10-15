@@ -1,7 +1,7 @@
 import { assess, bunkerPlan, chooseCoverDirection, getMobStat, getProfile } from "../core/combat.js";
 import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, key } from "../core/math.js";
 import { EXPLOSIVE, HAZARDS, RANGED, diggable } from "../core/world.js";
-import { Hands } from "./hands.js";
+import { Hands } from "./builder.js";
 import { Direction } from "@minecraft/server";
 /**
  * World-class Escaper - can escape any situation: 16 skeletons, blaze, enderman, warden, lava, water, pit, etc.
