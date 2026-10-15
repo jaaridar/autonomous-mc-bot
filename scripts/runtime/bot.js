@@ -1157,43 +1157,102 @@ export class Bot {
         this.followFails = 0;
     }
     idle(tick) {
-        if (!this.grab) try { this.sim.stopMoving(); } catch {}
-        // FIXED: idle should NOT roam without mission - only pickup drops nearby, no opportunistic wandering
-        // Previously it would roam for resources without clear mission
-        this.reason = "Idle: guarding, waiting for command - use !bot auto or !bot speedrun or !bot follow";
-        // Opportunistic only if very close and not causing roaming
-        if (tick % 100 === 0 && this.settings.hunting) {
-            const opp = this.resource.findOpportunistic(tick);
-            if (opp && distance(opp.e.location, this.sim.location) < 3) {
-                this.reason = `Idle nearby: ${opp.type} within 3 blocks`;
-                const r = this.navTo(opp.e.location, tick, 1);
-                if (r !== "failed") return;
+        // ANTI-IDLE: never stay idle unless compulsory - always active guarding/patrolling/collecting
+        const owner = this.owner();
+        const home = this.home();
+        const anchor = this.anchor ?? home;
+        
+        // If owner exists and far, follow owner (don't stay idle)
+        if (owner) {
+            const distOwner = distance(owner.location, this.sim.location);
+            if (distOwner > 12) {
+                this.reason = `Active idle: owner ${this.ownerName} ${Math.round(distOwner)}b away, following to stay near - never idle`;
+                const r = this.navTo(owner.location, tick, 6);
+                if (r !== "failed" && r !== "blocked") return;
             }
         }
-        if (!this.settings.pickup || this.bag.container.emptySlotsCount < 1) return;
-        const g = this.grab;
-        if (g) {
-            if (!g.e.isValid || distance(g.e.location, this.sim.location) > 12) { this.grab = undefined; return; }
-            if (distance(g.e.location, this.sim.location) > 1.2) {
-                g.contact = 0;
-                if (tick - g.since > 120 || this.nav.go(center(floor(g.e.location)), tick) === "failed") { this.grabIgnore.set(g.e.id, tick + 400); this.grab = undefined; }
+
+        // If has grab (item pickup), handle it - always collect drops
+        if (this.grab) {
+            const g = this.grab;
+            if (!g.e.isValid || distance(g.e.location, this.sim.location) > 12) { this.grab = undefined; }
+            else {
+                if (distance(g.e.location, this.sim.location) > 1.2) {
+                    g.contact = 0;
+                    if (tick - g.since > 120 || this.nav.go(center(floor(g.e.location)), tick) === "failed") { this.grabIgnore.set(g.e.id, tick + 400); this.grab = undefined; }
+                    return;
+                }
+                this.nav.reset();
+                try { this.sim.stopMoving(); } catch {}
+                if (!g.contact) g.contact = tick;
+                else if (tick - g.contact > 60) { this.grabIgnore.set(g.e.id, tick + 400); this.grab = undefined; }
                 return;
             }
-            this.nav.reset();
-            try { this.sim.stopMoving(); } catch {}
-            if (!g.contact) g.contact = tick;
-            else if (tick - g.contact > 60) { this.grabIgnore.set(g.e.id, tick + 400); this.grab = undefined; }
-            return;
         }
-        if (tick % 20 !== 0) return;
-        if (this.grabIgnore.size > 64) for (const [entityId, until] of this.grabIgnore) if (until < tick) this.grabIgnore.delete(entityId);
-        const near = this.sim.dimension.getEntities({ type: "minecraft:item", location: this.sim.location, maxDistance: 8, })
-            .filter((e) => e.isValid && (this.grabIgnore.get(e.id) ?? 0) < tick && this.terrain.safe(e.location))
-            .sort((a, b) => distance(a.location, this.sim.location) - distance(b.location, this.sim.location))[0];
-        if (!near) return;
-        this.reason = "Picking up loose drops nearby.";
-        this.grab = { e: near, since: tick, contact: 0 };
+
+        // Always look for nearby drops to collect - never idle
+        if (this.settings.pickup && this.bag.container.emptySlotsCount > 0 && tick % 20 === 0) {
+            if (this.grabIgnore.size > 64) for (const [entityId, until] of this.grabIgnore) if (until < tick) this.grabIgnore.delete(entityId);
+            const near = this.sim.dimension.getEntities({ type: "minecraft:item", location: this.sim.location, maxDistance: 10, })
+                .filter((e) => e.isValid && (this.grabIgnore.get(e.id) ?? 0) < tick && this.terrain.safe(e.location))
+                .sort((a, b) => distance(a.location, this.sim.location) - distance(b.location, this.sim.location))[0];
+            if (near) {
+                this.reason = "Active idle: collecting nearby drops - never idle";
+                this.grab = { e: near, since: tick, contact: 0 };
+                return;
+            }
+        }
+
+        // Opportunistic resource gathering within 8 blocks - stay active
+        if (tick % 40 === 0 && this.settings.hunting) {
+            const opp = this.resource.findOpportunistic(tick);
+            if (opp && distance(opp.e.location, this.sim.location) < 12) {
+                this.reason = `Active idle: ${opp.type} within 12 blocks, collecting - never idle`;
+                const r = this.navTo(opp.e.location, tick, 2);
+                if (r !== "failed" && r !== "blocked") return;
+            }
+        }
+
+        // Patrol around home/anchor if owner nearby - never stay still
+        if (tick % 60 === 0) {
+            const patrolTarget = this.explorer.goal ?? null;
+            if (!patrolTarget || distance(patrolTarget, this.sim.location) < 3) {
+                // Find new patrol spot near anchor
+                const result = this.explorer.step(this.sim.location, anchor, tick, this.terrain, this.nav, 32);
+                if (result === "running") {
+                    this.reason = `Active idle: patrolling around base, visited ${this.explorer.trips} areas - never idle, use !bot auto or !bot follow`;
+                    return;
+                }
+            } else {
+                const r = this.nav.go(center(patrolTarget), tick);
+                if (r === "running") {
+                    this.reason = `Active idle: patrolling to ${patrolTarget.x},${patrolTarget.y},${patrolTarget.z} - never idle`;
+                    return;
+                }
+            }
+        }
+
+        // If still here, at least look around and guard - but try to move a bit
+        if (tick % 20 === 0) {
+            const p = floor(this.sim.location);
+            const candidates = [];
+            for (const d of COMPASS) {
+                const q = add(p, { x: d.x * 3, y: 0, z: d.z * 3 });
+                if (this.terrain.safe(q)) candidates.push(q);
+            }
+            if (candidates.length) {
+                candidates.sort((a,b) => distance(a, this.sim.location) - distance(b, this.sim.location));
+                const chosen = candidates[Math.floor(Math.random() * Math.min(3, candidates.length))];
+                this.nav.go(center(chosen), tick);
+                this.reason = `Active idle: guarding and patrolling near ${anchor.x},${anchor.y},${anchor.z} - never idle, use !bot auto/speedrun/follow`;
+                return;
+            }
+        }
+
+        this.reason = "Active idle: guarding, ready - use !bot auto or !bot speedrun or !bot follow - never truly idle";
     }
+
+
     collect(tick) {
         const g = this.goal;
         if (!g?.anchor) { this.stop("Collect: no sweep point."); return; }
@@ -1377,7 +1436,8 @@ export class Bot {
             return false; 
         }
 
-        const noTargetThreshold = m.treeMode ? 80 : m.cropMode ? 80 : 150;
+        // ANTI-IDLE: never stay idle - fast threshold 20 for wood, 40 for others
+        const noTargetThreshold = m.treeMode ? 20 : m.cropMode ? 20 : 40;
         if (tick - m.noTargetSince > noTargetThreshold && !m.returning) {
             if (m.underground) {
                 if (!this.deepMiner.active) {
@@ -1515,6 +1575,16 @@ export class Bot {
             if (!m.target) m.target = m.scan.next(this.terrain, (type, p) => this.wantedToMine(m, type, p, tick), 384);
             const lootReady = m.loot.size > 0 && ((!m.target && m.scan.done) || (m.target && horizontal(m.target, this.sim.location) > 2.5) || tick - (m.lootSince ?? tick) > 120);
             if (lootReady && this.drops.flush(m, tick, 6, 20)) return false;
+            // ANTI-IDLE: while scanning with no target, keep moving slightly to avoid silent idle
+            if (!m.target && !m.scan.done && tick - m.noTargetSince > 15) {
+                if (tick % 20 === 0) {
+                    const result = this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, this.settings.range);
+                    if (result === "running") {
+                        this.reason = `Scanning for ${m.item ?? m.block} while moving - never idle - advanced`;
+                        return false;
+                    }
+                }
+            }
             if (!m.target && m.scan.done && !m.underground) {
                 if (!m.far || distance(m.farAt, this.sim.location) > 10) { m.far = new BlockScan(this.sim.location, 20); m.farAt = { ...this.sim.location }; m.farUntil = tick + 200; this.reason = `Nothing within 12; sweeping wider for ${m.item ?? m.block} - advanced`; }
                 if (!m.far.done && tick < m.farUntil) m.target = m.far.next(this.terrain, (type, p) => this.wantedToMine(m, type, p, tick), 512);
@@ -1531,7 +1601,10 @@ export class Bot {
                     }
                 } else {
                     m.exploring = true; m.peek = undefined; this.explorer.reset(); this.nav.reset(); 
-                    this.reason = `Nothing within 20 blocks; exploring for ${m.item ?? m.block} - advanced`;
+                    this.reason = `Nothing within 20 blocks; exploring for ${m.item ?? m.block} - advanced - never idle`;
+                    // Immediately start moving via explorer
+                    const result = this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, this.settings.range);
+                    if (result === "running") return false;
                 }
                 return false;
             }

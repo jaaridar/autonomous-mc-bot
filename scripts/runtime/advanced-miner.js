@@ -619,7 +619,15 @@ export class AdvancedMiner {
         if (!this.target) {
             const found = this.findTarget(tick);
             if (!found) {
-                if (tick - this.noTargetSince > (this.treeMode ? 80 : 150)) {
+                // ANTI-IDLE: never stay idle - fast threshold 20/40
+                if (tick % 15 === 0 && tick - this.noTargetSince > 10) {
+                    // Keep moving while scanning
+                    const result = bot.explorer.step(bot.sim.location, bot.anchor, tick, bot.terrain, bot.nav, bot.settings.range);
+                    if (result === "running") {
+                        bot.reason = `Scanning for ${this.requestedBlock} while moving - never idle - advanced`;
+                    }
+                }
+                if (tick - this.noTargetSince > (this.treeMode ? 20 : 40)) {
                     this.failures++;
                     this.noTargetSince = tick;
                     bot.explorer.reset();
