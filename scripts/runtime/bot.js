@@ -1446,7 +1446,7 @@ export class Bot {
      * Enhanced mining with obstruction clearing, tree handling, bridging, etc.
      */
     /**
-     * Enhanced mining - ROBUST QUICK EXTREMELY v1.2.3 (front-block fix merged with reactive clearing, vein tunneling, bounded skips)
+     * Enhanced mining - ROBUST QUICK EXTREMELY v1.2.4 (front-block fix merged with reactive clearing, vein tunneling, bounded skips)
      * Fixes: idle after breaking log, extremely slow, auto shutdown
      * - Fast treeMode: after breaking log, immediately scan adjacent logs within 3 blocks
      * - Reduced timeouts: wood 80 ticks, stone 150, ore 200 (was 450)
