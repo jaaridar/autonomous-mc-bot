@@ -32,11 +32,16 @@ export class Looting {
         this.lastScan = tick;
         const base = floor(this.sim.location);
         const found = [];
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dz = -radius; dz <= radius; dz++) {
+        // ROBUST QUICK: budgeted scan max 600 checks per tick to avoid extreme slow
+        let checks = 0;
+        const maxChecks = 600;
+        const step = 2; // parity optimization already, but also budget
+        for (let dx = -radius; dx <= radius && checks < maxChecks; dx += step) {
+            for (let dz = -radius; dz <= radius && checks < maxChecks; dz += step) {
                 if (dx*dx + dz*dz > radius*radius) continue;
-                for (let dy = -6; dy <= 6; dy++) {
+                for (let dy = -4; dy <= 4 && checks < maxChecks; dy++) {
                     const p = add(base, { x: dx, y: dy, z: dz });
+                    checks++;
                     if ((this.ignore.get(key(p)) ?? 0) > tick) continue;
                     const b = this.terrain.block(p);
                     if (!b) continue;

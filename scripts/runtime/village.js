@@ -71,23 +71,42 @@ export class VillageDirector {
         const netherRoute = this.bot.nether?.currentRoute ?? null;
         const comparison = evaluateVillageVsNetherRoute(villageEval, netherRoute, context);
 
+        // ROBUST: Village should be priority when food low, even without minimum equipment - user reported food search fails
+        const foodLow = (context.foodAmount ?? 0) < 3 || context.hasFood === false;
+        const hungerLow = (this.bot.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20) <= 14;
+        if (foodLow || hungerLow) {
+            // Force village as priority when food low
+            this.currentVillage = village;
+            this.bot.reason = `Village: FOOD LOW ${context.foodAmount} hunger low - village at ${village.pos.x},${village.pos.y},${village.pos.z} distance ${village.distance.toFixed(0)} PRIORITY for food ${villageEval.benefits.join(",")}`;
+            return this.executeVillageRun(village, villageEval, tick, context);
+        }
+
         if (comparison.decision === "village" && villageEval.shouldGo) {
             this.currentVillage = village;
             this.bot.reason = `Village: ${comparison.reason} - village at ${village.pos.x},${village.pos.y},${village.pos.z} distance ${village.distance.toFixed(0)} benefits ${villageEval.benefits.join(",")} - ${villageEval.foodEfficiency}`;
 
-            // If have minimum equipment, go to village
-            if (context.hasMinimumEquipment) {
+            // If have minimum equipment, go to village - ROBUST: also go even without min equipment if village is close (<64) for food
+            if (context.hasMinimumEquipment || village.distance < 64) {
                 return this.executeVillageRun(village, villageEval, tick, context);
             }
         }
 
-        // Even if not going to village as main, if close and has food/beds, loot quickly
-        if (village.distance < 32 && villageEval.score > 50) {
+        // Even if not going to village as main, if close and has food/beds, loot quickly - ANY STRUCTURE priority
+        if (village.distance < 48 && villageEval.score > 30) {
+            // Try loot target first
             const loot = this.bot.structures?.getLootTarget();
-            if (loot && distance(loot.pos, this.sim.location) < 24) {
-                this.bot.reason = `Village: close village ${village.distance.toFixed(0)} blocks, quick loot food/beds`;
+            if (loot && distance(loot.pos, this.sim.location) < 32) {
+                this.bot.reason = `Village: close village ${village.distance.toFixed(0)} blocks, quick loot food/beds - any structure priority`;
                 const r = this.bot.navTo(center(loot.pos), tick, 2);
                 if (r !== "failed") return true;
+            }
+            // Direct village navigation if no loot target
+            if (village.distance > 8) {
+                const r = this.bot.navTo(center(village.pos), tick, 4);
+                if (r !== "failed") {
+                    this.bot.reason = `Village: close village ${village.distance.toFixed(0)} blocks no loot target, direct nav for food - priority`;
+                    return true;
+                }
             }
         }
 

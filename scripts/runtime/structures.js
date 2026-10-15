@@ -29,9 +29,45 @@ export class StructureDetector {
     }
 
     tick(tick) {
-        if (tick - this.lastScan < 80) return;
+        // ROBUST QUICK: scan every 40 ticks not 80 for faster structure detection, especially when food low
+        const interval = (() => {
+            try {
+                const hunger = this.bot.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+                if (hunger <= 10) return 20; // food low, scan faster
+            } catch {}
+            return 40;
+        })();
+        if (tick - this.lastScan < interval) return;
         this.lastScan = tick;
         this.scan(tick);
+        try { this.scanEntities(tick); } catch {}
+    }
+
+    scanEntities(tick) {
+        // ROBUST: Detect village via entities, not just blocks - critical for village priority when food low
+        try {
+            const entities = this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: 48 });
+            let villagerCount = 0;
+            let villagerPos = null;
+            let golemPos = null;
+            for (const e of entities) {
+                if (e.typeId === "minecraft:villager" || e.typeId === "minecraft:villager_v2") {
+                    villagerCount++;
+                    if (!villagerPos) villagerPos = { x: Math.floor(e.location.x), y: Math.floor(e.location.y), z: Math.floor(e.location.z) };
+                }
+                if (e.typeId === "minecraft:iron_golem") {
+                    golemPos = { x: Math.floor(e.location.x), y: Math.floor(e.location.y), z: Math.floor(e.location.z) };
+                }
+            }
+            if (villagerCount >= 1) {
+                const pos = villagerPos ?? golemPos ?? { x: Math.floor(this.sim.location.x), y: Math.floor(this.sim.location.y), z: Math.floor(this.sim.location.z) };
+                if (!this.found.some(f => f.name === "village" && distance(f.pos, pos) < 24)) {
+                    this.found.push({ name: "village", pos, priority: 95, loot: ["food","bed","hay","chest","iron"], reason: "village detected via villagers for food priority", portal: false, tick, matches: villagerCount });
+                    this.bot.record(`Structure: village via entities count ${villagerCount} at ${pos.x},${pos.y},${pos.z}`);
+                }
+            }
+            // Also detect ruined portal via chest + obsidian entities? Already via blocks
+        } catch {}
     }
 
     scan(tick) {

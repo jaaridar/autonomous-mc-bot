@@ -728,6 +728,71 @@ export class Bot {
             }
         } catch {}
 
+        // VILLAGE-FIRST PRIORITY WHEN FOOD LOW - should head to village if can't find food
+        try {
+            const foodCritical = hunger <= 6 || (this.bag.counts && (() => {
+                try {
+                    const counts = this.bag.counts();
+                    const foodCount = Object.entries(counts).filter(([k]) => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot") || k.includes("apple") || k.includes("hay_block")).reduce((s,[,v])=>s+v,0);
+                    return foodCount < 3;
+                } catch { return false; }
+            })());
+            if (foodCritical && this.village) {
+                if (this.village.tick(tick)) {
+                    this.record("Food low, heading to village priority");
+                    return;
+                }
+            }
+        } catch {}
+
+        // STRUCTURE LOOTING ANY STRUCTURE - ruined portal, village, any chest should be priority, able to loot any structure
+        try {
+            const topStruct = this.structures?.getTopPriority();
+            const lootTarget = this.structures?.getLootTarget();
+            if (topStruct && lootTarget) {
+                const distToLoot = distance(lootTarget.pos, this.sim.location);
+                // Lower threshold to 60 for any structure, not just 90, and prioritize if within 32 blocks
+                if (distToLoot < 32 && topStruct.priority >= 60) {
+                    this.reason = `Structure priority: ${topStruct.name} (${topStruct.reason}) at ${topStruct.pos.x},${topStruct.pos.y},${topStruct.pos.z} priority ${topStruct.priority} - looting any structure`;
+                    const r = this.navTo(center(lootTarget.pos), tick, 2);
+                    if (r !== "failed") {
+                        this.record(`Looting structure ${topStruct.name} priority ${topStruct.priority}`);
+                        return;
+                    }
+                }
+            }
+            // Also check awareness chestSpots and villageSpots for any nearby structure
+            try {
+                const chestSpot = this.awareness?.chestSpots?.[0];
+                if (chestSpot && distance(chestSpot, this.sim.location) < 16) {
+                    const r = this.navTo(center(chestSpot), tick, 2);
+                    if (r !== "failed") {
+                        this.reason = `Chest spotted at ${chestSpot.x},${chestSpot.y},${chestSpot.z} - looting any structure`;
+                        return;
+                    }
+                }
+                const villageSpot = this.awareness?.villageSpots?.[0];
+                if (villageSpot && distance(villageSpot, this.sim.location) < 48 && hunger <= 14) {
+                    const r = this.navTo(center(villageSpot), tick, 4);
+                    if (r !== "failed") {
+                        this.reason = `Village spotted at ${villageSpot.x},${villageSpot.y},${villageSpot.z} - heading for food`;
+                        return;
+                    }
+                }
+                const lavaPool = this.awareness?.getLavaPool();
+                if (lavaPool && distance(lavaPool, this.sim.location) < 24) {
+                    const hasWater = (this.bag.counts()["minecraft:water_bucket"] ?? 0) > 0 || (this.bag.counts()["minecraft:bucket"] ?? 0) > 0;
+                    if (hasWater) {
+                        const r = this.navTo(center(lavaPool), tick, 4);
+                        if (r !== "failed") {
+                            this.reason = `Lava pool portal opportunity at ${lavaPool.x},${lavaPool.y},${lavaPool.z} - any structure priority`;
+                            return;
+                        }
+                    }
+                }
+            } catch {}
+        } catch {}
+
         // NETHER ENTRY DECISION SYSTEM - primary objective enter Nether quickly reliably without dying
         try {
             if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter" || this.mode === "idle") && this.settings.speedrun !== false) {
@@ -735,7 +800,7 @@ export class Bot {
             }
         } catch {}
 
-        // VILLAGE-FIRST STRATEGY
+        // VILLAGE-FIRST STRATEGY - general village handling when not food critical
         try {
             if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter" || this.mode === "idle") && this.village) {
                 if (this.village.tick(tick)) return;
@@ -1324,11 +1389,23 @@ export class Bot {
             m.scan = this.newScan(m);
             return false;
         }
+        // ROBUST: Check head front obstruction specifically when mining down - user reported block front of head gets in between
+        if (target.y < floor(this.sim.location).y) {
+            const headObstruct = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+            if (headObstruct) {
+                const b = this.terrain.block(headObstruct);
+                if (b && !b.isAir) {
+                    this.obstructionClear = { target: { ...target }, cells: [headObstruct], since: tick };
+                    this.reason = `Clearing head front block ${b.typeId} at ${headObstruct.x},${headObstruct.y},${headObstruct.z} that blocks going down`;
+                    return false;
+                }
+            }
+        }
         if (!this.safeToMine(target)) {
             const obstructions = this.terrain.obstructionsBelow(this.sim.location, target);
-            if (obstructions.length > 0 && obstructions.length <= 2) {
-                this.obstructionClear = { target: { ...target }, cells: obstructions.slice(0,2), since: tick };
-                this.reason = `Clearing ${obstructions.length} block(s) to get below`;
+            if (obstructions.length > 0 && obstructions.length <= 3) {
+                this.obstructionClear = { target: { ...target }, cells: obstructions.slice(0,3), since: tick };
+                this.reason = `Clearing ${obstructions.length} block(s) to get below (including head front)`;
                 return false;
             }
             m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined;

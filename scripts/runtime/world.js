@@ -173,7 +173,7 @@ export class Terrain {
     }
 
     /**
-     * For mining below: what blocks are in the way?
+     * For mining below: what blocks are in the way? - ROBUST: also checks block front of head which gets in between when going down
      */
     obstructionsBelow(botPos, targetPos) {
         const obstruct = [];
@@ -186,12 +186,39 @@ export class Terrain {
                     obstruct.push(cell);
                 }
             }
-            // Also check feet and head clearance for digging down
-            const feet = { x: bp.x, y: bp.y - 1, z: bp.z };
-            const head = { x: bp.x, y: bp.y, z: bp.z };
-            // If target is directly below, need to ensure feet cell is clear to stand? Actually bot stands above.
+            // ROBUST: check block in front of head that gets in between when going down - critical fix for mining down obstruction
+            // When mining below, bot looks down, but block at head level in front can block LOS or movement
+            for (const d of [{x:1,y:0,z:0},{x:-1,y:0,z:0},{x:0,y:0,z:1},{x:0,y:0,z:-1},{x:1,y:1,z:0},{x:-1,y:1,z:0},{x:0,y:1,z:1},{x:0,y:1,z:-1}]) {
+                const headFront = { x: bp.x + d.x, y: bp.y + d.y, z: bp.z + d.z };
+                const b = this.block(headFront);
+                if (b && !b.isAir && b.isSolid && !WALKABLE.test(b.typeId)) {
+                    // Only add if it blocks line of sight to below target (check if it's in front and at head level)
+                    if (d.y >= 0) {
+                        obstruct.push(headFront);
+                    }
+                }
+            }
         }
         return obstruct;
+    }
+
+    /**
+     * Find block directly in front of head that obstructs mining down - specific fix for user report
+     */
+    headFrontObstruction(botPos) {
+        const bp = floor(botPos);
+        // Check all 4 cardinal directions at head level (y) and feet level (y-1) for blocks that would be in front when looking down
+        for (const d of [{x:1,y:0,z:0},{x:-1,y:0,z:0},{x:0,y:0,z:1},{x:0,y:0,z:-1}]) {
+            for (const dy of [0, 1]) {
+                const p = { x: bp.x + d.x, y: bp.y + dy, z: bp.z + d.z };
+                const b = this.block(p);
+                if (b && !b.isAir && b.isSolid && !WALKABLE.test(b.typeId) && !b.isLiquid) {
+                    // This block is in front of head, would obstruct going down
+                    return p;
+                }
+            }
+        }
+        return null;
     }
 
     /**
