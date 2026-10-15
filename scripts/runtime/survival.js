@@ -290,7 +290,7 @@ export class SurvivalDirector {
         if (owner && ownerDist < 24) {
             b.reason = `Maintain: fully equipped stage ${this.stage}, guarding near owner ${b.ownerName} ${Math.round(ownerDist)}b - ready for command`;
             b.nav.reset();
-            try { b.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { b.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return;
         }
         // Only scout if no owner nearby and home far, and not in follow mode previously
@@ -310,7 +310,7 @@ export class SurvivalDirector {
         }
         else {
             b.nav.reset();
-            try { b.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { b.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
     }
 }
@@ -424,9 +424,9 @@ export class Forager {
             }
             if (tick - this.lastAttack >= 10) {
                 this.bag.tool("sword") || this.bag.tool("axe");
-                this.sim.lookAtEntity(target);
+                this.bot.avatar.lookEntity(target);
                 if (allowedPrey(target))
-                    this.sim.attackEntity(target);
+                    this.bot.avatar.attack(target);
                 this.lastAttack = tick;
             }
             return;

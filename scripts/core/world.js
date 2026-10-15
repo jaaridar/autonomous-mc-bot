@@ -45,6 +45,21 @@ export const UNBREAKABLE_RE = /(bedrock|barrier|command_block|structure|jigsaw|e
 
 // Crops
 
+/**
+ * Standable: feet passable, head passable, support solid, no hazard. The core
+ * predicate for walkable cells - it moved here with the navigator that used to
+ * own it, because it describes the world, not a pathfinder.
+ */
+export function standable(read, p) {
+    const a = read(p), b = read({ x: p.x, y: p.y + 1, z: p.z }), c = read({ x: p.x, y: p.y - 1, z: p.z });
+    return !!(a?.passable &&
+        b?.passable &&
+        c?.support &&
+        !a.hazard &&
+        !b.hazard &&
+        !c.hazard);
+}
+
 export function isPassable(typeId) {
     if (!typeId) return true;
     if (typeId === "minecraft:air" || typeId === "minecraft:cave_air" || typeId === "minecraft:void_air") return true;

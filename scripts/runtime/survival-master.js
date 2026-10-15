@@ -17,7 +17,6 @@ export class SurvivalMaster {
         this.terrain = bot.terrain;
         this.host = bot.host;
         this.builder = bot.builder;
-        this.parkour = bot.parkour;
         this.escaper = bot.escaper;
         this.combat = bot.combat;
 
@@ -380,7 +379,7 @@ export class SurvivalMaster {
 
     handleNarrowLedgeLava(ctx, tick) {
         // Balance, safe movement, block placement
-        this.sim.isSneaking = true;
+        this.bot.avatar.setSneaking(true);
         if (ctx.hasBlocks) {
             // Widen ledge
             const widen = this.widenLedge(ctx.p, tick);
@@ -482,7 +481,7 @@ export class SurvivalMaster {
 
     handleCaveEmptyHunger(ctx, tick) {
         if (ctx.hunger <= 4) {
-            this.sim.isSprinting = false;
+            this.bot.avatar.setSprinting(false);
             // Avoid sprinting
         }
         if ((ctx.counts["minecraft:bread"] ?? 0) > 0 || (ctx.counts["minecraft:cooked_beef"] ?? 0) > 0) {
@@ -707,7 +706,7 @@ export class SurvivalMaster {
     }
 
     handleSkeletonKnocksTowardCliff(ctx, tick) {
-        this.sim.isSneaking = true;
+        this.bot.avatar.setSneaking(true);
         const safe = this.findSafeSpotAwayFromCliff(ctx.p, 6);
         if (safe) {
             this.bot.navTo(center(safe), tick, 1);
@@ -744,7 +743,7 @@ export class SurvivalMaster {
         const nearest = ctx.threats[0];
         if (nearest && distance(nearest.location, this.sim.location) < 5) {
             // Cancel eating
-            try { this.sim.stopUsingItem(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.stopUsing(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.bot.eatingUntil = 0;
             this.bot.reason = "Night 29: attacked while eating - cancel eating, immediate danger";
             // Equip weapon
@@ -1045,8 +1044,8 @@ export class SurvivalMaster {
                         if (slot >= 0) {
                             const selected = this.bag.select(slot);
                             try {
-                                this.sim.lookAtBlock(this.host.relative(center(support.pos)));
-                                this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(support.pos)), Direction.Up);
+                                this.bot.avatar.lookBlock(support.pos);
+                                this.bot.avatar.useOn(selected, support.pos, Direction.Up);
                                 this.bot.reason = "Shelter 48: gravel collapses exit - torch breaks gravel";
                                 return true;
                             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
@@ -1171,8 +1170,8 @@ export class SurvivalMaster {
             const toBreak = add(ctx.p, { x: 1, y: 0, z: 0 });
             const b = this.terrain.block(toBreak);
             if (b && !b.isAir) {
-                this.sim.lookAtBlock(this.host.relative(center(toBreak)));
-                this.sim.breakBlock(this.host.relative(center(toBreak)));
+                this.bot.avatar.lookBlock(toBreak);
+                this.bot.avatar.breakBlockAt(toBreak);
                 this.bot.reason = "Shelter 55: blocks inside one-block entrance - reopening safely";
                 return true;
             }
@@ -1885,8 +1884,8 @@ export class SurvivalMaster {
         if (!support) return false;
         const selected = this.bag.select(slot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(support.pos)));
-            const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(support.pos)), Direction.Up);
+            this.bot.avatar.lookBlock(support.pos);
+            const ok = this.bot.avatar.useOn(selected, support.pos, Direction.Up);
             if (ok) this.bot.lastTorchPlace = tick;
             return ok;
         } catch { return false; }
@@ -1952,8 +1951,8 @@ export class SurvivalMaster {
         try {
             const p = floor(this.sim.location);
             const below = add(p, DOWN);
-            this.sim.lookAtBlock(this.host.relative(center(below)));
-            const ok = this.sim.useItemInSlot(selected);
+            this.bot.avatar.lookBlock(below);
+            const ok = this.bot.avatar.use(selected);
             if (ok) {
                 this.bot.reason = "Survival-Master: water clutch for fall";
                 return true;

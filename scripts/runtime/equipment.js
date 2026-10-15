@@ -64,9 +64,10 @@ function weaponScore(item) {
 }
 
 export class Equipment {
-    constructor(sim, bag) {
+    constructor(sim, bag, avatar) {
         this.sim = sim;
         this.bag = bag;
+        this.avatar = avatar;   // furnace/bed placement goes through the driver
         this.faultReason = "";
         this.lastQuickTool = 0;
     }
@@ -365,8 +366,8 @@ export class Furnace {
         if (!p)
             throw new TaskFault("No safe furnace placement surface.", "retry");
         const selected = this.bag.select(slot), ground = add(p, { x: 0, y: -1, z: 0 });
-        this.sim.lookAtBlock(this.host.relative(ground));
-        if (!this.sim.useItemInSlotOnBlock(selected, this.host.relative(ground)))
+        this.avatar.lookBlock(ground);
+        if (!this.avatar.useOn(selected, ground))
             throw Error("Furnace placement rejected by engine.");
         this.pending = { p, tick };
         this.access = floor(this.sim.location);

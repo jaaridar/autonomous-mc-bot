@@ -415,7 +415,7 @@ function command(p, text) {
                 ].some((s) => eq?.getEquipment(s)))
                     throw Error("Remove equipment before disconnecting.");
                 b.stop("Removed with empty inventory");
-                b.sim.disconnect();
+                b.avatar.disconnect();
                 bot = undefined;
                 say(p, "Disconnected. The GameTest host remains until world exit.");
                 break;

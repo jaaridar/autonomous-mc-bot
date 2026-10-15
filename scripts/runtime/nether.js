@@ -472,8 +472,8 @@ export class NetherDirector {
         try {
             // Look at portal interior bottom
             const interior = add(portalPos, { x: 1, y: 0, z: 0 });
-            this.sim.lookAtBlock(this.host.relative(center(interior)));
-            const ok = this.sim.useItemInSlot(selected);
+            this.bot.avatar.lookBlock(interior);
+            const ok = this.bot.avatar.use(selected);
             this.ignitionAttempts++;
 
             if (ok) {
@@ -481,7 +481,7 @@ export class NetherDirector {
                 if (verification.success) {
                     this.bot.reason = `Nether: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved`;
                     // Try to enter
-                    this.sim.moveToLocation(this.host.relative(center(interior)));
+                    this.bot.avatar.hop(center(interior));
                     return true;
                 }
             }
@@ -515,8 +515,8 @@ export class NetherDirector {
             // Place water above or adjacent to lava source, not directly into flowing
             const waterPlacePos = add(lavaPos, UP);
             if (this.terrain.empty(waterPlacePos)) {
-                this.sim.lookAtBlock(this.host.relative(center(lavaPos)));
-                const ok = this.sim.useItemInSlot(selected);
+                this.bot.avatar.lookBlock(lavaPos);
+                const ok = this.bot.avatar.use(selected);
                 if (ok) {
                     this.bot.reason = `Nether: placing water on lava at ${lavaPos.x},${lavaPos.y},${lavaPos.z} to make obsidian (water + lava source = obsidian)`;
                     this.lavaPoolAttempts++;
@@ -529,8 +529,8 @@ export class NetherDirector {
                 const adj = add(lavaPos, d);
                 const aboveAdj = add(adj, UP);
                 if (this.terrain.empty(aboveAdj) && this.terrain.block(adj)?.typeId.includes("lava")) {
-                    this.sim.lookAtBlock(this.host.relative(center(adj)));
-                    const ok = this.sim.useItemInSlot(selected);
+                    this.bot.avatar.lookBlock(adj);
+                    const ok = this.bot.avatar.use(selected);
                     if (ok) return true;
                 }
             }
@@ -594,8 +594,8 @@ export class NetherDirector {
 
         const selected = this.bag.select(bucketSlot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(waterSource)));
-            const ok = this.sim.useItemInSlot(selected);
+            this.bot.avatar.lookBlock(waterSource);
+            const ok = this.bot.avatar.use(selected);
             if (ok) {
                 this.bot.reason = `Nether: filling bucket with water at ${waterSource.x},${waterSource.y},${waterSource.z} for obsidian`;
                 return true;
@@ -938,8 +938,8 @@ export class BucketDirector {
 
         const selected = this.bag.select(bucketSlot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(waterSource)));
-            const ok = this.sim.useItemInSlot(selected);
+            this.bot.avatar.lookBlock(waterSource);
+            const ok = this.bot.avatar.use(selected);
             if (ok) {
                 this.bot.reason = `Bucket: filling bucket with water at ${waterSource.x},${waterSource.y},${waterSource.z} for obsidian formation`;
                 this.waterAttempts++;
@@ -957,8 +957,8 @@ export class BucketDirector {
         try {
             // Water placement lava manipulation portal-frame obsidian formation safe ignition
             // Place water above lava source to make obsidian: water + lava source = obsidian
-            this.sim.lookAtBlock(this.host.relative(center(lavaPos)));
-            const ok = this.sim.useItemInSlot(selected);
+            this.bot.avatar.lookBlock(lavaPos);
+            const ok = this.bot.avatar.use(selected);
             if (ok) {
                 this.bot.reason = `Bucket: placing water on lava at ${lavaPos.x},${lavaPos.y},${lavaPos.z} to make obsidian - water + lava source = obsidian, mold method also viable`;
                 this.obsidianAttempts++;

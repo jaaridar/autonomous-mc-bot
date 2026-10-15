@@ -64,7 +64,7 @@ export class Miner {
 
         if (this.breakTarget && this.breakTarget.x === cell.x && this.breakTarget.y === cell.y && this.breakTarget.z === cell.z) {
             if (tick - this.breakingSince > 200) {
-                try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { bot.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.breakTarget = null;
                 this.breakingSince = 0;
                 this.blocked.set(`${cell.x},${cell.y},${cell.z}`, tick + BLOCKED_TTL);
@@ -73,7 +73,7 @@ export class Miner {
             return true;
         }
 
-        try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { bot.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         if (bot.breakThrough(cell) !== "digging") return false;
         this.breakTarget = { ...cell };
         this.breakingSince = tick;
@@ -155,7 +155,7 @@ export class Miner {
                 this.breakTarget = null;
                 this.breakingSince = 0;
             } else if (tick - this.breakingSince > 200) {
-                try { b.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { b.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.blocked.set(`${this.breakTarget.x},${this.breakTarget.y},${this.breakTarget.z}`, tick + BLOCKED_TTL);
                 this.breakTarget = null;
                 this.breakingSince = 0;
@@ -189,9 +189,9 @@ export class Miner {
         const loc = center(cell);
         if (horizontal(b.sim.location, loc) < 0.5 && Math.abs(b.sim.location.y - cell.y) < 1.2) return "arrived";
         b.nav.reset();
-        b.sim.isSprinting = false;
-        if (cell.y > floor(b.sim.location).y) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true });
+        this.bot.avatar.setSprinting(false);
+        if (cell.y > floor(b.sim.location).y) b.avatar.jump();
+        b.avatar.hop(loc);
         return "moving";
     }
 
@@ -200,9 +200,9 @@ export class Miner {
         void tick;
         this.moving = { ...cell };
         b.nav.reset();
-        b.sim.isSprinting = false;
-        if (cell.y > floor(b.sim.location).y) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true });
+        this.bot.avatar.setSprinting(false);
+        if (cell.y > floor(b.sim.location).y) b.avatar.jump();
+        b.avatar.hop(center(cell));
     }
 
     settle() {
@@ -488,7 +488,7 @@ export class DeepMiner {
         // If already breaking same cell, continue
         if (this.breakTarget && this.breakTarget.x === cell.x && this.breakTarget.y === cell.y && this.breakTarget.z === cell.z) {
             if (tick - this.breakingSince > 200) {
-                try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { bot.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.breakTarget = null;
                 this.breakingSince = 0;
                 this.blocked.set(key(cell), tick + BLOCKED_TTL);
@@ -498,7 +498,7 @@ export class DeepMiner {
         }
 
         // Start breaking front block directly - no nav needed
-        try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { bot.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         if (bot.breakThrough(cell) !== "digging") {
             return false;
         }
@@ -563,7 +563,7 @@ export class DeepMiner {
                 this.breakTarget = null;
                 this.breakingSince = 0;
             } else if (tick - this.breakingSince > 200) {
-                try { b.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { b.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.blocked.set(key(this.breakTarget), tick + BLOCKED_TTL);
                 this.breakTarget = null;
                 this.breakingSince = 0;
@@ -604,9 +604,9 @@ export class DeepMiner {
         if (horizontal(b.sim.location, loc) < 0.5 && Math.abs(b.sim.location.y - cell.y) < 1.2)
             return "arrived";
         b.nav.reset();
-        b.sim.isSprinting = false;
-        if (cell.y > floor(b.sim.location).y) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true });
+        this.bot.avatar.setSprinting(false);
+        if (cell.y > floor(b.sim.location).y) b.avatar.jump();
+        b.avatar.hop(loc);
         return "moving";
     }
 
@@ -614,9 +614,9 @@ export class DeepMiner {
         this.moving = { ...cell };
         const b = this.bot;
         b.nav.reset();
-        b.sim.isSprinting = false;
-        if (cell.y > floor(b.sim.location).y) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true });
+        this.bot.avatar.setSprinting(false);
+        if (cell.y > floor(b.sim.location).y) b.avatar.jump();
+        b.avatar.hop(center(cell));
     }
 
     settle() {

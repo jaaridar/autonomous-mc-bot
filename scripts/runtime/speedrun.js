@@ -446,12 +446,12 @@ export class SpeedrunDirector {
             const selected = b.bag.select(slot);
             const portalPos = this.currentRoute?.pos ?? floor(b.sim.location);
             const interior = { x: portalPos.x + 1, y: portalPos.y, z: portalPos.z };
-            b.sim.lookAtBlock(b.host.relative(center(interior)));
-            const ok = b.sim.useItemInSlot(selected);
+            b.avatar.lookBlock(interior);
+            const ok = b.avatar.use(selected);
             this.ignitionTries++;
             if (ok) {
                 b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved, verify success`;
-                try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { b.avatar.hop(center(interior)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 // Verify entry
                 const verify = verifyPortalAction("ignite_portal", "ignited", counts);
                 if (verify.success) {
@@ -820,8 +820,8 @@ export class SpeedrunDirector {
                                         const selected = b.bag.select(waterSlot);
                                         const lavaBlock = b.terrain.block(pos);
                                         if (lavaBlock) {
-                                            b.sim.lookAtBlock(b.host.relative(center(pos)));
-                                            b.sim.useItemInSlot(selected);
+                                            b.avatar.lookBlock(pos);
+                                            b.avatar.use(selected);
                                             this.lavaPoolTries++;
                                             return;
                                         }

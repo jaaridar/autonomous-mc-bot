@@ -143,9 +143,9 @@ export class Builder {
 
         const selected = this.bag.select(slot);
         try {
-            if (options.sneak) this.sim.isSneaking = true;
-            this.sim.lookAtBlock(this.host.relative(center(anchor)));
-            const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(anchor)), face);
+            if (options.sneak) this.bot.avatar.setSneaking(true);
+            this.bot.avatar.lookBlock(anchor);
+            const ok = this.bot.avatar.useOn(selected, anchor, face);
             // Inventory and the target cell changed: drop the per-tick caches.
             this.bag.invalidate?.();
             if (ok) this.terrain.invalidate?.(target);
@@ -323,7 +323,7 @@ export class Builder {
         if (belowBlock && belowBlock.isSolid) {
             if (this.sim.isOnGround) {
                 if (tick - state.lastJump > 10) {
-                    this.sim.jump();
+                    this.bot.avatar.jump();
                     state.lastJump = tick;
                 }
                 return "jumping";
@@ -371,7 +371,7 @@ export class Builder {
 
     resetPillar() {
         this.pillaring = undefined;
-        try { this.sim.isSneaking = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.setSneaking(false); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     /**
@@ -495,8 +495,8 @@ export class Builder {
         if (slot < 0) return false;
         const selected = this.bag.select(slot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(support)));
-            return this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(support)), Direction.Up);
+            this.bot.avatar.lookBlock(support);
+            return this.bot.avatar.useOn(selected, support, Direction.Up);
         } catch {
             return false;
         }
@@ -638,9 +638,9 @@ export class Hands {
         const selected = this.bag.select(slot);
         try {
             if (options.sneak)
-                this.sim.isSneaking = true;
-            this.sim.lookAtBlock(this.host.relative(center(anchor)));
-            const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(anchor)), face);
+                this.bot.avatar.setSneaking(true);
+            this.bot.avatar.lookBlock(anchor);
+            const ok = this.bot.avatar.useOn(selected, anchor, face);
             this.bag.invalidate?.();
             return ok ? "placed" : "rejected";
         }
@@ -652,8 +652,8 @@ export class Hands {
     placeItemOn(ground, slot) {
         const selected = this.bag.select(slot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(ground)));
-            const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(ground)));
+            this.bot.avatar.lookBlock(ground);
+            const ok = this.bot.avatar.useOn(selected, ground);
             this.bag.invalidate?.();
             if (ok) this.terrain.invalidate?.(add(ground, { x: 0, y: 1, z: 0 }));
             return ok ? "placed" : "rejected";

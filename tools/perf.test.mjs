@@ -1,9 +1,6 @@
 import { Arbiter, DEFERRED } from "../scripts/core/arbiter.js";
-import { PathSearch } from "../scripts/core/navigation.js";
-import { Navigator } from "../scripts/runtime/navigation.js";
 import { BlockScan, RollingSweep, Terrain } from "../scripts/runtime/world.js";
 import { Bag } from "./load/scripts/runtime/inventory.js";
-import { PathSearch as LegacySearch } from "./perf/legacy-navigation.mjs";
 // Ultra-efficiency regression suite.
 //
 // Proves the lag fixes are real AND behaviour-preserving, offline:
@@ -65,101 +62,6 @@ function randomWorld(seed) {
     };
 }
 const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${q.kind}`))].sort();
-
-// ------------------------------------------------- A* neighbour equivalence
-{
-    let identical = 0, subset = 0, total = 0, bogusRemoved = 0;
-    for (let seed = 1; seed <= 60; seed++) {
-        const w = randomWorld(seed);
-        for (const allowBridge of [false, true]) {
-            const opts = { allowBridge, allowPillar: allowBridge, allowSprintJump: true };
-            const a = new PathSearch((p) => w(p.x, p.y, p.z), { x: 0, y: 1, z: 0 }, { x: 20, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], opts);
-            const b = new LegacySearch((p) => w(p.x, p.y, p.z), { x: 0, y: 1, z: 0 }, { x: 20, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], opts);
-            for (let i = 0; i < 40; i++) {
-                const p = { x: (i * 7) % 13 - 6, y: (i % 3), z: (i * 5) % 11 - 5 };
-                const n = sig(a.neighbors(p)), o = sig(b.neighbors(p));
-                total++;
-                if (!allowBridge) { if (n.join("|") === o.join("|")) identical++; }
-                else {
-                    const os = new Set(o);
-                    if (n.every((x) => os.has(x))) subset++;
-                    bogusRemoved += o.length - n.length;
-                }
-            }
-        }
-    }
-    ok(identical === total / 2, `A*: neighbours identical to v1.2.4 without bridging (${identical}/${total / 2} cells)`);
-    ok(subset === total / 2, `A*: with bridging, neighbours are a subset of v1.2.4 (${subset}/${total / 2})`);
-    console.log(`     (removed ${bogusRemoved} bogus/duplicate bridge+pillar candidates)`);
-}
-{
-    // Flat ground: the old search proposed place-block-and-jump moves onto
-    // plain floor (cost 10) in every direction from every node.
-    const w = makeWorld(flat);
-    const opts = { allowBridge: true, allowPillar: true, allowSprintJump: true };
-    const n = new PathSearch(w.read, { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], opts).neighbors({ x: 0, y: 1, z: 0 });
-    const o = new LegacySearch(w.read, { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], opts).neighbors({ x: 0, y: 1, z: 0 });
-    ok(!n.some((q) => q.kind.startsWith("bridge")), "A*: no bridge/jump-over-gap candidates on solid flat ground");
-    ok(o.filter((q) => q.kind.startsWith("bridge")).length > 0, "A*: (legacy really did emit them - regression guard)");
-    ok(n.filter((q) => q.kind === "pillar").length === 1 && o.filter((q) => q.kind === "pillar").length === 4, "A*: pillar candidate emitted once (was 4x)");
-}
-
-// --------------------------------------------------- A* results + cost
-function run(Search, worldFn, start, goal, maxNodes, radius, opts = {}, allowPartial = false) {
-    const w = makeWorld(worldFn);
-    const s = new Search(w.read, start, goal, 0.7, true, maxNodes, radius, allowPartial, [], opts);
-    let r;
-    for (let i = 0; i < 400 && (r = s.step(120)) === "searching"; i++);
-    return { status: r, path: s.path, expanded: s.expanded, reads: w.stats.reads };
-}
-{
-    const a = run(PathSearch, flat, { x: 0, y: 1, z: 0 }, { x: 15, y: 1, z: 6 }, 2000, 32);
-    const b = run(LegacySearch, flat, { x: 0, y: 1, z: 0 }, { x: 15, y: 1, z: 6 }, 2000, 32);
-    ok(a.status === "found" && b.status === "found", "A*: flat route found by both");
-    ok(a.path.length === b.path.length, `A*: same path length on flat ground (${a.path.length} vs ${b.path.length})`);
-    ok(a.reads < b.reads / 4, `A*: block reads per search cut ${b.reads} -> ${a.reads}`);
-
-    // Wall with a door
-    const wall = (x, y, z) => (y <= 0 ? STONE : x === 6 && z !== 5 && y <= 3 ? STONE : AIR);
-    const c = run(PathSearch, wall, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 }, 2000, 32);
-    const d = run(LegacySearch, wall, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 }, 2000, 32);
-    ok(c.status === "found" && c.path.some((p) => p.x === 6 && p.z === 5), "A*: routes through the door in a wall");
-    ok(c.path.length === d.path.length, `A*: door route length matches legacy (${c.path.length})`);
-
-    // Gap jump
-    const gap = (x, y, z) => (y <= 0 && x !== 4 ? STONE : y < -3 ? STONE : AIR);
-    const e = run(PathSearch, gap, { x: 0, y: 1, z: 0 }, { x: 8, y: 1, z: 0 }, 2000, 32);
-    ok(e.status === "found" && e.path.some((p) => p.kind === "jump" || p.kind === "drop" || p.kind === "bigdrop"), "A*: crosses a 1-block trench");
-
-    // Lava moat: never step into hazard
-    const moat = (x, y, z) => (y < 0 ? STONE : y === 0 ? (x >= 3 && x <= 5 && z > -6 && z < 6 ? LAVA : STONE) : AIR);
-    const f = run(PathSearch, moat, { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 }, 2000, 32, { allowBridge: false });
-    ok(f.status === "found" && f.path.every((p) => !(p.x >= 3 && p.x <= 5 && p.z > -6 && p.z < 6 && p.y === 1)), "A*: walks around a lava strip (never on it)");
-
-    // Budget exhaustion -> best-effort partial instead of failure
-    // Wall with a far door: the full route does not fit in 120 nodes.
-    const longWall = (x, y, z) => (y <= 0 ? STONE : (x === 6 && z !== 14 && y <= 3) ? STONE : AIR);
-    const g = run(PathSearch, longWall, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 }, 120, 24);
-    const h = run(LegacySearch, longWall, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 }, 120, 24);
-    ok(h.status === "budget", "A*: legacy gives up when the budget runs out");
-    const end = g.path[g.path.length - 1];
-    ok(g.status === "partial" && end && Math.hypot(end.x - 12, end.z) <= 12 - 3, `A*: new search returns a best-effort partial route instead (${g.status})`);
-    // Truly unreachable: still reported as such (no fake progress).
-    const sealed = (x, y, z) => (y <= 0 ? STONE : (x === 2) ? STONE : AIR);
-    const u = run(PathSearch, sealed, { x: 0, y: 1, z: 0 }, { x: 8, y: 1, z: 0 }, 400, 24);
-    ok(u.status !== "found" && u.status !== "partial", `A*: sealed-off goal still fails honestly (${u.status})`);
-}
-{
-    // Budget sanity: expansions per long trip with the new runtime budgets
-    // (1200 nodes / radius 24) vs the old (2000 / 32).
-    const rough = randomWorld(99);
-    const terrainFn = (x, y, z) => (y <= 0 ? STONE : y === 1 && (Math.abs(x * 31 + z * 17) % 9 === 0) ? STONE : AIR);
-    void rough;
-    const a = run(PathSearch, terrainFn, { x: 0, y: 1, z: 0 }, { x: 60, y: 1, z: 4 }, 1200, 24, {}, true);
-    const b = run(LegacySearch, terrainFn, { x: 0, y: 1, z: 0 }, { x: 60, y: 1, z: 4 }, 2000, 32, {}, true);
-    ok(a.status === "partial", "A*: long trip makes rolling-horizon progress with the small budget");
-    ok(a.reads <= b.reads, `A*: long-trip segment block reads ${b.reads} -> ${a.reads}`);
-}
 
 // ------------------------------------------------------------ Terrain cache
 function fakeDimension(fn) {
@@ -361,39 +263,6 @@ function fakePlayer(slots) {
     for (let t = 0; t < 100; t++) { arb3.current = { id: "boom", director: { tick: () => { throw new Error("x"); } }, score: 1, tags: [] }; arb3.lastEvaluate = t; arb3.tick(t); }
     console.warn = warn;
     ok(warns <= 3, `arbiter: a director throwing 100x logs ${warns}x (was 100x)`);
-}
-
-// ---------------------------------------------------------------- Navigator
-{
-    const moves = [];
-    const sim = {
-        location: { x: 0.5, y: 1, z: 0.5 }, isInWater: false, isOnGround: true, isSprinting: false,
-        getComponent: () => ({ currentValue: 20 }),
-        moveToLocation: (p) => moves.push(p), stopMoving: () => {}, jump: () => {},
-    };
-    const host = { relative: (p) => p };
-    const t = new Terrain(fakeDimension(flat));
-    t.begin(1);
-    const nav = new Navigator(sim, host, t);
-    const r = nav.go({ x: 4.5, y: 1, z: 2.5 }, 1);
-    ok(r === "running" && !nav.search && nav.direct && moves.length === 1, "nav: short clear hop walks directly (no A* search allocated)");
-    nav.reset();
-    const wallWorld = (x, y, z) => (y <= 0 ? STONE : x === 2 && y <= 2 ? STONE : AIR);
-    const t2 = new Terrain(fakeDimension(wallWorld)); t2.begin(1);
-    const nav2 = new Navigator(sim, host, t2);
-    nav2.go({ x: 4.5, y: 1, z: 0.5 }, 1);
-    ok(!nav2.direct && nav2.search, "nav: blocked straight line falls back to A*");
-    ok(nav2.search.maxNodes === 1200 && nav2.search.radius === 24, "nav: normal search budget 1200 nodes / radius 24 (was 2000 / 32)");
-    const nav3 = new Navigator(sim, host, t2);
-    nav3.go({ x: 1.5, y: 40, z: 0.5 }, 1);
-    ok(nav3.search && nav3.search.maxNodes === 1500 && nav3.search.radius === 48, "nav: tower search 1500 / 48 only when the goal is overhead (was 3000 / 64)");
-    const t4 = new Terrain(fakeDimension(flat)); t4.begin(1);
-    const nav4 = new Navigator(sim, host, t4);
-    nav4.go({ x: 30.5, y: 1, z: 0.5 }, 1);
-    const firstSearch = nav4.search; let replans = nav4.replans;
-    for (let tick = 2; tick < 60; tick++) nav4.go({ x: 30.5 + tick * 0.1, y: 1, z: 0.5 }, tick);
-    ok(nav4.replans - replans <= 1, `nav: goal drifting 6 blocks over 3s causes ${nav4.replans - replans} replans (was ~4)`);
-    void firstSearch;
 }
 
 console.log(`\nperf.test: ${pass} passed, ${fail} failed`);

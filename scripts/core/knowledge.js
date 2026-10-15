@@ -712,26 +712,3 @@ export function bridgingPlan(from, to, terrainInfo) {
     return { type: "walk", blocks: 0, tactic: "walk", need: "none" };
 }
 
-export function parkourPlan(from, to, terrainInfo) {
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dz = to.z - from.z;
-    const hDist = Math.hypot(dx, dz);
-
-    if (dy === 1 && hDist <= 1.5) {
-        return { type: "step_up", tactic: "jump", need: "headroom_2" };
-    }
-    if (dy === 0 && hDist > 1 && hDist <= 2.5) {
-        return { type: "gap_1", tactic: "sprint_jump", need: "runup_2" };
-    }
-    if (dy === 0 && hDist > 2.5 && hDist <= 4) {
-        return { type: "gap_2", tactic: "sprint_jump_bridge", need: "runup_3+blocks" };
-    }
-    if (dy === 1 && hDist > 1 && hDist <= 3) {
-        return { type: "ascend_gap", tactic: "sprint_jump_up", need: "runup" };
-    }
-    if (dy < 0 && hDist <= 2) {
-        return { type: "drop", tactic: "safe_fall_or_water_clutch", need: "water_bucket_or_3_blocks_drop" };
-    }
-    return { type: "walk", tactic: "walk" };
-}

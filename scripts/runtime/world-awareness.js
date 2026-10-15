@@ -1,5 +1,5 @@
 // One module now: runtime/world-awareness.js + runtime/structures.js (see docs/ARCHITECTURE.md).
-import { STRUCTURE_SIGS, bridgingPlan, detectStructure, parkourPlan, prioritizeGoal, retainScore, scoreSurrounding, shouldLootChest } from "../core/knowledge.js";
+import { STRUCTURE_SIGS, detectStructure, prioritizeGoal, retainScore, scoreSurrounding, shouldLootChest } from "../core/knowledge.js";
 import { add, distance, floor, key } from "../core/math.js";
 import { RollingSweep } from "./world.js";
 
@@ -305,23 +305,6 @@ export class WorldAwareness {
         return sorted[0] ?? null;
     }
 
-    // For bridging/parkour: analyze terrain to goal
-    analyzePathTo(goal) {
-        const from = floor(this.sim.location);
-        const to = floor(goal);
-        const dx = to.x - from.x;
-        const dy = to.y - from.y;
-        const dz = to.z - from.z;
-
-        // Check obstructions
-        const obstruct = this.terrain.findObstructions(from, to);
-        const below = this.terrain.obstructionsBelow(this.sim.location, to);
-
-        const bridge = bridgingPlan(from, to, { obstruct, below });
-        const parkour = parkourPlan(from, to, { obstruct });
-
-        return { bridge, parkour, obstruct, below, from, to, dx, dy, dz };
-    }
 
     // Retain important stuff logic
     shouldKeep(typeId, count, freeSlots) {

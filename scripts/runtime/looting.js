@@ -317,7 +317,7 @@ export class Drops {
             // vanish as unreachable and move on - a live task sweep will
             // revisit the area; orbiting it forever reads as a stuck bot.
             b.nav.reset();
-            b.sim.stopMoving();
+            b.avatar.stopMoving();
             m.standSince = m.standSince ?? tick;
             if (tick - m.standSince > 10) { // FAST: was 30, now 10 ticks = 0.5 sec
                 m.blocked?.set(key(floor(e.location)), tick + 900);
@@ -372,12 +372,12 @@ export class Drops {
         const b = this.bot;
         if (horizontal(b.sim.location, loc) < 1.4 &&
             Math.abs(b.sim.location.y - loc.y) < 1.6) {
-            b.sim.stopMoving();
+            b.avatar.stopMoving();
             return;
         }
-        b.sim.isSprinting = false;
-        b.sim.moveToLocation(b.host.relative({ x: loc.x, y: loc.y, z: loc.z }), { faceTarget: true });
+        this.bot.avatar.setSprinting(false);
+        b.avatar.hop({ x: loc.x, y: loc.y, z: loc.z });
         if (b.sim.isOnGround)
-            b.sim.jump();
+            b.avatar.jump();
     }
 }

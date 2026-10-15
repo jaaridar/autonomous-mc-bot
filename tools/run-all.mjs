@@ -24,8 +24,10 @@ const steps = [
     { name: "no-undef gate (missing imports + this.<field> typos)", file: "gates.mjs", args: ["undef"] },
     { name: "import scan", file: "gates.mjs", args: ["imports"] },
     { name: "component-method gate (member calls that resolve to nothing)", file: "gates.mjs", args: ["components"] },
+    { name: "avatar boundary (only scripts/sim drives the simulated player)", file: "gates.mjs", args: ["sim"] },
     { name: "unit tests (memory schema, capabilities, walkable guard, drop flush)", file: "tests.mjs" },
-    { name: "perf/efficiency tests (native-call + A* budgets, equivalence vs v1.2.4)", file: "perf.test.mjs" },
+    { name: "sim tests (avatar driver + movement policy against a behavioural fake)", file: "sim.test.mjs" },
+    { name: "perf/efficiency tests (native-call budgets)", file: "perf.test.mjs" },
     { name: "no-undef gate catches its fixtures (expected to fail)", file: "gates.mjs", args: ["undef", "tools/selftest"], mustFail: true },
 ];
 

@@ -185,7 +185,7 @@ export class Scout {
             }
             else {
                 b.nav.reset();
-                b.sim.stopMoving();
+                b.avatar.stopMoving();
                 c.dwell = c.dwell ?? tick;
                 if (tick - c.dwell > 40) {
                     this.chore = undefined;
@@ -207,10 +207,10 @@ export class Scout {
         }
         b.nav.reset();
         b.reason = "Hunting a sheep for wool.";
-        b.sim.lookAtEntity(e);
+        b.avatar.lookEntity(e);
         if (tick - c.lastSwing >= 10 && allowedPrey(e)) {
             b.bag.tool("sword") || b.bag.tool("axe");
-            b.sim.attackEntity(e);
+            b.avatar.attack(e);
             c.lastSwing = tick;
         }
         return true;
@@ -281,8 +281,8 @@ export class Scout {
         b.reason = "Grabbing logs from a nearby tree.";
         if (!b.bag.tool("axe"))
             b.bag.emptyHand();
-        b.sim.lookAtBlock(b.host.relative(c.cell));
-        if (b.sim.breakBlock(b.host.relative(c.cell)))
+        b.avatar.lookBlock(c.cell);
+        if (b.avatar.breakBlockAt(c.cell))
             c.breaking = tick;
         else
             c.cell = undefined; // cannot open it from here; pick another cell

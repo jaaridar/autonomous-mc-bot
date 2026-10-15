@@ -255,7 +255,7 @@ export class Combat {
         } else if (this.sim.isOnGround && tick - this.lastCrit > 25) {
             this.lastCrit = tick;
             this.critArmed = true;
-            try { this.sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return true;
         }
 
@@ -441,14 +441,14 @@ export class Combat {
         if (this.bunkerBuilt && this.bunkerPos && distance(this.sim.location, this.bunkerPos) < 3) {
             // Already in bunker, heal
             this.bot.reason = "In emergency bunker, healing";
-            try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             // Eat if needed
             const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
             if (hunger <= 16) {
                 const food = this.bag.food(true);
                 if (food >= 0) {
                     const held = this.bag.select(food);
-                    try { this.sim.useItemInSlot(held); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                    try { this.bot.avatar.use(held); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 }
             }
             return true;
@@ -550,8 +550,8 @@ export class Combat {
         if (slot < 0) return false;
         const selected = this.bag.select(slot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(floor(this.sim.location))));
-            const ok = this.sim.useItemInSlot(selected);
+            this.bot.avatar.lookBlock(floor(this.sim.location));
+            const ok = this.bot.avatar.use(selected);
             if (ok) {
                 this.waterPlaced = tick;
                 return true;
@@ -567,8 +567,8 @@ export class Combat {
             this.attackEndermanLegs(target, tick);
             return;
         }
-        try { this.sim.lookAtEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { this.sim.attackEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.lookEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.attack(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         this.lastAttack = tick;
         this.combo++;
         this.strafe(tick, false);
@@ -578,11 +578,11 @@ export class Combat {
         this.bag.weapon();
         try {
             const legs = endermanSafeLook(target.location);
-            this.sim.lookAtLocation(legs);
+            this.bot.avatar.lookLocation(legs);
         } catch {
-            try { this.sim.lookAtEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.lookEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
-        try { this.sim.attackEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.attack(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         this.lastAttack = tick;
         this.combo++;
         // Don't strafe too much for enderman - it teleports
@@ -604,7 +604,7 @@ export class Combat {
             const q = add(p, d);
             if (this.terrain.safe(q)) {
                 this.lastStrafe = tick;
-                try { this.sim.moveToLocation(this.host.relative(center(q)), { faceTarget: true }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.avatar.hop(center(q)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 return;
             }
         }
@@ -621,7 +621,7 @@ export class Combat {
         const dodgePos = { x: p.x + Math.sign(pattern.x) * 2, y: p.y, z: p.z + Math.sign(pattern.z) * 2 };
         const ground = this.terrain.groundNear(dodgePos.x, dodgePos.z, dodgePos.y, 2);
         if (ground && !this.terrain.dangerous(ground)) {
-            try { this.sim.moveToLocation(this.host.relative(center(ground)), { faceTarget: true }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.hop(center(ground)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.lastStrafe = tick;
         } else {
             this.strafe(tick, true);

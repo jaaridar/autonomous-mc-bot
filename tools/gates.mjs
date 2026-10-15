@@ -4,6 +4,8 @@
 //   node tools/gates.mjs link    [tools/load/scripts]   ESM link + evaluate against the @minecraft stubs
 //   node tools/gates.mjs undef   [scripts]              calls to names never imported + this.<field> typos
 //   node tools/gates.mjs imports [scripts]              imports that point at files that do not exist
+//   node tools/gates.mjs components [scripts]           component member calls that resolve to nothing
+//   node tools/gates.mjs sim [scripts]                  raw avatar control outside scripts/sim
 //
 // Each mode exits 0 when clean and 1 on findings (2 on a usage error), so
 // run-all.mjs can fail the run on any gate. The checks used to live in four
@@ -380,31 +382,33 @@ function importsGate(root) {
  * left one live caller behind and nothing in the suite noticed.
  */
 const COMPONENTS = {
-    escaper: "escape.js", escape: "escape.js",
-    builder: "builder.js", hands: "builder.js",
-    terrain: "world.js",
-    bag: "inventory.js", resource: "inventory.js",
-    nav: "navigation.js", parkour: "navigation.js",
-    combat: "combat.js", equipment: "equipment.js", furnace: "equipment.js",
-    awareness: "world-awareness.js",
-    looting: "looting.js", drops: "looting.js",
-    miner: "mining.js", deepMiner: "mining.js",
-    survivalMaster: "survival-master.js",
-    speedrun: "speedrun.js", nether: "nether.js", bucket: "nether.js",
-    village: "village.js", golem: "village.js",
-    food: "survival.js", autonomy: "survival.js", forager: "survival.js",
-    scout: "scouting.js",
-    memory: "memory.js", host: "host.js", ui: "ui.js",
+    // instance field -> the file that defines the class, relative to scripts/
+    escaper: "runtime/escape.js", escape: "runtime/escape.js",
+    builder: "runtime/builder.js", hands: "runtime/builder.js",
+    terrain: "runtime/world.js",
+    bag: "runtime/inventory.js", resource: "runtime/inventory.js",
+    nav: "runtime/navigation.js",
+    avatar: "sim/avatar.js",
+    combat: "runtime/combat.js", equipment: "runtime/equipment.js", furnace: "runtime/equipment.js",
+    awareness: "runtime/world-awareness.js",
+    looting: "runtime/looting.js", drops: "runtime/looting.js",
+    miner: "runtime/mining.js", deepMiner: "runtime/mining.js",
+    survivalMaster: "runtime/survival-master.js",
+    speedrun: "runtime/speedrun.js", nether: "runtime/nether.js", bucket: "runtime/nether.js",
+    village: "runtime/village.js", golem: "runtime/village.js",
+    food: "runtime/survival.js", autonomy: "runtime/survival.js", forager: "runtime/survival.js",
+    scout: "runtime/scouting.js",
+    memory: "runtime/memory.js", host: "runtime/host.js", ui: "runtime/ui.js",
 };
 /** Instances held directly in main.js rather than reached through the bot. */
-const DIRECT = { host: "host.js", memory: "memory.js" };
+const DIRECT = { host: "runtime/host.js", memory: "runtime/memory.js" };
 /** Engine objects, plain arrays/fields and locals - not one of our components. */
 const NOT_COMPONENTS = new Set(["sim", "player", "owner", "dimension", "world", "system", "structures", "explorer", "arbiter", "scan", "cache", "p"]);
 /** Built-in methods: a component field holding an array/Map/String can still be called through. */
 const BUILTIN_METHODS = new Set(["slice", "filter", "find", "findIndex", "map", "forEach", "sort", "push", "pop", "shift", "unshift", "splice", "includes", "indexOf", "join", "keys", "values", "entries", "has", "get", "set", "add", "delete", "some", "every", "reduce", "concat", "replace", "split", "trim", "startsWith", "endsWith", "toLowerCase", "toUpperCase", "toFixed", "toString", "flat", "flatMap", "reverse", "fill", "test"]);
 
-const membersOfComponent = (runtimeDir, file) => {
-    const src = readFileSync(join(runtimeDir, file), "utf8");
+const membersOfComponent = (root, file) => {
+    const src = readFileSync(join(root, file), "utf8");
     return new Set([
         ...[...src.matchAll(/^ {4}(?:get\s+|set\s+|async\s+|static\s+|\*\s*)*([A-Za-z_$][\w$]*)\s*\(/gm)].map((m) => m[1]),
         ...[...src.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=/g)].map((m) => m[1]),
@@ -423,11 +427,11 @@ function collectJs(dir, out = []) {
 }
 
 function componentGate(dir) {
-    const runtimeDir = join(dir, "runtime");
+    const root = dir;
     const cache = new Map();
     const members = (comp) => {
         if (!cache.has(comp))
-            cache.set(comp, membersOfComponent(runtimeDir, COMPONENTS[comp] ?? DIRECT[comp]));
+            cache.set(comp, membersOfComponent(root, COMPONENTS[comp] ?? DIRECT[comp]));
         return cache.get(comp);
     };
     const check = (src, file, comp, method, index) => {
@@ -457,12 +461,92 @@ function componentGate(dir) {
     return 0;
 }
 
-const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate, components: componentGate };
-const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts", components: "scripts" };
+/**
+ * Avatar-boundary gate: only scripts/sim may drive the simulated player.
+ *
+ * Every bug class this pack has actually shipped came from a raw engine call
+ * somewhere in a policy module: a positional argument that never went through
+ * host.relative() (the camp bed passed a Cell object where a location belonged),
+ * a swing re-issued every tick, navigation restarted while it was still
+ * playing, `attackEntity() === false` read as "no target" when the documented
+ * meaning is "on cooldown". None of those are visible to a syntax, import or
+ * bare-name gate. So the rule is mechanical: ACTION methods may only be called
+ * from the driver, and property WRITES may only happen there too.
+ *
+ * Reads (`sim.location`, `sim.isOnGround`, `sim.getComponent`, ...) are still
+ * allowed from anywhere: they are idempotent, they cannot corrupt engine state,
+ * and the count is printed so the remaining surface stays visible.
+ *
+ * Two exemptions, both single-purpose interfaces rather than policy:
+ *   - runtime/inventory.js owns the inventory interface, which includes the
+ *     selected hotbar slot (`selectedSlotIndex`);
+ *   - main.js tears the avatar down for `!bot remove` (`disconnect()`).
+ */
+const AVATAR_ACTIONS = new Set([
+    "attack", "attackEntity", "breakBlock", "chat", "disconnect", "dropSelectedItem",
+    "fly", "giveItem", "glide", "interact", "interactWithBlock", "interactWithEntity",
+    "jump", "lookAtBlock", "lookAtEntity", "lookAtLocation", "move", "moveRelative",
+    "moveToBlock", "moveToLocation", "navigateToBlock", "navigateToEntity",
+    "navigateToLocation", "navigateToLocations", "respawn", "rotateBody",
+    "setBodyRotation", "setItem", "setSkin", "startBuild", "stopBreakingBlock",
+    "stopBuild", "stopFlying", "stopGliding", "stopInteracting", "stopMoving",
+    "stopSwimming", "stopUsingItem", "swim", "useItem", "useItemInSlot",
+    "useItemInSlotOnBlock", "useItemOnBlock",
+]);
+const AVATAR_WRITES = new Set(["isSneaking", "isSprinting", "selectedSlotIndex"]);
+/**
+ * runtime/inventory.js owns the inventory interface, and that interface
+ * includes the selected hotbar slot; the driver owns everything else.
+ */
+const SIM_EXEMPT = new Set(["sim/avatar.js", "runtime/inventory.js"]);
+
+function simGate(dir) {
+    let bad = 0;
+    let reads = 0;
+    let files = 0;
+    for (const file of collectJs(dir)) {
+        files++;
+        const rel = relative(dir, file).split("\\").join("/");
+        const exempt = SIM_EXEMPT.has(rel);
+        const src = readFileSync(file, "utf8");
+        // `<owner>.sim.<member>` OR a bare `sim.<member>` (a local alias).
+        for (const m of src.matchAll(/(?<![\w$.])(?:([A-Za-z_$][\w$]*)\.)?sim\.([A-Za-z_$][\w$]*)(\s*\()?/g)) {
+            const owner = m[1] ? `${m[1]}.` : "";
+            const member = m[2];
+            const isCall = !!m[3];
+            const isWrite = AVATAR_WRITES.has(member) && !isCall && /^\s*=(?!=)/.test(src.slice(m.index + m[0].length - (m[3] ? m[3].length : 0)));
+            const where = `${rel}:${src.slice(0, m.index).split("\n").length}`;
+            if (isCall && AVATAR_ACTIONS.has(member)) {
+                if (!exempt) {
+                    console.error(`${where}: ${owner}sim.${member}() - only scripts/sim may drive the avatar`);
+                    bad++;
+                }
+                continue;
+            }
+            if (isWrite) {
+                if (!exempt) {
+                    console.error(`${where}: ${owner}sim.${member} = - only scripts/sim may drive the avatar`);
+                    bad++;
+                }
+                continue;
+            }
+            if (!isCall && !isWrite) reads++;   // position/flag/component reads stay allowed
+        }
+    }
+    if (bad) {
+        console.error(`\nsim: FAIL - ${bad} raw avatar call(s) outside scripts/sim across ${files} files`);
+        return 1;
+    }
+    console.log(`sim: OK - the driver is the only writer across ${files} files (${reads} read-only uses elsewhere)`);
+    return 0;
+}
+
+const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate, components: componentGate, sim: simGate };
+const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts", components: "scripts", sim: "scripts" };
 
 const mode = process.argv[2];
 if (!MODES[mode]) {
-    console.error("usage: node tools/gates.mjs <parse|link|undef|imports> [root]");
+    console.error("usage: node tools/gates.mjs <parse|link|undef|imports|components|sim> [root]");
     process.exit(2);
 }
 const root = process.argv[3] ?? DEFAULT_ROOT[mode];
