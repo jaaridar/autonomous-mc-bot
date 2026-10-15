@@ -149,6 +149,39 @@ export class Parkour {
         return false;
     }
 
+    // ADVANCED: For gaps >3 blocks, place intermediate block then do 3-block jump
+    canPlaceAndJump(p, dir, gapSize, tick) {
+        if (gapSize <= 3) return false; // Normal jumps handle <=3
+        if (gapSize > 8) return false; // Too large, need full bridging
+        if (!this.bot.builder || !this.bot.builder.canBuild) return false;
+        if (this.bot.bag.buildBlock() < 0) return false;
+        
+        // For gap 4: place at 1, jump 3 to landing at 5
+        // For gap 5: place at 2, jump 3 to landing at 6
+        // For gap 6: place at 2, jump 3 to landing at 7 (needs 2 places)
+        // For gap 7-8: place at 2 and 5, then jump
+        const placeDist = gapSize === 4 ? 1 : gapSize === 5 ? 2 : gapSize === 6 ? 2 : 3;
+        const placePos = add(p, { x: dir.x * placeDist, y: 0, z: dir.z * placeDist });
+        const belowPlace = add(placePos, DOWN);
+        
+        // Check if below is not lava hazard
+        const belowBlock = this.terrain.block(belowPlace);
+        if (belowBlock && /lava/.test(belowBlock.typeId)) return false;
+        
+        // Try to place
+        const support = this.bot.builder.findSupportFor(placePos) || this.bot.builder.findSupportFor(belowPlace);
+        if (!support && !this.terrain.solid(belowPlace)) {
+            // Try to find support for belowPlace
+            return false;
+        }
+        const anchor = support ? support.pos : belowPlace;
+        const r = this.bot.builder.placeAt(placePos, anchor, { sneak: true, autoAnchor: true });
+        if (r === "placed" || r === "placed_support") {
+            return true;
+        }
+        return false;
+    }
+
     bridgeIfNeeded(dir, tick) {
         const p = floor(this.sim.location);
         const forward = add(p, dir);
@@ -207,6 +240,23 @@ export class Parkour {
             // 3-BLOCK GAP SPRINTING JUMP - ADVANCED MOVEMENT
             if (hDist > 3.5 && hDist <= 5 && this.canJumpGap(p, { x: dir.x, y: 0, z: dir.z }, 3)) {
                 return this.sprintJump({ x: dir.x * 3, y: 0, z: dir.z * 3 }, tick);
+            }
+            // >3 BLOCK GAP: PLACE BLOCK THEN 3-JUMP - ADVANCED (handles all conditions)
+            if (hDist > 5 && hDist <= 9) {
+                const gapSize = Math.floor(hDist) - 1;
+                if (gapSize >= 4 && gapSize <= 8) {
+                    // Check if landing beyond gap is safe
+                    const landing = add(p, { x: dir.x * (gapSize + 1), y: 0, z: dir.z * (gapSize + 1) });
+                    if (this.terrain.safe(landing) || this.terrain.empty(landing)) {
+                        // Try place+3jump
+                        if (this.canPlaceAndJump(p, dir, gapSize, tick)) {
+                            this.bot.reason = `Large gap ${gapSize} blocks: placed intermediate block then will do 3-block jump - advanced`;
+                            return true;
+                        }
+                        // If place failed, try full bridging
+                        if (this.bridgeIfNeeded(dir, tick)) return true;
+                    }
+                }
             }
             if (hDist > 1 && this.bridgeIfNeeded(dir, tick)) return true;
         }

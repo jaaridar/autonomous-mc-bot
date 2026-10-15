@@ -256,7 +256,64 @@ export class Navigator {
             const canSprint = hunger > 6 && hp > 6;
             const sprint = canSprint && (this.urgent || (this.fast && w.kind === "walk" && horizontal(this.sim.location, w) > 1));
 
-            // Handle special kinds - world-class arbitrary bridging
+            // Handle special kinds - world-class arbitrary bridging + place+3jump for >3 blocks
+            // ADVANCED: >3 block gap - place block then 3-jump
+            if (w.kind === "bridge_sprintjump3" || w.kind === "bridge_bridge_sprintjump3") {
+                if (this.builder && this.builder.canBuild) {
+                    const p = floor(this.sim.location);
+                    // Place intermediate block(s) first
+                    const placePos = w.placeAt;
+                    if (placePos) {
+                        const belowPlace = add(placePos, { x: 0, y: -1, z: 0 });
+                        const belowBlock = this.terrain.block(belowPlace);
+                        // Try to place at placePos if not already solid
+                        if (!this.terrain.solid(placePos)) {
+                            const support = this.builder.findSupportFor(placePos) || this.builder.findSupportFor(belowPlace);
+                            const anchor = support ? support.pos : belowPlace;
+                            // For water gaps, allow placement
+                            const r = this.builder.placeAt(placePos, anchor, { sneak: true, autoAnchor: true, allowFalling: false });
+                            if (r === "placed" || r === "placed_support") {
+                                this.reason = `Large gap ${w.gap} blocks: placed intermediate block at ${placePos.x},${placePos.y},${placePos.z} then will do 3-block jump - advanced`;
+                                return "running";
+                            }
+                            // If place failed, try alternative
+                            if (r === "no-block") {
+                                return this.fail("Need blocks to place for large gap 3-jump - will mine nearby");
+                            }
+                        }
+                        // If intermediate block placed or already exists, do 3-block sprint jump to landing
+                        if (this.terrain.solid(placePos) || this.terrain.safe(placePos)) {
+                            // For double bridge case, place second block too
+                            if (w.kind === "bridge_bridge_sprintjump3" && w.placeAt2) {
+                                const placePos2 = w.placeAt2;
+                                if (!this.terrain.solid(placePos2)) {
+                                    const below2 = add(placePos2, { x: 0, y: -1, z: 0 });
+                                    const support2 = this.builder.findSupportFor(placePos2) || this.builder.findSupportFor(below2);
+                                    const anchor2 = support2 ? support2.pos : below2;
+                                    const r2 = this.builder.placeAt(placePos2, anchor2, { sneak: true, autoAnchor: true });
+                                    if (r2 === "placed") {
+                                        this.reason = `Large gap ${w.gap}: placed second intermediate block at ${placePos2.x},${placePos2.y},${placePos2.z} - advanced`;
+                                        return "running";
+                                    }
+                                }
+                            }
+                            // Now do 3-block sprint jump to final landing
+                            this.sim.isSprinting = true;
+                            if (this.sim.isOnGround) this.sim.jump();
+                            try {
+                                this.sim.moveToLocation(this.host.relative(center(w)), { speed: 1, faceTarget: true });
+                                this.reason = `Large gap ${w.gap}: placed block then 3-block sprint jump to ${w.x},${w.y},${w.z} - advanced movement`;
+                            } catch {
+                                return this.fail("3-block jump after place failed");
+                            }
+                            return "running";
+                        }
+                    }
+                } else {
+                    return this.fail("Need blocks for large gap place+3jump");
+                }
+            }
+
             if (w.kind === "bridge") {
                 // Need to bridge - horizontal, diagonal, arbitrary
                 if (this.builder && this.builder.canBuild) {

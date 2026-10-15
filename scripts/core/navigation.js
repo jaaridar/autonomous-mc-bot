@@ -150,8 +150,7 @@ export class PathSearch {
                         out.push({ ...gap2, kind: "sprintjump" });
                     }
 
-                    // 3-BLOCK GAP SPRINT JUMP - ADVANCED MOVEMENT (4 blocks distance)
-                    // Minecraft sprint jump max is 4 blocks, this is 3 gaps -> 4 distance
+                    // 3-BLOCK GAP SPRINT JUMP - ADVANCED (4 blocks distance)
                     const gap3 = add(gap2, d);
                     const underGap2 = this.read(add(gap2, { x: 0, y: -1, z: 0 }));
                     if (!this.safeStand(gap) && !this.safeStand(land) && !this.safeStand(gap2) &&
@@ -167,7 +166,7 @@ export class PathSearch {
                         out.push({ ...gap3, kind: "sprintjump3" });
                     }
 
-                    // 3-block jump with 1 up (parkour up over gap)
+                    // 3-block jump with 1 up
                     const upLand3 = add(gap3, { x: 0, y: 1, z: 0 });
                     if (!this.safeStand(gap) && !this.safeStand(land) && !this.safeStand(gap2) &&
                         underGap && !underGap.hazard &&
@@ -178,6 +177,92 @@ export class PathSearch {
                         this.air(upLand3) && this.air(add(upLand3, { x: 0, y: 1, z: 0 })) &&
                         this.safeStand(upLand3)) {
                         out.push({ ...upLand3, kind: "sprintjump_up" });
+                    }
+
+                    // === ADVANCED: >3 BLOCK GAP - PLACE BLOCK THEN 3-JUMP ===
+                    // For gaps 4,5,6,7 blocks: if we have blocks, we can place intermediate block(s) to enable 3-block jump
+                    // This handles all conditions: over water, lava, void, diagonal, etc - checks hazard and support
+                    if (this.allowBridge) {
+                        // Check up to 8 blocks ahead for landing
+                        for (let totalGap = 4; totalGap <= 8; totalGap++) {
+                            const landingPos = add(p, { x: d.x * (totalGap + 1), y: 0, z: d.z * (totalGap + 1) });
+                            const landingBelow = add(landingPos, { x: 0, y: -1, z: 0 });
+                            const landingBelowRead = this.read(landingBelow);
+                            
+                            // Landing must be safe or at least not hazard (could be air if we will bridge further)
+                            const landingSafe = this.safeStand(landingPos);
+                            const landingAir = this.air(landingPos) && this.air(add(landingPos, { x: 0, y: 1, z: 0 }));
+                            
+                            // Check if all intermediate gaps are air and not over lava (hazard check)
+                            let allAir = true;
+                            let hasHazard = false;
+                            let hazardIsLava = false;
+                            for (let i = 1; i <= totalGap; i++) {
+                                const gapPos = add(p, { x: d.x * i, y: 0, z: d.z * i });
+                                const belowGap = add(gapPos, { x: 0, y: -1, z: 0 });
+                                const belowRead = this.read(belowGap);
+                                if (!this.air(gapPos) || !this.air(add(gapPos, { x: 0, y: 1, z: 0 }))) {
+                                    allAir = false;
+                                    break;
+                                }
+                                if (belowRead && belowRead.hazard) {
+                                    hasHazard = true;
+                                    if (belowRead.type && /lava/.test(belowRead.type)) hazardIsLava = true;
+                                }
+                            }
+                            
+                            if (!allAir) continue;
+                            // Don't bridge over lava unless we have to and have safe blocks? But allow if not lava or if we can still bridge with caution
+                            if (hazardIsLava && totalGap > 4) continue; // Don't bridge long over lava
+                            
+                            if (landingSafe) {
+                                // Found landing beyond large gap
+                                // Strategy: place block(s) to reduce gap to <=3, then do 3-block jump
+                                // For gap 4: place at 1, then jump 3 (1->5)
+                                // For gap 5: place at 2, then jump 3 (2->6)
+                                // For gap 6: place at 2-3, then jump 3
+                                // For gap 7: place at 3, then jump 3 (3->7) + need one more bridge
+                                // For gap 8: place at 3 and 6, etc
+                                
+                                if (totalGap === 4) {
+                                    // Place 1 block at distance 1, then 3-block jump from there to landing
+                                    const placePos = add(p, { x: d.x * 1, y: 0, z: d.z * 1 });
+                                    const placeBelow = add(placePos, { x: 0, y: -1, z: 0 });
+                                    const placeBelowRead = this.read(placeBelow);
+                                    // Need support for placed block or allow bridging
+                                    if (!placeBelowRead?.hazard || !/lava/.test(placeBelowRead?.type ?? "")) {
+                                        out.push({ ...landingPos, kind: "bridge_sprintjump3", gap: totalGap, placeAt: placePos, placeCount: 1 });
+                                    }
+                                } else if (totalGap === 5) {
+                                    const placePos = add(p, { x: d.x * 2, y: 0, z: d.z * 2 });
+                                    const placeBelow = add(placePos, { x: 0, y: -1, z: 0 });
+                                    const placeBelowRead = this.read(placeBelow);
+                                    if (!placeBelowRead?.hazard || !/lava/.test(placeBelowRead?.type ?? "")) {
+                                        out.push({ ...landingPos, kind: "bridge_sprintjump3", gap: totalGap, placeAt: placePos, placeCount: 1 });
+                                    }
+                                } else if (totalGap === 6) {
+                                    const placePos = add(p, { x: d.x * 2, y: 0, z: d.z * 2 });
+                                    out.push({ ...landingPos, kind: "bridge_sprintjump3", gap: totalGap, placeAt: placePos, placeCount: 2 });
+                                } else if (totalGap >= 7) {
+                                    // For 7-8 blocks, need 2 intermediate blocks then 3-block jump
+                                    const placePos1 = add(p, { x: d.x * 2, y: 0, z: d.z * 2 });
+                                    const placePos2 = add(p, { x: d.x * 5, y: 0, z: d.z * 5 });
+                                    // Only if not over lava for long gaps
+                                    if (!hazardIsLava) {
+                                        out.push({ ...landingPos, kind: "bridge_bridge_sprintjump3", gap: totalGap, placeAt: placePos1, placeAt2: placePos2, placeCount: 2 });
+                                    }
+                                }
+                            } else if (landingAir && this.allowBridge && totalGap <= 6) {
+                                // Even if landing is air, we can still bridge towards it - progressive bridging
+                                // Add bridge candidate to continue building
+                                const bridgePos = add(p, { x: d.x * 1, y: 0, z: d.z * 1 });
+                                const belowBridge = add(bridgePos, { x: 0, y: -1, z: 0 });
+                                const belowBridgeRead = this.read(belowBridge);
+                                if (!belowBridgeRead?.hazard || (belowBridgeRead && !/lava/.test(belowBridgeRead.type ?? ""))) {
+                                    out.push({ ...bridgePos, kind: "bridge", gap: totalGap });
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -207,12 +292,15 @@ export class PathSearch {
                 const belowRead = this.read(belowQ);
                 if (!belowRead?.support && this.air(q) && this.air(add(q, { x: 0, y: 1, z: 0 }))) {
                     // Need to bridge - mark as bridge candidate with high cost
-                    // Only if not over hazard
-                    if (!belowRead?.hazard) {
+                    // Only if not over hazard - allow water but not lava for single bridge
+                    if (!belowRead?.hazard || (belowRead && /water/.test(belowRead.type ?? ""))) {
                         const landBeyond = add(q, d);
                         if (this.safeStand(landBeyond) || this.air(landBeyond)) {
                             out.push({ ...q, kind: "bridge" });
                         }
+                    } else if (belowRead && /water/.test(belowRead.type ?? "")) {
+                        // Water below - allow bridging over water (boat alternative)
+                        out.push({ ...q, kind: "bridge" });
                     }
                 }
             }
@@ -260,12 +348,14 @@ export class PathSearch {
                 let cost = 1;
                 if (q.kind === "jump") cost = 3.5;
                 else if (q.kind === "sprintjump") cost = 5;
-                else if (q.kind === "sprintjump3") cost = 7; // 3-block jump - advanced, higher cost
-                else if (q.kind === "sprintjump_up") cost = 8; // 3-block up jump - advanced
+                else if (q.kind === "sprintjump3") cost = 7;
+                else if (q.kind === "sprintjump_up") cost = 8;
+                else if (q.kind === "bridge_sprintjump3") cost = 10; // place 1 block + 3-jump - advanced
+                else if (q.kind === "bridge_bridge_sprintjump3") cost = 14; // place 2 + 3-jump - large gap
                 else if (q.kind === "jumpup") cost = 3;
                 else if (q.kind === "walk") cost = 1;
                 else if (q.kind === "bridge") cost = 8;
-                else if (q.kind === "pillar") cost = 6; // pillar up - for 100 block tower
+                else if (q.kind === "pillar") cost = 6;
                 else if (q.kind === "bigdrop") cost = 2.5;
                 else cost = 1.5;
                 const g = n.g + cost + this.penalty(q), k = key(q);
