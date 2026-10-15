@@ -4,6 +4,7 @@ import { chooseNetherRoute, ensureIronForBothBucketAndFlintSteel, evaluateBucket
 import { PHASES, currentPhase } from "../core/progression.js";
 
 import { assessFoodReserves } from "../core/survival.js";
+import { timeOfDay } from "./world.js";
 
 /**
  * Speedrun Director v2.0 - Nether speedrun overhaul, world-class adaptive.
@@ -300,7 +301,7 @@ export class SpeedrunDirector {
             hasGravelNearby: this.checkGravelNearby(16),
             distanceToGravel: this.findGravelDistance(24) ?? 50,
             phase: this.phaseName(),
-            time: this.getTimeOfDay(),
+            time: timeOfDay(this.bot.sim),
             hostileCount,
             netherRoute: this.currentRoute,
             health: b.sim.getComponent("minecraft:health")?.currentValue ?? 20,
@@ -528,14 +529,6 @@ export class SpeedrunDirector {
         return null;
     }
 
-    getTimeOfDay() {
-        try {
-            const tod = this.bot.sim.dimension.getTimeOfDay ? this.bot.sim.dimension.getTimeOfDay() : 0;
-            if (tod >= 12000 && tod < 13000) return "sunset";
-            if (tod >= 13000 && tod < 23000) return "night";
-            return "day";
-        } catch { return "day"; }
-    }
 
     woodPhase(tick, counts) {
         const b = this.bot;

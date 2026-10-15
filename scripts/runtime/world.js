@@ -538,3 +538,41 @@ export class RollingSweep {
         return { started, finished: this.cursor >= offs.length };
     }
 }
+
+/**
+ * Current time bucket of a dimension clock: "day" | "sunset" | "night".
+ * Shared by every director that reasons about night (they each carried an
+ * identical private copy).
+ */
+export function timeOfDay(sim) {
+    try {
+        const tod = sim.dimension.getTimeOfDay ? sim.dimension.getTimeOfDay() : 0;
+        if (tod >= 12000 && tod < 13000)
+            return "sunset";
+        if (tod >= 13000 && tod < 23000)
+            return "night";
+        return "day";
+    }
+    catch {
+        return "day";
+    }
+}
+/** Highest weapon tier carried, by typeId substring (lenient variant). */
+export function weaponTierLoose(bag) {
+    for (let i = 0; i < bag.size; i++) {
+        const s = bag.get(i);
+        if (!s)
+            continue;
+        if (s.typeId.includes("netherite"))
+            return 5;
+        if (s.typeId.includes("diamond"))
+            return 4;
+        if (s.typeId.includes("iron"))
+            return 3;
+        if (s.typeId.includes("stone"))
+            return 2;
+        if (s.typeId.includes("wooden"))
+            return 1;
+    }
+    return 0;
+}

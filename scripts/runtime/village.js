@@ -5,6 +5,7 @@
  */
 import { CARDINAL, DOWN, add, center, distance, floor } from "../core/math.js";
 import { GOLEM_STATS, chooseBestGolemStrategy, evaluateGolemFight, evaluateVillage, evaluateVillageVsNetherRoute, shouldCraftBedIndependently, shouldDisengageDuringFight } from "../core/village.js";
+import { timeOfDay, weaponTierLoose } from "./world.js";
 
 // ---------------------------------------------------------------- village.js
 
@@ -159,13 +160,13 @@ export class VillageDirector {
             hasFuel,
             hasMinimumEquipment: hasWood && (hasFood || foodAmount >= 3),
             phase,
-            time: this.getTimeOfDay(),
+            time: timeOfDay(this.sim),
             distanceToSheep: sheepNearby ? distance(sheepNearby.pos, this.sim.location) : 100,
             sheepCount: sheepNearby ? 1 : 0,
             hasVillage: null, // avoid recursive expensive scan in buildContext
             netherRoute: this.bot.nether?.currentRoute,
             health: this.sim.getComponent("minecraft:health")?.currentValue ?? 20,
-            equipment: { weaponTier: this.getWeaponTier(), armorValue: 0 },
+            equipment: { weaponTier: weaponTierLoose(this.bag), armorValue: 0 },
             inventory: counts,
         };
     }
@@ -410,27 +411,7 @@ export class VillageDirector {
         } catch { return 0; }
     }
 
-    getWeaponTier() {
-        for (let i = 0; i < this.bag.size; i++) {
-            const s = this.bag.get(i);
-            if (!s) continue;
-            if (s.typeId.includes("netherite")) return 5;
-            if (s.typeId.includes("diamond")) return 4;
-            if (s.typeId.includes("iron")) return 3;
-            if (s.typeId.includes("stone")) return 2;
-            if (s.typeId.includes("wooden")) return 1;
-        }
-        return 0;
-    }
 
-    getTimeOfDay() {
-        try {
-            const tod = this.sim.dimension.getTimeOfDay ? this.sim.dimension.getTimeOfDay() : 0;
-            if (tod >= 12000 && tod < 13000) return "sunset";
-            if (tod >= 13000 && tod < 23000) return "night";
-            return "day";
-        } catch { return "day"; }
-    }
 }
 
 // ---------------------------------------------------------------- golem.js
@@ -566,7 +547,7 @@ export class GolemDirector {
             health,
             maxHealth: 20,
             equipment: {
-                weaponTier: this.getWeaponTier(),
+                weaponTier: weaponTierLoose(this.bag),
                 armorValue: this.getArmorValue()
             },
             terrain: {
@@ -579,7 +560,7 @@ export class GolemDirector {
             hasWaterBucket,
             otherHostileCount,
             hasVillage,
-            time: this.getTimeOfDay(),
+            time: timeOfDay(this.sim),
             saferFasterRouteAvailable: saferFasterRoute,
             hasFurnace: (counts["minecraft:furnace"] ?? 0) > 0
         };
@@ -891,18 +872,6 @@ export class GolemDirector {
         return false;
     }
 
-    getWeaponTier() {
-        for (let i = 0; i < this.bag.size; i++) {
-            const s = this.bag.get(i);
-            if (!s) continue;
-            if (s.typeId.includes("netherite")) return 5;
-            if (s.typeId.includes("diamond")) return 4;
-            if (s.typeId.includes("iron")) return 3;
-            if (s.typeId.includes("stone")) return 2;
-            if (s.typeId.includes("wooden")) return 1;
-        }
-        return 0;
-    }
 
     getArmorValue() {
         // Simplified armor value
@@ -921,12 +890,4 @@ export class GolemDirector {
         } catch { return 0; }
     }
 
-    getTimeOfDay() {
-        try {
-            const tod = this.sim.dimension.getTimeOfDay ? this.sim.dimension.getTimeOfDay() : 0;
-            if (tod >= 12000 && tod < 13000) return "sunset";
-            if (tod >= 13000 && tod < 23000) return "night";
-            return "day";
-        } catch { return "day"; }
-    }
 }

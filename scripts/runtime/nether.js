@@ -5,6 +5,7 @@
  */
 import { CARDINAL, UP, add, center, distance, floor } from "../core/math.js";
 import { chooseFastestViableMethod, chooseNetherRoute, evaluateBucketPriority, evaluateIgnitionOptions, evaluateLavaPoolForBucket, planObsidianFormation, shouldNotWasteTimeSearchingFlintSteel, shouldObtainFlintAndSteelBeforePortal, shouldRecalculate, verifyPortalAction } from "../core/nether.js";
+import { timeOfDay } from "./world.js";
 
 // ---------------------------------------------------------------- nether.js
 
@@ -194,7 +195,7 @@ export class NetherDirector {
             hasGravelNearby: this.checkGravelNearby(16),
             distanceToGravel: this.findGravelDistance(24) ?? 50,
             phase,
-            time: this.getTimeOfDay(),
+            time: timeOfDay(this.sim),
             distanceToLavaPool: lavaPool ? distance(lavaPool, this.sim.location) : 100,
             hostileCount: this.bot.terrain.threatInfo(this.sim, this.bot.owner()).count,
             netherRoute: this.currentRoute,
@@ -718,14 +719,6 @@ export class NetherDirector {
         return null;
     }
 
-    getTimeOfDay() {
-        try {
-            const tod = this.sim.dimension.getTimeOfDay ? this.sim.dimension.getTimeOfDay() : 0;
-            if (tod >= 12000 && tod < 13000) return "sunset";
-            if (tod >= 13000 && tod < 23000) return "night";
-            return "day";
-        } catch { return "day"; }
-    }
 }
 
 // ---------------------------------------------------------------- bucket.js

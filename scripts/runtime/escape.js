@@ -3,6 +3,7 @@ import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, key } 
 import { HAZARDS, RANGED, diggable } from "../core/world.js";
 import { Hands } from "./builder.js";
 import { Direction } from "@minecraft/server";
+import { weaponTierLoose } from "./world.js";
 /**
  * World-class Escaper - can escape any situation: 16 skeletons, blaze, enderman, warden, lava, water, pit, etc.
  * Phases: ASSESS -> COVER -> BUILD -> RETREAT -> RECOVER
@@ -169,7 +170,7 @@ export class Escaper {
         const hasWater = this.bag.find(s => s.typeId === "minecraft:water_bucket") >= 0;
         const hasBlocks = this.bag.buildBlock() >= 0;
         const blockCount = this.countBlocks();
-        const resources = { hasShield, hasWater, hasBlocks, blockCount, hasTotem: this.bag.find(s => s.typeId === "minecraft:totem_of_undying") >= 0, weaponTier: this.getWeaponTier(), armorValue: 0 };
+        const resources = { hasShield, hasWater, hasBlocks, blockCount, hasTotem: this.bag.find(s => s.typeId === "minecraft:totem_of_undying") >= 0, weaponTier: weaponTierLoose(this.bag), armorValue: 0 };
         this.assessment = assess(hp, threats, resources, this.sim.location);
         this.lastReason = `Assessed: fear ${this.assessment.totalFear.toFixed(1)} threats ${threats.length} decision ${this.assessment.decision}`;
     }
@@ -183,18 +184,6 @@ export class Escaper {
         return count;
     }
 
-    getWeaponTier() {
-        for (let i = 0; i < this.bag.size; i++) {
-            const s = this.bag.get(i);
-            if (!s) continue;
-            if (s.typeId.includes("netherite")) return 5;
-            if (s.typeId.includes("diamond")) return 4;
-            if (s.typeId.includes("iron")) return 3;
-            if (s.typeId.includes("stone")) return 2;
-            if (s.typeId.includes("wooden")) return 1;
-        }
-        return 0;
-    }
 
     /**
      * Combat escape for extreme situations: 16 skeletons, blaze, enderman
