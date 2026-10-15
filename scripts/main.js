@@ -1,11 +1,33 @@
-import { coordinates, integer, tokens } from "./core/commands.js";
-import { distance, floor } from "./core/math.js";
+import { distance, floor, validPosition } from "./core/math.js";
 import { id } from "./core/recipes.js";
 import { Bot } from "./runtime/bot.js";
 import { Host } from "./runtime/host.js";
 import { Bag } from "./runtime/inventory.js";
 import { Memory } from "./runtime/memory.js";
 import { EntityComponentTypes, EquipmentSlot, Player, system, world } from "@minecraft/server";
+/** Chat command parsing helpers (were core/commands.js). */
+function tokens(text) {
+    if (text.length > 256)
+        throw Error("Command too long.");
+    return text.trim().split(/\s+/).filter(Boolean);
+}
+function integer(s, min, max, defaultValue) {
+    if (s === undefined && defaultValue !== undefined)
+        return defaultValue;
+    const n = Number(s);
+    if (s === undefined || !Number.isInteger(n) || n < min || n > max)
+        throw Error(`Expected integer ${min}..${max}.`);
+    return n;
+}
+function coordinates(a) {
+    if (a.length !== 3)
+        throw Error("Use three absolute coordinates: x y z.");
+    const p = { x: Number(a[0]), y: Number(a[1]), z: Number(a[2]) };
+    if (!validPosition(p))
+        throw Error("Invalid Overworld coordinates.");
+    return p;
+}
+
 const host = new Host();
 const memory = new Memory();
 let bot;

@@ -1,12 +1,12 @@
-import { Arbiter, REASON_CODES, TaskFault, blockedTask } from "../core/arbiter.js";
+import { Arbiter, TaskFault, blockedTask } from "../core/arbiter.js";
 import { needsQuickTool } from "../core/combat.js";
-import { QUICK_TOOL_CHAIN, SITUATION_USE, isCritical, planDeathRecovery, prioritizeGoal, retainScore } from "../core/knowledge.js";
+import { retainScore } from "../core/knowledge.js";
 import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, horizontal, key } from "../core/math.js";
 import { sanitizePrefs } from "../core/memory.js";
-import { HIERARCHY, analyzeRequirements, decomposeMission, isAnyLog } from "../core/progression.js";
+import { analyzeRequirements, decomposeMission } from "../core/progression.js";
 import { RECIPES, amountOf, bedTarget, craft, id, matches, nextStep } from "../core/recipes.js";
-import { assessFoodReserves, handlePlanFailure, preserveEmergencyResources, reassessAfterDamage, shouldAvoidCombat, shouldEatBeforeFight, shouldRecalculateAdaptive, verifyAction } from "../core/survival.js";
-import { EXPLOSIVE, HOSTILES as MOB_DEFENCE, MINE, RANGED, diggable, isBulk, isFalling, isPassable, isUnbreakable, isUndergroundOre, priority, toolTier } from "../core/world.js";
+import { assessFoodReserves, reassessAfterDamage } from "../core/survival.js";
+import { HOSTILES as MOB_DEFENCE, MINE, RANGED, diggable, isBulk, isPassable, isUnbreakable, isUndergroundOre, priority, toolTier } from "../core/world.js";
 import { Builder, Hands } from "./builder.js";
 import { Combat } from "./combat.js";
 import { Equipment } from "./equipment.js";
@@ -26,29 +26,6 @@ import { StructureDetector, WorldAwareness } from "./world-awareness.js";
 import { BlockScan, Terrain } from "./world.js";
 import { Direction, EntityComponentTypes, system, world } from "@minecraft/server";
 // New advanced modules
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -78,7 +55,6 @@ const BLOCKED_TTL = 1800;
 const VALUABLE = /^minecraft:(diamond|emerald|netherite|.*_ingot|.*enchanted_book|golden_apple|enchanted_golden_apple|totem_of_undying|heart_of_the_sea|nautilus_shell|.*_horse_armor|saddle|name_tag|.*_bucket|.*_smithing_template|.*_armor_trim|music_disc_.*|.*_spawn_egg|.*_shulker_box|ancient_debris|obsidian|ender_pearl|blaze_rod|ender_eye|elytra|trident|.*_bed|.*_wool)/;
 // UNBREAKABLE WOOD: any log/wood/stem is acceptable for wood needs
 const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
-const ANY_WOOD_DROPS = /(_log|_planks|stick|bamboo)/;
 function isAnyWood(type) { return ANY_WOOD.test(type); }
 function isWoodRequest(block) { return block && (block === "#logs" || block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
@@ -1378,7 +1354,6 @@ export class Bot {
         return undefined;
     }
 
-
     idle(tick) {
         // ULTRA AUTONOMY: if idle too long, auto-start survival instead of staying idle
         if (tick % 100 === 0 && this.mode === "idle" && !this.paused) {
@@ -1490,7 +1465,6 @@ export class Bot {
 
         this.reason = "Active idle: guarding, ready - use !bot auto or !bot speedrun or !bot follow - never truly idle";
     }
-
 
     collect(tick) {
         const g = this.goal;
@@ -2104,8 +2078,6 @@ export class Bot {
         }
         return false;
     }
-
-
 
     findAdjacentLogs(m, tick) {
         // Nearest-first 5x6x5 around the last log (150 cached reads, was 294

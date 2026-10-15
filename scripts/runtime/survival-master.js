@@ -1,17 +1,12 @@
-import { isCritical, retainScore } from "../core/knowledge.js";
-import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor, key } from "../core/math.js";
-import { ALL_SCENARIOS, CAPABILITIES, assessFallDepth, assessNightThreat, bestActionForContext, composeCapabilities, detectScenario, evaluateCapability, handlePlanFailure, multiRiskPriority, resourcePriority, shelterFailurePlan, shouldRecalculateAdaptive, verifyAction } from "../core/survival.js";
+
+import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor } from "../core/math.js";
+import { assessFallDepth, composeCapabilities, detectScenario, multiRiskPriority, shouldRecalculateAdaptive } from "../core/survival.js";
 import { Direction } from "@minecraft/server";
 /**
  * Survival Master - world-class handler for all 80 bedrock.dev scenarios.
  * Integrates fall assessment, night combat, resource shortage, shelter failures, multi-risk.
  * Main orchestrator that ensures bot can handle any situation.
  */
-
-
-
-
-
 
 export class SurvivalMaster {
     constructor(bot) {

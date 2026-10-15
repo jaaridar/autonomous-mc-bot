@@ -32,8 +32,6 @@ export const WOODS = [
     "warped",
     "bamboo",
 ];
-// For matching: crimson/warped use _stem, bamboo uses _block and bamboo itself
-const LOG_SUFFIXES = ["_log", "_stem", "_wood", "_hyphae", "bamboo"];
 export const WOOLS = [
     "white",
     "orange",

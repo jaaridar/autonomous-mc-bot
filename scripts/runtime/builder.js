@@ -39,9 +39,6 @@ const BUILD_BLOCKS_PRIORITY = [
     "minecraft:gravel","minecraft:sand" // falling last resort
 ];
 
-const SCAFFOLD_BLOCKS = [
-    "minecraft:dirt","minecraft:coarse_dirt","minecraft:netherrack","minecraft:cobblestone","minecraft:gravel","minecraft:sand"
-];
 
 export class Builder {
     constructor(bot) {

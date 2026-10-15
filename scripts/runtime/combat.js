@@ -1,14 +1,10 @@
-import { assess, bunkerPlan, chooseCoverDirection, chooseTactic, combatThreatScore, dodgePattern, endermanSafeLook, findCoverPosition, getMobStat, shouldRetreat, shouldUseShield, shouldUseWater, strafePattern } from "../core/combat.js";
-import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor } from "../core/math.js";
-import { EXPLOSIVE, HOSTILES, RANGED } from "../core/world.js";
+import { assess, chooseTactic, dodgePattern, endermanSafeLook, getMobStat, shouldRetreat } from "../core/combat.js";
+import { COMPASS, DOWN, UP, add, away, center, distance, floor } from "../core/math.js";
+import { EXPLOSIVE, RANGED } from "../core/world.js";
 /**
  * World-class Combat module - handles any situation: 16 skeletons, blaze, enderman, warden, etc.
  * Tactics: cover, bunker, low-roof, dodge, pillar, water, shield, retreat, group kiting.
  */
-
-
-
-
 
 export class Combat {
     constructor(bot) {

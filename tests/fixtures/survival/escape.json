@@ -1,5 +1,0 @@
-[
-  {"scenario": "ravine_zombie", "health": 12, "threats": ["zombie"], "terrain": "ravine", "expected": "escape"},
-  {"scenario": "4hp_3_skeletons", "health": 4, "threats": ["skeleton","skeleton","skeleton"], "expected": "combat_retreat"},
-  {"scenario": "mixed_fall_and_zombie", "health": 10, "threats": ["zombie"], "fallStartY": 20, "terrain": "ravine", "expected": "fall_recovery+escape"}
-]

@@ -1,5 +1,4 @@
 import { Arbiter, DEFERRED } from "../scripts/core/arbiter.js";
-import { cellDanger, dangerMap, pathPenalty } from "../scripts/core/brain/danger.js";
 import { PathSearch } from "../scripts/core/navigation.js";
 import { Navigator } from "../scripts/runtime/navigation.js";
 import { BlockScan, RollingSweep, Terrain } from "../scripts/runtime/world.js";
@@ -395,24 +394,6 @@ function fakePlayer(slots) {
     for (let tick = 2; tick < 60; tick++) nav4.go({ x: 30.5 + tick * 0.1, y: 1, z: 0.5 }, tick);
     ok(nav4.replans - replans <= 1, `nav: goal drifting 6 blocks over 3s causes ${nav4.replans - replans} replans (was ~4)`);
     void firstSearch;
-}
-
-// ------------------------------------------------------------------- danger
-{
-    let reads = 0;
-    const world = { block(x, y, z) { reads++; return y <= 0 ? { solid: true, liquid: null, passable: false } : (x === 3 && y === 1 ? { solid: false, liquid: "lava", passable: false } : { solid: false, liquid: null, passable: true }); } };
-    const cells = [];
-    for (let x = -5; x <= 5; x++) for (let z = -5; z <= 5; z++) cells.push({ x, y: 1, z });
-    reads = 0;
-    const plain = cells.map((p) => pathPenalty(world, p, []));
-    const plainReads = reads;
-    reads = 0;
-    const map = dangerMap(world, []);
-    const fast = cells.map((p) => map.penalty(p));
-    const mapReads = reads;
-    ok(plain.every((v, i) => v === fast[i]), "danger: dangerMap gives identical penalties");
-    ok(mapReads < plainReads / 2, `danger: dangerMap block reads ${plainReads} -> ${mapReads}`);
-    ok(cellDanger(world, { x: 2, y: 1, z: 0 }, []).parts.lava > 0, "danger: lava adjacency still scored");
 }
 
 console.log(`\nperf.test: ${pass} passed, ${fail} failed`);

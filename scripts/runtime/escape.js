@@ -1,6 +1,6 @@
-import { assess, bunkerPlan, chooseCoverDirection, getMobStat, getProfile } from "../core/combat.js";
+import { assess } from "../core/combat.js";
 import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, key } from "../core/math.js";
-import { EXPLOSIVE, HAZARDS, RANGED, diggable } from "../core/world.js";
+import { HAZARDS, RANGED, diggable } from "../core/world.js";
 import { Hands } from "./builder.js";
 import { Direction } from "@minecraft/server";
 /**
@@ -8,11 +8,6 @@ import { Direction } from "@minecraft/server";
  * Phases: ASSESS -> COVER -> BUILD -> RETREAT -> RECOVER
  * Uses builder, parkour, and tactical assessment.
  */
-
-
-
-
-
 
 const FACES = new Map([
     ["1,0,0", Direction.East],
@@ -690,7 +685,6 @@ export class Escaper {
         return "running";
     }
 
-
     findBoat() {
         try { return this.sim.dimension.getEntities({ type: "minecraft:boat", location: this.sim.location, maxDistance: 8 })[0]; } catch { return undefined; }
     }
@@ -798,7 +792,6 @@ export class Escaper {
         }
         return "running";
     }
-
 
     escapeDirection() {
         const p = floor(this.sim.location);
