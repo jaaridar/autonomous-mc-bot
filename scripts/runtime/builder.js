@@ -367,7 +367,7 @@ export class Builder {
 
     resetPillar() {
         this.pillaring = undefined;
-        try { this.sim.isSneaking = false; } catch {}
+        try { this.sim.isSneaking = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     /**
@@ -479,6 +479,8 @@ export class Builder {
     scaffoldTo(target, tick) {
         const p = floor(this.sim.location);
         const dy = target.y - p.y;
+        // FIX: tree logs up to 6 high don't need scaffold/pillar, direct break
+        if (this.bot?.mining?.treeMode && dy <= 6) return "close";
         if (dy <= 2) return "close";
         return this.pillar(tick);
     }

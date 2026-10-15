@@ -40,7 +40,7 @@ export class FoodDirector {
                 if (reassess && reassess.priority >= 80) {
                     this.bot.reason = `Food: ${reassess.reason} - reassess after damage ${this.prevHealth - health} dmg`;
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
         this.prevHealth = health;
 
@@ -95,7 +95,7 @@ export class FoodDirector {
                     if (tactic.tactic !== "melee") {
                         this.bot.reason = `Food: hostile ${threatInfo.nearest.typeId} tactic ${tactic.tactic} - ${tactic.reason}`;
                     }
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         }
 
@@ -116,7 +116,7 @@ export class FoodDirector {
         try {
             const p = this.bot.terrain.groundNear(this.sim.location.x, this.sim.location.z, this.sim.location.y, radius);
             if (p && !this.bot.terrain.dangerous(p)) return p;
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return null;
     }
 }

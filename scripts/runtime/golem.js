@@ -215,7 +215,7 @@ export class GolemDirector {
             // Attack golem from elevated position
             if (dist <= 4) {
                 this.sim.lookAtEntity(golem);
-                try { this.sim.attackEntity(golem); this.hits++; this.lastHit = tick; } catch {}
+                try { this.sim.attackEntity(golem); this.hits++; this.lastHit = tick; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.bot.reason = `Golem: attacking from elevated position ${p.y - this.pillarPos.y} high, hits ${this.hits}, golem health ${golem.health ?? "unknown"}, avoid fall damage`;
 
                 // Avoid fall damage: sneak
@@ -280,7 +280,7 @@ export class GolemDirector {
         if (dist < 4) {
             // On hill, attack
             this.sim.lookAtEntity(golem);
-            try { this.sim.attackEntity(golem); this.hits++; } catch {}
+            try { this.sim.attackEntity(golem); this.hits++; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.bot.reason = `Golem: using hill at ${hillPos.x},${hillPos.y},${hillPos.z} for separation, attack range ${GOLEM_STATS.attackRange}, movement ${GOLEM_STATS.movementSpeed}, LOS, knockback`;
             return true;
         } else {
@@ -317,7 +317,7 @@ export class GolemDirector {
             }
             // Attack
             this.sim.lookAtEntity(golem);
-            try { this.sim.attackEntity(golem); this.hits++; } catch {}
+            try { this.sim.attackEntity(golem); this.hits++; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return true;
         } else {
             const r = this.bot.navTo(center(doorway), tick, 2);
@@ -344,11 +344,11 @@ export class GolemDirector {
                     this.sim.useItemInSlot(selected);
                     this.bot.reason = "Golem: water bucket to slow golem and maintain distance";
                     return true;
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             // Attack
             this.sim.lookAtEntity(golem);
-            try { this.sim.attackEntity(golem); this.hits++; } catch {}
+            try { this.sim.attackEntity(golem); this.hits++; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return true;
         }
 
@@ -363,7 +363,7 @@ export class GolemDirector {
                     return e;
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return null;
     }
 

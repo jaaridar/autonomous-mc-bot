@@ -230,7 +230,7 @@ export function nextStep(target, amount, stock, table, seen = new Set()) {
                 count: Math.max(amount - amountOf(stock, target), gatherBatch(target)),
             };
         }
-        if (target === "#logs" || target === "minecraft:oak_log") {
+        if (target === "#logs") {
             return {
                 kind: "gather",
                 item: target,

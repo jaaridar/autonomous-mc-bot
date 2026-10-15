@@ -42,8 +42,8 @@ export class Navigator {
     }
 
     reset() {
-        try { this.sim.stopMoving(); } catch {}
-        try { this.sim.isSprinting = false; } catch {}
+        try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.sim.isSprinting = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         this.target = undefined;
         this.search = undefined;
         this.path = [];
@@ -58,13 +58,13 @@ export class Navigator {
 
     replan(tick) {
         const allowBridge = this.allowBridge || this.builder?.canBuild;
-        const allowPillar = allowBridge; // For 100 block tower, allow pillar
+        const allowPillar = allowBridge; // For 100 block tower, allow pillar but throttled to avoid lag
         const verticalDiff = Math.abs(floor(this.sim.location).y - floor(this.target).y);
         const horiz = horizontal(this.sim.location, this.target);
-        // For high tower (100 blocks), increase search radius and nodes
+        // FIX: lag when 100 block - reduce nodes/radius, precise column handling in follow() instead of huge A*
         const isHighTower = verticalDiff > 20 || horiz > 50;
-        const maxNodes = isHighTower ? 8000 : 3000;
-        const radius = isHighTower ? 128 : 36;
+        const maxNodes = isHighTower ? 3000 : 2000; // was 8000, now 3000 to avoid lag
+        const radius = isHighTower ? 64 : 32; // was 128, now 64 precise
         this.search = new PathSearch(
             this.terrain.read,
             floor(this.sim.location),
@@ -84,7 +84,7 @@ export class Navigator {
         this.lastProgress = tick;
         this.segmentStart = tick;
         this.lastPosition = { ...this.sim.location };
-        try { this.sim.stopMoving(); } catch {}
+        try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     fail(message) {
@@ -220,7 +220,7 @@ export class Navigator {
                             }
                         }
                     }
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if (++this.retries > 4) return this.fail("Stuck or terrain changed after retries.");
             this.terrain.clear();

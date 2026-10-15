@@ -34,13 +34,13 @@ export class StructureDetector {
             try {
                 const hunger = this.bot.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
                 if (hunger <= 10) return 20; // food low, scan faster
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return 40;
         })();
         if (tick - this.lastScan < interval) return;
         this.lastScan = tick;
         this.scan(tick);
-        try { this.scanEntities(tick); } catch {}
+        try { this.scanEntities(tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     scanEntities(tick) {
@@ -67,7 +67,7 @@ export class StructureDetector {
                 }
             }
             // Also detect ruined portal via chest + obsidian entities? Already via blocks
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     scan(tick) {

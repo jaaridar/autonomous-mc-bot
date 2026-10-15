@@ -164,14 +164,14 @@ export class Looting {
                     const res = this.bag.withdraw(chest, (it) => it.typeId === item.typeId, 2);
                     moved += res.moved + res.merged;
                     break;
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if (moved > 0) {
                 this.memory?.notice("chest", pos, this.sim.dimension.id, tick);
                 this.trips++;
                 this.bot.record(`loot: ${moved} from ${key(pos)} ${structName ? `(${structName})` : ""}`);
                 // Remember important loot
-                try { this.bot.awareness?.rememberSpot("chest", pos, tick, struct?.priority ?? 85); } catch {}
+                try { this.bot.awareness?.rememberSpot("chest", pos, tick, struct?.priority ?? 85); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             this.ignore.set(key(pos), tick + (moved > 0 ? 12000 : 6000));
             this.currentChest = undefined;

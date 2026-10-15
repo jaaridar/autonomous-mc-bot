@@ -257,7 +257,7 @@ export class Combat {
         } else if (this.sim.isOnGround && tick - this.lastCrit > 25) {
             this.lastCrit = tick;
             this.critArmed = true;
-            try { this.sim.jump(); } catch {}
+            try { this.sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return true;
         }
 
@@ -338,7 +338,7 @@ export class Combat {
                 this.retreatFrom(target, tick, 8);
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         this.attack(target, tick);
         return true;
@@ -433,7 +433,7 @@ export class Combat {
             // Try second layer
             const res2 = this.builder.placeAt(wallPosUp, wallPos, { sneak: true });
             if (res2 === "placed") return true;
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 
@@ -443,14 +443,14 @@ export class Combat {
         if (this.bunkerBuilt && this.bunkerPos && distance(this.sim.location, this.bunkerPos) < 3) {
             // Already in bunker, heal
             this.bot.reason = "In emergency bunker, healing";
-            try { this.sim.stopMoving(); } catch {}
+            try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             // Eat if needed
             const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
             if (hunger <= 16) {
                 const food = this.bag.food(true);
                 if (food >= 0) {
                     const held = this.bag.select(food);
-                    try { this.sim.useItemInSlot(held); } catch {}
+                    try { this.sim.useItemInSlot(held); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 }
             }
             return true;
@@ -558,7 +558,7 @@ export class Combat {
                 this.waterPlaced = tick;
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 
@@ -569,8 +569,8 @@ export class Combat {
             this.attackEndermanLegs(target, tick);
             return;
         }
-        try { this.sim.lookAtEntity(target); } catch {}
-        try { this.sim.attackEntity(target); } catch {}
+        try { this.sim.lookAtEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.sim.attackEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         this.lastAttack = tick;
         this.combo++;
         this.strafe(tick, false);
@@ -582,9 +582,9 @@ export class Combat {
             const legs = endermanSafeLook(target.location);
             this.sim.lookAtLocation(legs);
         } catch {
-            try { this.sim.lookAtEntity(target); } catch {}
+            try { this.sim.lookAtEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
-        try { this.sim.attackEntity(target); } catch {}
+        try { this.sim.attackEntity(target); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         this.lastAttack = tick;
         this.combo++;
         // Don't strafe too much for enderman - it teleports
@@ -606,7 +606,7 @@ export class Combat {
             const q = add(p, d);
             if (this.terrain.safe(q)) {
                 this.lastStrafe = tick;
-                try { this.sim.moveToLocation(this.host.relative(center(q)), { faceTarget: true }); } catch {}
+                try { this.sim.moveToLocation(this.host.relative(center(q)), { faceTarget: true }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 return;
             }
         }
@@ -623,7 +623,7 @@ export class Combat {
         const dodgePos = { x: p.x + Math.sign(pattern.x) * 2, y: p.y, z: p.z + Math.sign(pattern.z) * 2 };
         const ground = this.terrain.groundNear(dodgePos.x, dodgePos.z, dodgePos.y, 2);
         if (ground && !this.terrain.dangerous(ground)) {
-            try { this.sim.moveToLocation(this.host.relative(center(ground)), { faceTarget: true }); } catch {}
+            try { this.sim.moveToLocation(this.host.relative(center(ground)), { faceTarget: true }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.lastStrafe = tick;
         } else {
             this.strafe(tick, true);

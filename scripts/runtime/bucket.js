@@ -45,9 +45,9 @@ export class BucketDirector {
         if (!bucketEval.milestone && bucketEval.priority >= 70) {
             this.bot.reason = `Bucket: ${bucketEval.reason} - major milestone enables ground-level lava pools, priority ${bucketEval.priority}`;
             if (bucketEval.canCraft) {
-                try { this.bot.obtain("minecraft:bucket", 1, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:bucket", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else if (bucketEval.needSmelt) {
-                try { this.bot.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch {}
+                try { this.bot.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else {
                 const ironSpot = this.bot.awareness?.getNearest("iron_ore");
                 if (ironSpot) {
@@ -155,7 +155,7 @@ export class BucketDirector {
         const obsidianHave = counts["minecraft:obsidian"] ?? 0;
 
         let hostileCount = 0;
-        try { hostileCount = this.bot.terrain.threatInfo(this.sim, this.bot.owner()).count; } catch {}
+        try { hostileCount = this.bot.terrain.threatInfo(this.sim, this.bot.owner()).count; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         return {
             hasBucket,
@@ -227,7 +227,7 @@ export class BucketDirector {
                 this.waterAttempts++;
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 
@@ -246,7 +246,7 @@ export class BucketDirector {
                 this.obsidianAttempts++;
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 }

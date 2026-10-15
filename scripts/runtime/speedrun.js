@@ -115,12 +115,26 @@ export class SpeedrunDirector {
                         b.record(`speedrun adaptive recalc #${this.adaptiveRecalcCount}: ${discovery.type} - ${discovery.reason}`);
                         this.currentRoute = null; // force re-eval
                     }
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         }
 
-        // Main Nether entry decision system - continuously compare routes
-        if (this.phase >= PHASES.STONE) {
+        // FIX: Nether entry decision system - delegate to NetherDirector to avoid duplicate planners
+        if (this.phase >= PHASES.STONE && this.bot.nether) {
+            // If nether director already has a route, let it handle
+            if (this.bot.nether.tick(tick)) {
+                this.currentRoute = this.bot.nether.currentRoute;
+                return;
+            }
+            const netherDecision = this.evaluateNetherRoutes(tick, counts);
+            if (netherDecision && netherDecision.route) {
+                this.currentRoute = netherDecision.evaluation;
+                if (netherDecision.action !== "explore_for_better") {
+                    const handled = this.executeNetherRoute(netherDecision, tick, counts);
+                    if (handled) return;
+                }
+            }
+        } else if (this.phase >= PHASES.STONE) {
             const netherDecision = this.evaluateNetherRoutes(tick, counts);
             if (netherDecision && netherDecision.route) {
                 this.currentRoute = netherDecision.evaluation;
@@ -161,6 +175,12 @@ export class SpeedrunDirector {
     }
 
     evaluateNetherRoutes(tick, counts) {
+        // FIX: delegate to nether.js to avoid duplicate planners
+        try {
+            if (this.bot.nether && this.bot.nether.currentRoute) {
+                return { route: this.bot.nether.currentRoute.route, evaluation: this.bot.nether.currentRoute, reason: "delegated to NetherDirector", confidence: 90, action: "continue_nether" };
+            }
+        } catch (e) { console.warn("[Verdant] nether delegate "+e); }
         const b = this.bot;
         const context = this.buildContext(tick, counts);
 
@@ -208,7 +228,7 @@ export class SpeedrunDirector {
                     }
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         // Ruined portal
         try {
@@ -227,7 +247,7 @@ export class SpeedrunDirector {
                     score: ruined.priority
                 };
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         // Missing ignition
         if (!context.hasFlintAndSteel && !context.hasFireCharge) {
@@ -262,7 +282,7 @@ export class SpeedrunDirector {
         const obsidianHave = counts["minecraft:obsidian"] ?? 0;
 
         let hostileCount = 0;
-        try { hostileCount = b.terrain.threatInfo(b.sim, b.owner()).count; } catch {}
+        try { hostileCount = b.terrain.threatInfo(b.sim, b.owner()).count; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         return {
             hasBucket,
@@ -295,9 +315,9 @@ export class SpeedrunDirector {
             if (bucketEval.priority >= 80 && !bucketEval.milestone) {
                 b.reason = `Speedrun Nether: bucket milestone priority ${bucketEval.priority} - ${bucketEval.reason}`;
                 if (bucketEval.canCraft) {
-                    try { b.obtain("minecraft:bucket", 1, tick); return true; } catch {}
+                    try { b.obtain("minecraft:bucket", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else if (bucketEval.needSmelt) {
-                    try { b.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch {}
+                    try { b.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else {
                     b.startMine("minecraft:iron_ore", bucketEval.ironNeeded);
                     return true;
@@ -320,7 +340,7 @@ export class SpeedrunDirector {
             if (ignitionEval && !ignitionEval.available) {
                 b.reason = `Speedrun Nether: ${ignitionCheck.reason} - ${ignitionEval.reason}`;
                 if (ignitionEval.action === "craft_flint_and_steel") {
-                    try { b.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch {}
+                    try { b.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else if (ignitionEval.action.includes("gravel")) {
                     b.startMine("minecraft:gravel", 5);
                     return true;
@@ -394,7 +414,7 @@ export class SpeedrunDirector {
                 this.portalBuilt = true;
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         return false;
     }
@@ -409,7 +429,7 @@ export class SpeedrunDirector {
             if (ignitionEval) {
                 b.reason = `Speedrun: need ignition for portal - ${ignitionEval.reason}`;
                 if (ignitionEval.action === "craft_flint_and_steel") {
-                    try { b.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch {}
+                    try { b.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 }
             }
             return false;
@@ -428,7 +448,7 @@ export class SpeedrunDirector {
             this.ignitionTries++;
             if (ok) {
                 b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved, verify success`;
-                try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch {}
+                try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 // Verify entry
                 const verify = verifyPortalAction("ignite_portal", "ignited", counts);
                 if (verify.success) {
@@ -476,7 +496,7 @@ export class SpeedrunDirector {
             if (lava && lava.tick && tick - lava.tick < 120) {
                 return { type: "ground_lava", pos: lava, size: lava.size, reason: "new ground lava pool discovered" };
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return null;
     }
 
@@ -488,7 +508,7 @@ export class SpeedrunDirector {
                 const block = this.bot.terrain.block(q);
                 if (block && block.typeId === "minecraft:gravel") return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 
@@ -502,7 +522,7 @@ export class SpeedrunDirector {
                     return distance(q, this.bot.sim.location);
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return null;
     }
 
@@ -531,13 +551,13 @@ export class SpeedrunDirector {
                 try {
                     const anyWood = b.terrain.scanOres(b.sim.location, 16, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem") || type === "minecraft:bamboo" || type === "minecraft:deadbush" || type === "minecraft:dead_bush" || type === "minecraft:cactus", 400);
                     if (anyWood.length > 0) {
-                        const t = b.terrain.block(anyWood[0])?.typeId ?? "minecraft:oak_log";
+                        const t = b.terrain.block(anyWood[0])?.typeId ?? "#logs";
                         b.startMine(t, 3);
                     } else {
-                        b.startMine("minecraft:oak_log", 3);
+                        b.startMine("#logs", 3);
                     }
                 } catch {
-                    b.startMine("minecraft:oak_log", 3);
+                    b.startMine("#logs", 3);
                 }
             }
             return;
@@ -549,13 +569,13 @@ export class SpeedrunDirector {
                 return;
             }
             // Try any wooden sword, not just oak
-            try { b.obtain("minecraft:wooden_sword", 1, tick); return; } catch {}
+            try { b.obtain("minecraft:wooden_sword", 1, tick); return; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             b.obtain("minecraft:wooden_axe", 1, tick);
             return;
         }
 
         // Village-first evaluation as soon as min equipment for safe progression
-        if (!this.villageChecked && hasWeapon && (counts["minecraft:oak_log"] ?? 0) >= 3) {
+        if (!this.villageChecked && hasWeapon && Object.entries(counts).filter(([k])=>k.endsWith("_log")||k.endsWith("_wood")||k.includes("_stem")).reduce((a,[,v])=>a+v,0) >= 3) {
             this.villageChecked = true;
             try {
                 const village = b.village?.findNearestVillage?.(128);
@@ -564,7 +584,7 @@ export class SpeedrunDirector {
                     // Let village director handle
                     return;
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
 
         const anyLogs = Object.entries(counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0);
@@ -574,13 +594,13 @@ export class SpeedrunDirector {
                 try {
                     const anyWood = b.terrain.scanOres(b.sim.location, 20, (type) => type.endsWith("_log") || type.endsWith("_wood") || type.includes("_stem"), 500);
                     if (anyWood.length > 0) {
-                        const t = b.terrain.block(anyWood[0])?.typeId ?? "minecraft:oak_log";
+                        const t = b.terrain.block(anyWood[0])?.typeId ?? "#logs";
                         b.startMine(t, 8);
                     } else {
-                        b.startMine("minecraft:oak_log", 8);
+                        b.startMine("#logs", 8);
                     }
                 } catch {
-                    b.startMine("minecraft:oak_log", 8);
+                    b.startMine("#logs", 8);
                 }
             }
             return;
@@ -635,7 +655,7 @@ export class SpeedrunDirector {
                 b.startMine("minecraft:bread", 3);
                 return;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     ironPhase(tick, counts) {
@@ -650,16 +670,16 @@ export class SpeedrunDirector {
                 }
                 return;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         // Bucket major milestone enables ground-level lava pools - priority 95
         const bucketEval = evaluateBucketPriority(counts, this.buildContext(tick, counts));
         if (bucketEval.priority >= 80 && !bucketEval.milestone) {
             b.reason = `Speedrun iron: bucket milestone priority ${bucketEval.priority} - ${bucketEval.reason}, major milestone enables ground lava pools`;
             if (bucketEval.canCraft) {
-                try { b.obtain("minecraft:bucket", 1, tick); return; } catch {}
+                try { b.obtain("minecraft:bucket", 1, tick); return; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else if (bucketEval.needSmelt) {
-                try { b.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return; } catch {}
+                try { b.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else {
                 b.startMine("minecraft:iron_ore", bucketEval.ironNeeded);
                 return;
@@ -708,7 +728,7 @@ export class SpeedrunDirector {
                     const r = b.navTo(center(ws), tick, 2);
                     if (r !== "failed") return;
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
     }
 
@@ -724,7 +744,7 @@ export class SpeedrunDirector {
                 this.portalPhase(tick, counts);
                 return;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         try {
             const diamondSpot = b.awareness?.getNearest("diamond");
@@ -735,7 +755,7 @@ export class SpeedrunDirector {
                 }
                 return;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         if ((counts["minecraft:diamond"] ?? 0) < 5) {
             b.reason = "Speedrun: deep mining diamonds for upskilling to portal, but Nether entry main goal";
@@ -772,7 +792,7 @@ export class SpeedrunDirector {
                         const r = b.navTo(center(ws), tick, 2);
                         if (r !== "failed") return;
                     }
-                } catch {}
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
 
             // Try to make obsidian from lava pool - evaluate ground vs cave vs ruined
@@ -811,12 +831,12 @@ export class SpeedrunDirector {
                                             return;
                                         }
                                     }
-                                } catch {}
+                                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                             }
                         }
                     }
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
             b.reason = `Speedrun: gathering obsidian ${obsidianHave}/10 - ${obsidianVerify.reason}, fastest viable method`;
             b.startMine("minecraft:obsidian", 10 - obsidianHave);
@@ -873,7 +893,7 @@ export class SpeedrunDirector {
                     return;
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         // Try to ignite
         this.enterNether(tick, counts);

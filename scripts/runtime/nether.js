@@ -55,9 +55,9 @@ export class NetherDirector {
             // Need bucket
             this.bot.reason = `Nether: bucket milestone priority ${bucketEval.priority} - ${bucketEval.reason}, iron needed ${bucketEval.ironNeeded}`;
             if (bucketEval.canCraft) {
-                try { this.bot.obtain("minecraft:bucket", 1, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:bucket", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else if (bucketEval.needSmelt) {
-                try { this.bot.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch {}
+                try { this.bot.autonomy.produce("minecraft:raw_iron", bucketEval.ironNeeded, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             } else {
                 // Find iron
                 const ironSpot = this.bot.awareness?.getNearest("iron_ore");
@@ -94,7 +94,7 @@ export class NetherDirector {
                     const r = this.bot.navTo(center(ignitionEval.pos), tick, 2);
                     if (r !== "failed") return true;
                 } else if (ignitionEval.action === "craft_flint_and_steel") {
-                    try { this.bot.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch {}
+                    try { this.bot.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 } else if (ignitionEval.action === "mine_gravel" || ignitionEval.action === "find_gravel") {
                     this.bot.startMine("minecraft:gravel", 5);
                     return true;
@@ -141,7 +141,7 @@ export class NetherDirector {
                         return this.executeRoute(newDecision, tick, counts, context);
                     }
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
 
         return this.executeRoute(decision, tick, counts, context);
@@ -351,7 +351,7 @@ export class NetherDirector {
 
         // Similar to ground but with torch and weapon checks
         if ((counts["minecraft:torch"] ?? 0) < 4) {
-            try { this.bot.obtain("minecraft:torch", 8, tick); return true; } catch {}
+            try { this.bot.obtain("minecraft:torch", 8, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
 
         return this.handleGroundLavaPortal(evaluation, tick, counts, context);
@@ -459,7 +459,7 @@ export class NetherDirector {
             // Need ignition
             const ignitionEval = evaluateIgnitionOptions(counts, null, { hasGravelNearby: this.checkGravelNearby(16), distanceToGravel: this.findGravelDistance(24) ?? 50 });
             if (ignitionEval && ignitionEval.action === "craft_flint_and_steel") {
-                try { this.bot.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:flint_and_steel", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             return false;
         }
@@ -599,7 +599,7 @@ export class NetherDirector {
                 this.bot.reason = `Nether: filling bucket with water at ${waterSource.x},${waterSource.y},${waterSource.z} for obsidian`;
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 

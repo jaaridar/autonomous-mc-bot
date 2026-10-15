@@ -82,7 +82,7 @@ export class WorldAwareness {
                 entry.visited++;
                 entry.tick = tick;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     scanHazards(tick) {
@@ -111,7 +111,7 @@ export class WorldAwareness {
                 }
             }
             this.lastHazards = hazards.slice(0, 10);
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     scan(tick) {
@@ -203,7 +203,7 @@ export class WorldAwareness {
                     }
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         // Detect structures via block signatures
         const structs = detectStructure(blockCounts, this.scanRadius);
@@ -255,9 +255,9 @@ export class WorldAwareness {
             }
             // Also try to use persistent memory for known kinds
             if (["chest","crafting_table","furnace","bed","portal"].includes(spotKind)) {
-                try { this.memory.notice(spotKind, pos, this.sim.dimension.id, tick); } catch {}
+                try { this.memory.notice(spotKind, pos, this.sim.dimension.id, tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     getGoals(hp, hunger, hasWeapon, phase) {

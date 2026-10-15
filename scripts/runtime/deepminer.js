@@ -97,7 +97,7 @@ export class DeepMiner {
         // If already breaking same cell, continue
         if (this.breakTarget && this.breakTarget.x === cell.x && this.breakTarget.y === cell.y && this.breakTarget.z === cell.z) {
             if (tick - this.breakingSince > 200) {
-                try { bot.sim.stopBreakingBlock(); } catch {}
+                try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.breakTarget = null;
                 this.breakingSince = 0;
                 this.blocked.set(key(cell), tick + BLOCKED_TTL);
@@ -107,7 +107,7 @@ export class DeepMiner {
         }
 
         // Start breaking front block directly - no nav needed
-        try { bot.sim.stopBreakingBlock(); } catch {}
+        try { bot.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         if (bot.breakThrough(cell) !== "digging") {
             return false;
         }
@@ -172,7 +172,7 @@ export class DeepMiner {
                 this.breakTarget = null;
                 this.breakingSince = 0;
             } else if (tick - this.breakingSince > 200) {
-                try { b.sim.stopBreakingBlock(); } catch {}
+                try { b.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.blocked.set(key(this.breakTarget), tick + BLOCKED_TTL);
                 this.breakTarget = null;
                 this.breakingSince = 0;
@@ -255,7 +255,7 @@ export class DeepMiner {
     maybeTorch() {
         if (this.dug % 8 !== 0 || this.route.length < 2) return;
         const behind = this.route[this.route.length - 2];
-        try { this.bot.placeTorch(add(behind, DOWN)); } catch {}
+        try { this.bot.placeTorch(add(behind, DOWN)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     descendStep(tick) {
@@ -295,7 +295,7 @@ export class DeepMiner {
                         if (this.tryDirectBreak(headFront, tick)) return "working";
                     }
                 }
-            } catch {}
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.turn();
             this.reason = `Stair blocked (${r}) - turning - front fix`;
             return "working";

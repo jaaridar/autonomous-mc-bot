@@ -4,6 +4,8 @@
  * Main orchestrator that ensures bot can handle any situation.
  */
 import { floor, add, distance, center, key, UP, DOWN, CARDINAL, COMPASS } from "../core/math.js";
+import { composeCapabilities, CAPABILITIES, evaluateCapability } from "../core/survival-capabilities.js";
+import { shouldRecalculateAdaptive, handlePlanFailure, verifyAction } from "../core/adaptive-planning.js";
 import { detectScenario, bestActionForContext, assessFallDepth, assessNightThreat, resourcePriority, shelterFailurePlan, multiRiskPriority, ALL_SCENARIOS } from "../core/survival-scenarios.js";
 import { retainScore, isCritical } from "../core/knowledge.js";
 import { Direction } from "@minecraft/server";
@@ -37,15 +39,44 @@ export class SurvivalMaster {
     }
 
     tick(tick) {
-        if (tick - this.lastAssess < 20) return false; // assess every second
+        if (tick - this.lastAssess < 20) return false;
         this.lastAssess = tick;
 
         const context = this.buildContext(tick);
+
+        // FIX: compose capabilities - mix of two situations should not fall through
+        try {
+            const caps = composeCapabilities({
+                health: context.health,
+                hunger: context.hunger,
+                threatCount: context.hostileCount,
+                inWater: context.inWater,
+                belowHazard: context.belowHazard,
+                gapSize: context.gapSize,
+                verticalDiff: context.verticalDiff,
+                foodCount: context.foodCount,
+                targetBlock: context.targetBlock,
+                bombNear: context.bombNear,
+                needCover: context.needCover
+            });
+            if (caps.length > 1) {
+                this.bot.record(`Survival capabilities composed: ${caps.map(c=>c.capability+":"+c.priority).join(", ")} - handles mix of situations`);
+            }
+        } catch (e) { console.warn("[Verdant] capabilities compose "+e); }
+
+        // Adaptive planning: recalculate on discovery
+        try {
+            const discovery = { type: context.scenarioType || "unknown", count: context.hostileCount, pos: context.pos };
+            const recalc = shouldRecalculateAdaptive(discovery, { route: this.currentScenario?.name }, { phase: context.phase, foodLow: context.hunger <= 6 });
+            if (recalc.should) {
+                this.bot.record(`Adaptive recalc: ${recalc.reason} priority ${recalc.priority}`);
+            }
+        } catch (e) { console.warn("[Verdant] adaptive recalc "+e); }
+
         const detected = detectScenario(context);
         if (!detected.length) return false;
 
         const top = detected[0];
-        // Only handle if high priority or critical
         if (top.priority < 80 && !top.critical) return false;
 
         this.currentScenario = top;
@@ -224,7 +255,7 @@ export class SurvivalMaster {
         if (!ctx.hasTorch) {
             // Craft torch from coal or charcoal
             if ((ctx.counts["minecraft:coal"] ?? 0) > 0 && (ctx.counts["minecraft:stick"] ?? 0) > 0) {
-                try { this.bot.obtain("minecraft:torch", 4, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:torch", 4, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         } else {
             this.placeTorchNearby(ctx.p, tick);
@@ -333,10 +364,10 @@ export class SurvivalMaster {
             }
             // Try craft new if possible
             if ((ctx.counts["minecraft:cobblestone"] ?? 0) >= 3 && (ctx.counts["minecraft:stick"] ?? 0) >= 2) {
-                try { this.bot.obtain("minecraft:stone_pickaxe", 1, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:stone_pickaxe", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if ((ctx.counts["minecraft:oak_planks"] ?? 0) >= 3 && (ctx.counts["minecraft:stick"] ?? 0) >= 2) {
-                try { this.bot.obtain("minecraft:wooden_pickaxe", 1, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:wooden_pickaxe", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         }
         return false;
@@ -364,7 +395,7 @@ export class SurvivalMaster {
         if (!ctx.hasTorch) {
             // Craft torch if possible
             if ((ctx.counts["minecraft:coal"] ?? 0) > 0) {
-                try { this.bot.obtain("minecraft:torch", 4, tick); return true; } catch {}
+                try { this.bot.obtain("minecraft:torch", 4, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         } else {
             this.placeTorchNearby(ctx.p, tick);
@@ -413,7 +444,7 @@ export class SurvivalMaster {
             // Equip weapon immediately
             if (this.bot.equipment.ensureWeaponEquipped()) return true;
             // Craft quick weapon
-            try { this.bot.obtain("minecraft:wooden_sword", 1, tick); return true; } catch {}
+            try { this.bot.obtain("minecraft:wooden_sword", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
         // Kite spider
         const spider = ctx.threats.find(t => t.typeId.includes("spider"));
@@ -708,7 +739,7 @@ export class SurvivalMaster {
         const nearest = ctx.threats[0];
         if (nearest && distance(nearest.location, this.sim.location) < 5) {
             // Cancel eating
-            try { this.sim.stopUsingItem(); } catch {}
+            try { this.sim.stopUsingItem(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.bot.eatingUntil = 0;
             this.bot.reason = "Night 29: attacked while eating - cancel eating, immediate danger";
             // Equip weapon
@@ -754,7 +785,7 @@ export class SurvivalMaster {
 
     handleNoWoodLowHungerSunset(ctx, tick) {
         if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0) < 3) {
-            this.bot.startMine("minecraft:oak_log", 5) // any wood acceptable via anyWood fallback;
+            this.bot.startMine("#logs", 5) // any wood acceptable - fixed
             this.bot.reason = "Resource 31: no wood low hunger sunset - prioritize safe wood collection";
             return true;
         }
@@ -773,7 +804,7 @@ export class SurvivalMaster {
     }
 
     handleWoodNoTable(ctx, tick) {
-        try { this.bot.obtain("minecraft:crafting_table", 1, tick); this.bot.reason = "Resource 32: wood no table - crafting dependency, craft table immediately"; return true; } catch {}
+        try { this.bot.obtain("minecraft:crafting_table", 1, tick); this.bot.reason = "Resource 32: wood no table - crafting dependency, craft table immediately"; return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         // Minimal shelter with logs
         if (ctx.hasBlocks) {
             this.builder.buildBunker(ctx.p, tick, false);
@@ -785,7 +816,7 @@ export class SurvivalMaster {
     handleTableInsufficientPlanks(ctx, tick) {
         // Weapon first
         if (!ctx.hasWeapon) {
-            try { this.bot.obtain("minecraft:wooden_sword", 1, tick); this.bot.reason = "Resource 33: insufficient planks - weapon first over shelter"; return true; } catch {}
+            try { this.bot.obtain("minecraft:wooden_sword", 1, tick); this.bot.reason = "Resource 33: insufficient planks - weapon first over shelter"; return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
         // Shelter with dirt
         if (ctx.hasBlocks) {
@@ -798,7 +829,7 @@ export class SurvivalMaster {
     handlePickaxeBreaksBeforeStone(ctx, tick) {
         if (!ctx.hasPickaxe) {
             if ((ctx.counts["minecraft:oak_planks"] ?? 0) >= 3) {
-                try { this.bot.obtain("minecraft:wooden_pickaxe", 1, tick); this.bot.reason = "Resource 34: pickaxe breaks before stone - replace tool"; return true; } catch {}
+                try { this.bot.obtain("minecraft:wooden_pickaxe", 1, tick); this.bot.reason = "Resource 34: pickaxe breaks before stone - replace tool"; return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         }
         return false;
@@ -808,8 +839,8 @@ export class SurvivalMaster {
         if (!ctx.hasTorch) {
             if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log")).reduce((a,[,v])=>a+v,0) > 0) {
                 // Make charcoal
-                try { this.bot.obtain("minecraft:charcoal", 2, tick); return true; } catch {}
-                try { this.bot.obtain("minecraft:torch", 4, tick); this.bot.reason = "Resource 35: stone no coal - charcoal alternative light"; return true; } catch {}
+                try { this.bot.obtain("minecraft:charcoal", 2, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.obtain("minecraft:torch", 4, tick); this.bot.reason = "Resource 35: stone no coal - charcoal alternative light"; return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             // Retreat to surface
             const up = this.findUpwardRoute(ctx.p, 12);
@@ -847,9 +878,9 @@ export class SurvivalMaster {
 
     handleIronNoFurnaceFuel(ctx, tick) {
         // Remember iron pos
-        try { this.bot.awareness?.rememberSpot("iron_ore", ctx.p, tick, 95); } catch {}
+        try { this.bot.awareness?.rememberSpot("iron_ore", ctx.p, tick, 95); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         if ((ctx.counts["minecraft:cobblestone"] ?? 0) >= 8) {
-            try { this.bot.obtain("minecraft:furnace", 1, tick); this.bot.reason = "Resource 38: iron no furnace - progression opportunity, craft furnace"; return true; } catch {}
+            try { this.bot.obtain("minecraft:furnace", 1, tick); this.bot.reason = "Resource 38: iron no furnace - progression opportunity, craft furnace"; return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
         if (ctx.time === "night") {
             this.buildMinimalShelter(ctx.p, tick);
@@ -894,11 +925,11 @@ export class SurvivalMaster {
 
     handleWoolNoWoodForBed(ctx, tick) {
         if (Object.entries(ctx.counts).filter(([k]) => k.endsWith("_log") || k.endsWith("_wood")).reduce((a,[,v])=>a+v,0) < 3) {
-            this.bot.startMine("minecraft:oak_log", 3) // any wood acceptable;
+            this.bot.startMine("#logs", 3) // any wood acceptable - fixed
             this.bot.reason = "Resource 42: wool no wood for bed - searching wood";
             return true;
         }
-        try { this.bot.obtain("minecraft:white_bed", 1, tick); return true; } catch {}
+        try { this.bot.obtain("minecraft:white_bed", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 
@@ -916,7 +947,7 @@ export class SurvivalMaster {
 
     handleFoodNoWeaponPassiveNearHostile(ctx, tick) {
         if (!ctx.hasWeapon) {
-            try { this.bot.obtain("minecraft:wooden_sword", 1, tick); this.bot.reason = "Resource 44: food no weapon passive near hostile - craft weapon first"; return true; } catch {}
+            try { this.bot.obtain("minecraft:wooden_sword", 1, tick); this.bot.reason = "Resource 44: food no weapon passive near hostile - craft weapon first"; return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
         return false;
     }
@@ -1013,7 +1044,7 @@ export class SurvivalMaster {
                                 this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(support.pos)), Direction.Up);
                                 this.bot.reason = "Shelter 48: gravel collapses exit - torch breaks gravel";
                                 return true;
-                            } catch {}
+                            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                         }
                     }
                 }
@@ -1267,7 +1298,7 @@ export class SurvivalMaster {
                 return this.handleCaveEmptyHunger(ctx, tick) || this.handleCaveBrokenPickaxe(ctx, tick);
             case 65: // lava pool + iron + sunset + no food
                 // Remember iron, retreat
-                try { this.bot.awareness?.rememberSpot("iron_ore", ctx.p, tick, 95); } catch {}
+                try { this.bot.awareness?.rememberSpot("iron_ore", ctx.p, tick, 95); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 if (ctx.time === "sunset" || ctx.time === "night") {
                     this.buildMinimalShelter(ctx.p, tick);
                     this.bot.reason = "Multi 65: lava+iron+sunset+no food - resource temptation, safe retreat, remember iron";
@@ -1347,7 +1378,7 @@ export class SurvivalMaster {
                     if (dist > 64 || ctx.time === "night") {
                         // Rebuild minimum equipment
                         this.bot.reason = "Multi 80: respawn death no equipment distant drops night mobs - rebuild minimum, wait safer";
-                        try { this.bot.obtain("minecraft:wooden_pickaxe", 1, tick); return true; } catch {}
+                        try { this.bot.obtain("minecraft:wooden_pickaxe", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                         this.buildMinimalShelter(ctx.p, tick);
                         return true;
                     } else {
@@ -1656,7 +1687,7 @@ export class SurvivalMaster {
                     return floor(e.location);
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         // Check for crops
         for (let dx=-radius; dx<=radius; dx++) for (let dz=-radius; dz<=radius; dz++) {
             const q = add(p, { x:dx, y:0, z:dz });
@@ -1922,7 +1953,7 @@ export class SurvivalMaster {
                 this.bot.reason = "Survival-Master: water clutch for fall";
                 return true;
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return false;
     }
 

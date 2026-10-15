@@ -57,7 +57,7 @@ export class VillageDirector {
                     }
                 }
                 if ((context.woolCount ?? 0) >= 3 && (context.woodCount ?? 0) >= 3) {
-                    try { this.bot.obtain("minecraft:white_bed", 1, tick); return true; } catch {}
+                    try { this.bot.obtain("minecraft:white_bed", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 }
             }
             return false;
@@ -115,14 +115,14 @@ export class VillageDirector {
 
     buildContext(tick) {
         const counts = this.bag.counts();
-        const hasWood = (counts["minecraft:oak_log"] ?? 0) >= 3 || Object.keys(counts).some(k => k.includes("_log") && counts[k] >= 2);
+        const hasWood = Object.entries(counts).filter(([k])=>k.endsWith("_log")||k.endsWith("_wood")||k.includes("_stem")).reduce((a,[,v])=>a+v,0) >= 3;
         const hasStone = (counts["minecraft:cobblestone"] ?? 0) >= 8;
         const hasFood = Object.keys(counts).some(k => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot"));
         const foodAmount = Object.entries(counts).filter(([k]) => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot")).reduce((sum, [,v]) => sum + v, 0);
         const hasBed = Object.keys(counts).some(k => k.endsWith("_bed"));
         const hasWool = Object.keys(counts).some(k => k.includes("_wool"));
         const woolCount = Object.entries(counts).filter(([k]) => k.includes("_wool")).reduce((sum, [,v]) => sum + v, 0);
-        const woodCount = (counts["minecraft:oak_log"] ?? 0) + (counts["minecraft:oak_planks"] ?? 0);
+        const woodCount = Object.entries(counts).filter(([k])=>k.endsWith("_log")||k.endsWith("_planks")||k.includes("_stem")).reduce((a,[,v])=>a+v,0);
         const hasIron = (counts["minecraft:iron_ingot"] ?? 0) >= 1;
         const hasBucket = (counts["minecraft:bucket"] ?? 0) > 0 || (counts["minecraft:water_bucket"] ?? 0) > 0;
         const hasFurnace = (counts["minecraft:furnace"] ?? 0) > 0;
@@ -133,7 +133,7 @@ export class VillageDirector {
 
         // Cache sheep lookup to avoid double entity scan
         let sheepNearby = null;
-        try { sheepNearby = this.findSheepNearby(32); } catch {}
+        try { sheepNearby = this.findSheepNearby(32); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return {
             hasWood,
             hasStone,
@@ -202,13 +202,13 @@ export class VillageDirector {
                     };
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         try {
             // Try /locate if commands available
             const located = this.tryLocateVillage();
             if (located) return located;
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         // Environmental detection: find village via blocks and entities - BUDGETED (max 800 block checks per call)
         const p = floor(this.sim.location);
@@ -270,7 +270,7 @@ export class VillageDirector {
                     chestHasIron: false,
                 };
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
         if (villageScore >= 4 && centerPos) {
             const dist = distance(centerPos, this.sim.location);
@@ -346,7 +346,7 @@ export class VillageDirector {
                             this.sim.useItemInSlotOnBlock(this.bag.select(0), this.bot.host.relative(center(bedPos)), 1);
                             this.lastBedUse = tick;
                             this.bedPos = bedPos;
-                        } catch {}
+                        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                     }
                     return true;
                 }
@@ -390,7 +390,7 @@ export class VillageDirector {
                     return { pos: floor(e.location), entity: e, distance: distance(e.location, this.sim.location) };
                 }
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return null;
     }
 

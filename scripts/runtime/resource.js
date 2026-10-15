@@ -91,7 +91,7 @@ export class ResourceManager {
             if (drops.length && drops[0].score >= 50) {
                 return drops[0];
             }
-        } catch {}
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return undefined;
     }
 
