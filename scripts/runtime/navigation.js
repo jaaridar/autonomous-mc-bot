@@ -182,9 +182,27 @@ export class Navigator {
             this.lastPosition = { ...this.sim.location };
         }
 
-        // Check if waypoint still safe, or if we need bridge
+        // Check if waypoint still safe, or if we need bridge - entire body must be able to go
         const waypointSafe = this.terrain.freshSafe(w) || w.kind === "bridge";
         if (tick - this.lastProgress > 50 || !waypointSafe || this.corridor.some((p) => !this.terrain.freshSafe(p) && p.kind !== "bridge")) {
+            // Try to find obstruction that blocks entire body
+            if (!waypointSafe && w) {
+                try {
+                    // Check feet and head at waypoint - entire body collision
+                    const blocksToCheck = [w, { x: w.x, y: w.y + 1, z: w.z }, { x: w.x, y: w.y - 1, z: w.z }];
+                    for (const pos of blocksToCheck) {
+                        const b = this.terrain.block(pos);
+                        if (b && !b.isAir) {
+                            // Found obstruction blocking entire body path
+                            const isObsidian = b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian";
+                            if (!isObsidian) {
+                                // Signal obstruction for workaround-then-break logic in bot.js navTo
+                                return this.fail(`Obstruction ${b.typeId} at ${pos.x},${pos.y},${pos.z} blocks entire body path; needs workaround or break`);
+                            }
+                        }
+                    }
+                } catch {}
+            }
             if (++this.retries > 4) return this.fail("Stuck or terrain changed after retries.");
             this.terrain.clear();
             this.replan(tick);

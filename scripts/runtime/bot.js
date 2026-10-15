@@ -988,9 +988,58 @@ export class Bot {
             seen.add(k);
             if (this.terrain.safe(q)) candidates.push(q);
         }
-        if (!candidates.length) return "blocked";
+        if (!candidates.length) {
+            // ROBUST: No safe spot, try to find workaround by breaking obstruction unless obsidian or important
+            try {
+                const obstruct = this.terrain.findObstructions(this.sim.location, goal);
+                if (obstruct.length > 0 && obstruct.length <= 3) {
+                    for (const cell of obstruct) {
+                        const b = this.terrain.block(cell);
+                        if (!b || b.isAir) continue;
+                        // Don't break obsidian or important (retainScore >=80) unless critical
+                        if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") continue;
+                        if (isUnbreakable(b.typeId)) continue;
+                        const score = retainScore(b.typeId);
+                        if (score >= 80) continue; // important like chest, furnace, crafting_table, bed
+                        // Break it - entire body should be able to go
+                        const r = this.digCell(cell, tick);
+                        if (r === "digging") {
+                            this.reason = `Breaking obstruction ${b.typeId} at ${cell.x},${cell.y},${cell.z} to reach goal - entire body path`;
+                            return "running";
+                        }
+                    }
+                }
+            } catch {}
+            return "blocked";
+        }
         candidates.sort((a, b) => (distance(a, goal) - distance(b, goal)) || (distance(this.sim.location, a) - distance(this.sim.location, b)));
-        return this.nav.go(center(candidates[0]), tick);
+        const result = this.nav.go(center(candidates[0]), tick);
+        if (result === "failed") {
+            // ROBUST: Path failed, try to break obstruction in front unless obsidian or important
+            try {
+                const p = floor(this.sim.location);
+                // Check block directly in front of head that blocks entire body
+                const headFront = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+                const obstruct = headFront ? [headFront] : this.terrain.findObstructions(this.sim.location, center(candidates[0]));
+                if (obstruct.length > 0 && obstruct.length <= 3) {
+                    for (const cell of obstruct) {
+                        const b = this.terrain.block(cell);
+                        if (!b || b.isAir) continue;
+                        if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") continue;
+                        if (isUnbreakable(b.typeId)) continue;
+                        const score = retainScore(b.typeId);
+                        if (score >= 80) continue;
+                        const r = this.digCell(cell, tick);
+                        if (r === "digging") {
+                            this.reason = `Breaking obstruction ${b.typeId} at ${cell.x},${cell.y},${cell.z} - path failed workaround`;
+                            return "running";
+                        }
+                        if (r === "open") continue;
+                    }
+                }
+            } catch {}
+        }
+        return result;
     }
     follow(goal, tick, leash) {
         const r = this.navTo(goal, tick, leash);
@@ -1442,12 +1491,62 @@ export class Bot {
         }
         m.approach = undefined; m.approachTry = 0; this.nav.reset();
         const rule = MINE[b.typeId];
-        if (!m.breakingSince) {
-            if (rule && !this.bag.tool(rule.tool, rule.tier)) {
-                m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.approachTry = 0;
-                if (rule.tier > 0) { this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3.`, "retry"); return false; }
+        // TOOL TIER AWARENESS: found iron should not mine with wooden, should know best way, if not then make it
+        if (rule && rule.tier > 0) {
+            const hasTool = this.bag.tool(rule.tool, rule.tier);
+            if (!hasTool) {
+                m.blocked.set(key(target), tick + BLOCKED_TTL);
+                // Don't just block - try to make better tool and furnace if needed
+                const neededTier = rule.tier;
+                const toolName = rule.tool;
+                // What ore to mine what is best way - if iron ore needs stone pickaxe tier 2
+                if (neededTier >= 2 && toolName === "pickaxe") {
+                    const counts = this.bag.counts();
+                    // Check if we have cobblestone for stone pickaxe
+                    if ((counts["minecraft:cobblestone"] ?? 0) >= 3 || (counts["minecraft:cobbled_deepslate"] ?? 0) >= 3) {
+                        this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, crafting stone pickaxe - tool tier awareness`;
+                        try { this.obtain("minecraft:stone_pickaxe", 1, tick); return false; } catch {}
+                    } else {
+                        // Need to mine cobblestone first
+                        this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need cobblestone for stone pickaxe`;
+                        m.target = undefined;
+                        // Temporarily switch to mining cobblestone
+                        try { 
+                            if (!this.mining || this.mining.block !== "minecraft:cobblestone") {
+                                // Don't override current mining, just find cobblestone nearby
+                                const cobbleSpot = this.terrain.scanOres(this.sim.location, 8, (type) => type === "minecraft:cobblestone" || type === "minecraft:stone", 200);
+                                if (cobbleSpot.length) {
+                                    m.target = cobbleSpot[0];
+                                    m.type = "minecraft:cobblestone";
+                                    return false;
+                                }
+                            }
+                        } catch {}
+                    }
+                }
+                if (neededTier >= 3 && toolName === "pickaxe") {
+                    // Diamond needs iron pickaxe
+                    this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need iron pickaxe - tool tier awareness, furnace use`;
+                    try { 
+                        const counts = this.bag.counts();
+                        if ((counts["minecraft:iron_ingot"] ?? 0) >= 3) {
+                            this.obtain("minecraft:iron_pickaxe", 1, tick); return false;
+                        } else if ((counts["minecraft:raw_iron"] ?? 0) >= 3) {
+                            // Need furnace to smelt
+                            this.reason = `Found iron but need furnace to smelt raw_iron for iron pickaxe tier 3`;
+                            try { this.autonomy.produce("minecraft:raw_iron", 3, tick); return false; } catch {}
+                        }
+                    } catch {}
+                }
+                m.target = undefined; m.approach = undefined; m.approachTry = 0;
+                if (rule.tier > 0) { 
+                    this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3. Crafting better tool.`, "retry"); 
+                    return false; 
+                }
                 try { this.bag.emptyHand(); } catch {}
             }
+        }
+        if (!m.breakingSince) {
             this.sim.lookAtBlock(this.host.relative(target));
             if (!this.sim.breakBlock(this.host.relative(target))) { m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; return false; }
             m.breakingSince = tick;
