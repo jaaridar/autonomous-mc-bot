@@ -167,6 +167,9 @@ export class SurvivalDirector {
         // Lightweight inventory-change detector (sum of all item amounts).
         const stock  = b.bag.counts();
         const usable = b.bag.usableCounts();
+        const toolKinds = ["pickaxe", "axe", "sword"];
+        const TIERS     = ["iron_", "diamond_", "netherite_"];
+        const hasTier   = (kind) => TIERS.some((t) => (usable[id(t + kind)] ?? 0) > 0);
         const sigSum = Object.values(stock).reduce((s, n) => s + n, 0);
         if (sigSum !== this.sigSum) { this.sigSum = sigSum; this.lastProgress = tick; }
 
@@ -254,10 +257,6 @@ export class SurvivalDirector {
         }
 
         // ---- Stone tools -------------------------------------------------
-        const toolKinds = ["pickaxe", "axe", "sword"];
-        const TIERS     = ["iron_", "diamond_", "netherite_"];
-        const hasTier   = (kind) => TIERS.some((t) => (usable[id(t + kind)] ?? 0) > 0);
-
         // Get 3 cobble for stone pickaxe first (fast upgrade), then gather remainder with stone pickaxe
         const neededCobble = !(usable[id("stone_pickaxe")] > 0 || hasTier("pickaxe")) ? 3 : 14;
         if (toolKinds.some((k) => !hasTier(k)) && (stock[ID_COBBLE] ?? 0) < neededCobble) {
