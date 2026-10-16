@@ -1,0 +1,8 @@
+# Local agent config (contains an API key) - never commit
+opencode.json
+
+# Generated / local artifacts
+*.log
+node_modules/
+.DS_Store
+Thumbs.db
