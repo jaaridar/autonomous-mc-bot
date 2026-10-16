@@ -1,3 +1,8 @@
+// One module now: core/arbiter.js + core/recovery.js (see docs/ARCHITECTURE.md).
+
+
+// ---------------------------------------------------------------- arbiter.js
+
 /**
  * Arbiter - replaces 430-line chain of if (director.tick()) return;
  * Keeps current behavior until it finishes or something clearly better appears
@@ -180,7 +185,6 @@ export class Arbiter {
             if (mode && mode !== "idle") {
                 let score = 50;
                 if (mode === "follow" && owner) {
-                    const dist = bot.terrain ? bot.terrain.distance ? 0 : 0 : 0;
                     try { 
                         const d = Math.hypot(bot.sim.location.x - owner.location.x, bot.sim.location.z - owner.location.z);
                         score = d > 12 ? 80 : 60;
@@ -205,22 +209,6 @@ export class Arbiter {
                 });
             }
         } catch (e) { console.warn("[Verdant] mission eval "+e); }
-
-        // Looting - single implementation via Looting director, not 3 times
-        try {
-            if (bot.settings.loot && !bot.miner.active && !bot.deepMiner.active) {
-                const lootScore = bot.looting?.evaluate ? bot.looting.evaluate(tick) : 0;
-                if (lootScore > 30) {
-                    candidates.push({
-                        id: "looting",
-                        director: bot.looting,
-                        score: lootScore,
-                        reason: "nearby valuable chest/loot - single looting implementation",
-                        tags: ["resource", "optional"]
-                    });
-                }
-            }
-        } catch (e) { console.warn("[Verdant] looting eval "+e); }
 
         // Village - called once via arbiter, not twice
         try {
@@ -370,4 +358,27 @@ export class Arbiter {
             failures: this.failures.summary()
         };
     }
+}
+
+// ---------------------------------------------------------------- recovery.js
+
+export class TaskFault extends Error {
+    constructor(message, recovery = "manual") {
+        super(message);
+        this.recovery = recovery;
+        this.name = "TaskFault";
+    }
+}
+export function blockedTask(reason, recovery, attempt, tick) {
+    const retrying = recovery === "retry";
+    // Bounded backoff, but never a dead end: retry blocks keep coming back (delay capped at about a minute).
+    // Only explicitly manual blocks (owner hold / equipment faults) wait for the owner.
+    const delay = Math.min(40 * 2 ** Math.max(0, attempt - 1), 1200);
+    return {
+        reason,
+        recovery: retrying ? "retry" : "manual",
+        attempt,
+        since: tick,
+        retryAt: retrying ? tick + delay : undefined,
+    };
 }

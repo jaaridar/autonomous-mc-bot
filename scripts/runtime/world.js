@@ -1,7 +1,6 @@
-import { add, floor, distance, key, UP, DOWN, CARDINAL, COMPASS } from "../core/math.js";
-import { standable } from "../core/navigation.js";
-import { HAZARDS, HOSTILES, RANGED, EXPLOSIVE, threatRank } from "../core/policy.js";
-
+import { world } from "@minecraft/server";
+import { CARDINAL, COMPASS, DOWN, UP, add, distance, floor, key } from "../core/math.js";
+import { EXPLOSIVE, HAZARDS, HOSTILES, RANGED, standable, threatRank } from "../core/world.js";
 const THREAT_RADIUS = 18;
 const NEAR6 = [UP, DOWN, ...CARDINAL];
 const TABLE_OFFSETS = [];
@@ -537,5 +536,55 @@ export class RollingSweep {
             if (c && !c.isAir) visit(c.type, p);
         }
         return { started, finished: this.cursor >= offs.length };
+    }
+}
+
+/**
+ * Current time bucket of a dimension clock: "day" | "sunset" | "night".
+ * Shared by every director that reasons about night (they each carried an
+ * identical private copy).
+ */
+export function timeOfDay() {
+    try {
+        // World.getTimeOfDay() is the API this version has - Dimension has no
+        // getTimeOfDay(), so the old `sim.dimension.getTimeOfDay ? ... : 0`
+        // always answered 0 and every caller was told it was daytime.
+        const tod = world.getTimeOfDay();
+        if (tod >= 12000 && tod < 13000)
+            return "sunset";
+        if (tod >= 13000 && tod < 23000)
+            return "night";
+        return "day";
+    }
+    catch {
+        return "day";
+    }
+}
+/** Highest weapon tier carried, by typeId substring (lenient variant). */
+export function weaponTierLoose(bag) {
+    for (let i = 0; i < bag.size; i++) {
+        const s = bag.get(i);
+        if (!s)
+            continue;
+        if (s.typeId.includes("netherite"))
+            return 5;
+        if (s.typeId.includes("diamond"))
+            return 4;
+        if (s.typeId.includes("iron"))
+            return 3;
+        if (s.typeId.includes("stone"))
+            return 2;
+        if (s.typeId.includes("wooden"))
+            return 1;
+    }
+    return 0;
+}
+/** Nearest boat within 8 blocks, or undefined (shared by escape + survival). */
+export function findBoat(sim) {
+    try {
+        return sim.dimension.getEntities({ type: "minecraft:boat", location: sim.location, maxDistance: 8 })[0];
+    }
+    catch {
+        return undefined;
     }
 }

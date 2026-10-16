@@ -1,3 +1,8 @@
+// One module now: core/combat.js + core/escape-strategy.js (see docs/ARCHITECTURE.md).
+import { MOB_ADAPTIVE, adaptTactic } from "./knowledge.js";
+
+// ---------------------------------------------------------------- combat.js
+
 /**
  * World-class combat tactics - pure logic, no engine deps.
  * Handles: 16 skeletons, blaze, enderman, creeper, warden, etc.
@@ -5,7 +10,6 @@
  * Priority #1: never fight bare hand - quick tool crafting.
  * Provides threat evaluation, tactical decisions, dodge patterns.
  */
-import { MOB_ADAPTIVE, adaptTactic, getBlockInfo, getItemInfo } from "./knowledge.js";
 
 export const MOB_STATS = {
     "minecraft:zombie": { damage: 3, speed: 0.23, range: 1.5, tactic: "kite", priority: 1, fear: 3, groupFear: 0.4, kite: true },
@@ -67,19 +71,6 @@ export function getMobStat(typeId) {
     return { damage: 3, speed: 0.25, range: 1.5, tactic: "kite", priority: 2, fear: 4, groupFear: 0.5, kite: true };
 }
 
-export function combatThreatScore(entities, botPos) {
-    let score = 0;
-    for (const e of entities) {
-        const stat = getMobStat(e.typeId);
-        const dist = Math.hypot(e.location.x - botPos.x, e.location.y - botPos.y, e.location.z - botPos.z);
-        const distFactor = dist < 3 ? 2.5 : dist < 6 ? 1.8 : dist < 10 ? 1.2 : dist < 16 ? 0.7 : 0.3;
-        let fear = stat.fear * distFactor;
-        if (entities.length > 1) fear *= (1 + (entities.length - 1) * stat.groupFear * 0.15);
-        score += fear;
-    }
-    return score;
-}
-
 export function shouldRetreat(hp, threatScore, count, hasWeapon, armor, hasShield, hasWater, threats) {
     // NEVER fight bare hand - priority #1 quick tool
     if (!hasWeapon) return true;
@@ -134,10 +125,6 @@ export function strafeDirection(botPos, targetPos, left) {
     return { x: dz, z: -dx };
 }
 
-export function critWindow(isOnGround, lastCritTick, currentTick) {
-    return isOnGround && currentTick - lastCritTick > 20;
-}
-
 export function dodgePattern(tick, threatType, botPos, threatPos) {
     const stat = getMobStat(threatType);
     if (!stat.strafe && !stat.cover && !MOB_ADAPTIVE.isRanged(threatType)) return null;
@@ -157,36 +144,6 @@ export function endermanSafeLook(targetPos) {
     return { x: targetPos.x, y: targetPos.y - 1.5, z: targetPos.z };
 }
 
-export function findCoverPosition(botPos, threats, terrainCheck) {
-    let best = null;
-    let bestScore = -Infinity;
-    const dirs = [
-        { x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 },
-        { x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }
-    ];
-    for (const dir of dirs) {
-        for (const dist of [3, 5, 7]) {
-            const pos = { x: botPos.x + dir.x * dist, y: botPos.y, z: botPos.z + dir.z * dist };
-            let score = 0;
-            let blocksLOS = 0;
-            for (const t of threats) {
-                const stat = getMobStat(t.typeId);
-                if (!stat.cover && !MOB_ADAPTIVE.isRanged(t.typeId)) continue;
-                const d = Math.hypot(pos.x - t.location.x, pos.z - t.location.z);
-                if (d > 12) score += 5;
-                else if (d < 4) score -= 10;
-                if (terrainCheck) {
-                    const check = terrainCheck(pos, t.location);
-                    if (check.blocksLOS) { score += 15; blocksLOS++; }
-                }
-            }
-            if (blocksLOS > 0) score += blocksLOS * 10;
-            if (score > bestScore) { bestScore = score; best = pos; }
-        }
-    }
-    return best;
-}
-
 // Quick tool check - never bare hand
 export function needsQuickTool(hasWeapon, inventory) {
     if (hasWeapon) return null;
@@ -201,4 +158,103 @@ export function needsQuickTool(hasWeapon, inventory) {
     if (hasPlanks && hasSticks) return { craft: "minecraft:wooden_sword", reason: "no weapon - craft wooden sword #1 priority" };
     if (hasCobble && hasSticks) return { craft: "minecraft:stone_sword", reason: "upgrade to stone sword" };
     return { craft: "minecraft:wooden_sword", reason: "emergency weapon needed" };
+}
+
+// ---------------------------------------------------------------- escape-strategy.js
+
+/**
+ * World-class escape strategy - pure logic, no engine deps.
+ * Handles: skeleton swarm (16), blaze, enderman, creeper, warden, etc.
+ * Provides assessment, cover finding, bunker planning, tactical retreat.
+ */
+
+export const THREAT_PROFILES = {
+    "minecraft:skeleton": { type: "ranged", damage: 4, range: 16, speed: 0.25, fear: 6, cover: true, strafe: true, shield: true, groupFear: 0.8 },
+    "minecraft:stray": { type: "ranged", damage: 4, range: 16, speed: 0.25, fear: 7, cover: true, strafe: true, shield: true, groupFear: 0.8, slow: true },
+    "minecraft:bogged": { type: "ranged", damage: 4, range: 16, speed: 0.25, fear: 7, cover: true, strafe: true, shield: true, groupFear: 0.8, poison: true },
+    "minecraft:blaze": { type: "flying_ranged", damage: 6, range: 16, speed: 0.3, fear: 8, cover: true, strafe: true, shield: false, fire: true, groupFear: 1.2 },
+    "minecraft:ghast": { type: "flying_ranged", damage: 12, range: 32, speed: 0.2, fear: 9, cover: true, strafe: true, shield: false, explosive: true, groupFear: 1.5 },
+    "minecraft:enderman": { type: "teleport_melee", damage: 7, range: 3, speed: 0.3, fear: 7, cover: false, water: true, lowRoof: true, noEyeContact: true, groupFear: 0.3 },
+    "minecraft:creeper": { type: "explosive", damage: 22, range: 3, speed: 0.25, fear: 10, cover: false, retreat: true, groupFear: 0.5 },
+    "minecraft:zombie": { type: "melee", damage: 3, range: 1.5, speed: 0.23, fear: 3, kite: true, groupFear: 0.4 },
+    "minecraft:husk": { type: "melee", damage: 3, range: 1.5, speed: 0.23, fear: 4, kite: true, hunger: true, groupFear: 0.4 },
+    "minecraft:drowned": { type: "melee_ranged", damage: 3, range: 8, speed: 0.23, fear: 5, cover: true, groupFear: 0.5 },
+    "minecraft:spider": { type: "melee", damage: 2, range: 1.5, speed: 0.32, fear: 4, kite: true, climb: true, groupFear: 0.5 },
+    "minecraft:cave_spider": { type: "melee", damage: 2, range: 1.5, speed: 0.32, fear: 6, poison: true, kite: true, groupFear: 0.6 },
+    "minecraft:witch": { type: "ranged", damage: 6, range: 10, speed: 0.25, fear: 8, cover: true, rush: true, groupFear: 0.7, potion: true },
+    "minecraft:phantom": { type: "flying_melee", damage: 6, range: 2, speed: 0.4, fear: 6, cover: true, timed: true, groupFear: 0.8 },
+    "minecraft:iron_golem": { type: "heavy_melee", damage: 14, range: 2.5, speed: 0.25, fear: 9, pillar: true, groupFear: 1.0 },
+    "minecraft:ravager": { type: "heavy_melee", damage: 12, range: 2.5, speed: 0.3, fear: 9, pillar: true, groupFear: 1.0 },
+    "minecraft:warden": { type: "boss", damage: 30, range: 3, speed: 0.3, fear: 10, flee: true, groupFear: 2.0, noFight: true },
+    "minecraft:ender_dragon": { type: "boss", damage: 10, range: 5, speed: 0.5, fear: 10, flee: true, groupFear: 2.0, noFight: true },
+    "minecraft:wither": { type: "boss", damage: 8, range: 20, speed: 0.3, fear: 10, flee: true, cover: true, groupFear: 2.0 },
+};
+
+export function getProfile(typeId) {
+    return THREAT_PROFILES[typeId] ?? { type: "melee", damage: 2, range: 1.5, speed: 0.23, fear: 3, kite: true, groupFear: 0.4 };
+}
+
+/**
+ * Assess overall situation.
+ * @param {number} hp
+ * @param {Array} threats - list of {typeId, location, distance}
+ * @param {Object} resources - {hasShield, hasWater, hasBlocks, blockCount, hasTotem, hasFood, weaponTier, armorValue}
+ * @returns {Object} assessment
+ */
+export function assess(hp, threats, resources, botPos) {
+    let totalFear = 0;
+    let rangedCount = 0;
+    let meleeCount = 0;
+    let explosiveNear = false;
+    let hasEnderman = false;
+    let hasBlaze = false;
+    let hasSkeletonSwarm = false;
+    let closest = Infinity;
+    let types = new Set();
+
+    for (const t of threats) {
+        const prof = getProfile(t.typeId);
+        const dist = t.distance ?? Math.hypot(t.location.x - botPos.x, t.location.z - botPos.z);
+        const distFactor = dist < 4 ? 2 : dist < 8 ? 1.2 : dist < 16 ? 0.8 : 0.4;
+        totalFear += prof.fear * distFactor;
+        if (prof.type.includes("ranged") || prof.type.includes("flying")) rangedCount++;
+        else meleeCount++;
+        if (prof.type === "explosive" && dist < 5) explosiveNear = true;
+        if (t.typeId === "minecraft:enderman") hasEnderman = true;
+        if (t.typeId === "minecraft:blaze") hasBlaze = true;
+        if (dist < closest) closest = dist;
+        types.add(t.typeId);
+    }
+
+    if (rangedCount >= 6) hasSkeletonSwarm = true;
+
+    // Adjust fear by group
+    const groupMultiplier = threats.length > 1 ? 1 + (threats.length - 1) * 0.3 : 1;
+    totalFear *= groupMultiplier;
+
+    // Resources adjustment
+    if (resources.hasShield) totalFear *= 0.8;
+    if (resources.hasWater && hasEnderman) totalFear *= 0.5;
+    if (resources.armorValue >= 10) totalFear *= 0.7;
+    if (resources.weaponTier >= 3) totalFear *= 0.8;
+    if (resources.hasTotem) totalFear *= 0.6;
+
+    let decision = "fight";
+    if (hp <= 6) decision = "emergency_bunker";
+    else if (explosiveNear) decision = "retreat";
+    else if (hasEnderman && !resources.hasWater && hp <= 12) decision = "low_roof_bunker";
+    else if (hasSkeletonSwarm && totalFear > 25) decision = "cover_build";
+    else if (totalFear > 30) decision = "bunker";
+    else if (totalFear > 18) decision = "cover_retreat";
+    else if (totalFear > 10) decision = "strafe_fight";
+    else decision = "fight";
+
+    // Warden or boss always flee
+    if (threats.some(t => getProfile(t.typeId).noFight)) decision = "flee";
+
+    return {
+        totalFear, rangedCount, meleeCount, explosiveNear, hasEnderman, hasBlaze, hasSkeletonSwarm,
+        closest, threatCount: threats.length, types: [...types], decision,
+        resources
+    };
 }

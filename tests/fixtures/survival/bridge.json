@@ -1,6 +1,0 @@
-[
-  {"scenario": "gap_3_blocks", "gapSize": 3, "hasBlocks": true, "expected": "bridge"},
-  {"scenario": "gap_5_place_then_3jump", "gapSize": 5, "hasBlocks": true, "expected": "place_intermediate+3jump"},
-  {"scenario": "tower_100", "verticalDiff": 100, "hasBlocks": true, "expected": "pillar"},
-  {"scenario": "water_gap", "gapSize": 6, "waterBetween": true, "hasBoat": false, "hasPlanks": 5, "expected": "craft_boat+water_crossing"}
-]

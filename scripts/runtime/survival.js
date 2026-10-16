@@ -1,9 +1,15 @@
-import { Furnace } from "./furnace.js";
-import { Forager } from "./foraging.js";
-import { FOOD, RAW_MEAT, RISKY_FOOD } from "../core/policy.js";
-import { RAW_TO_COOKED, fuelCount } from "../core/survival.js";
-import { amountOf, id, matches, bedTarget } from "../core/recipes.js";
-import { distance } from "../core/math.js";
+import { TaskFault } from "../core/arbiter.js";
+import { center, distance, floor } from "../core/math.js";
+import { PREY, RAW_TO_COOKED, amountOf, bedTarget, fuelCount, id, matches } from "../core/recipes.js";
+import { adjustTacticForHostile, assessFoodReserves, prioritizeEscapeCoverSurvival, reassessAfterDamage, shouldAvoidCombat, shouldEatBeforeFight } from "../core/survival.js";
+import { FOOD, RAW_MEAT, RISKY_FOOD } from "../core/world.js";
+import { Furnace } from "./equipment.js";
+import { Explorer } from "./scouting.js";
+// One module now: runtime/survival.js + runtime/foraging.js + runtime/food.js (see docs/ARCHITECTURE.md).
+
+
+// ---------------------------------------------------------------- survival.js
+
 /** Observation-driven survival loop. No fabricated items or claimed speedrun completion. */
 export class SurvivalDirector {
     constructor(bot) {
@@ -284,7 +290,7 @@ export class SurvivalDirector {
         if (owner && ownerDist < 24) {
             b.reason = `Maintain: fully equipped stage ${this.stage}, guarding near owner ${b.ownerName} ${Math.round(ownerDist)}b - ready for command`;
             b.nav.reset();
-            try { b.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { b.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             return;
         }
         // Only scout if no owner nearby and home far, and not in follow mode previously
@@ -304,7 +310,257 @@ export class SurvivalDirector {
         }
         else {
             b.nav.reset();
-            try { b.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { b.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
+    }
+}
+
+// ---------------------------------------------------------------- foraging.js
+
+export function allowedPrey(e) {
+    return (e.isValid &&
+        PREY.has(e.typeId) &&
+        !e.nameTag &&
+        !e.hasTag("verdant.protected") &&
+        !e.getComponent("minecraft:tameable")?.isTamed &&
+        !e.hasComponent("minecraft:is_baby"));
+}
+/** Physical pickup and reach-gated hunting. Never gives/destroys entities via commands. */
+export class Forager {
+    constructor(sim, bag, terrain, nav) {
+        this.sim = sim;
+        this.bag = bag;
+        this.terrain = terrain;
+        this.nav = nav;
+        this.targetSince = 0;
+        this.lastAttack = 0;
+        this.lastSeenLoot = 0;
+        this.blocked = new Map();
+        this.explorer = new Explorer();
+        this.started = 0;
+        this.lootWaitUntil = 0;
+        this.reason = "";
+    }
+    reset() {
+        this.target = undefined;
+        this.started = 0;
+        this.lootWaitUntil = 0;
+        this.explorer.reset();
+    }
+    step(tick, home, range, hunting) {
+        if (!this.started)
+            this.started = tick;
+        if (tick - this.started > 6000)
+            throw new TaskFault("No accessible food after five minutes. Supply food or move to a different habitat.", "retry");
+        const food = this.sim.dimension
+            .getEntities({
+            type: "minecraft:item",
+            location: this.sim.location,
+            maxDistance: 12,
+        })
+            .find((e) => {
+            const item = e.getComponent("minecraft:item")?.itemStack;
+            return (!!item &&
+                (FOOD.has(item.typeId) || !!RAW_TO_COOKED[item.typeId]) &&
+                (this.blocked.get(e.id) ?? 0) < tick &&
+                this.terrain.safe(e.location));
+        });
+        if (food) {
+            this.reason = "Collecting observed food drops.";
+            if (distance(food.location, this.sim.location) < 1.2) {
+                this.nav.reset();
+                if (!this.lastSeenLoot)
+                    this.lastSeenLoot = tick;
+                if (tick - this.lastSeenLoot > 60) {
+                    this.blocked.set(food.id, tick + 400);
+                    this.lastSeenLoot = 0;
+                }
+                return;
+            }
+            this.lastSeenLoot = 0;
+            if (this.nav.go(center(floor(food.location)), tick) === "failed")
+                this.blocked.set(food.id, tick + 400);
+            return;
+        }
+        if (this.target &&
+            (!allowedPrey(this.target) ||
+                (this.target.getComponent("minecraft:health")?.currentValue ?? 1) <= 0)) {
+            this.target = undefined;
+            this.lootWaitUntil = tick + 20;
+            this.nav.reset();
+        }
+        if (tick < this.lootWaitUntil) {
+            this.reason = "Waiting for native drops.";
+            return;
+        }
+        if (this.target && tick - this.targetSince > 600) {
+            this.blocked.set(this.target.id, tick + 1200);
+            this.target = undefined;
+            this.nav.reset();
+        }
+        if (!this.target && hunting) {
+            this.target = this.sim.dimension
+                .getEntities({ location: this.sim.location, maxDistance: 20 })
+                .filter((e) => allowedPrey(e) && (this.blocked.get(e.id) ?? 0) < tick)
+                .sort((a, b) => distance(a.location, this.sim.location) -
+                distance(b.location, this.sim.location))[0];
+            this.targetSince = tick;
+        }
+        if (this.target) {
+            const target = this.target;
+            this.reason = "Hunting " + target.typeId;
+            if (distance(this.sim.location, target.location) > 2.8) {
+                if (this.nav.go(target.location, tick) === "failed") {
+                    this.blocked.set(target.id, tick + 1200);
+                    this.target = undefined;
+                }
+                return;
+            }
+            this.nav.reset();
+            if (!this.terrain.line(this.sim.getHeadLocation(), target.getHeadLocation())) {
+                this.blocked.set(target.id, tick + 200);
+                this.target = undefined;
+                return;
+            }
+            if (tick - this.lastAttack >= 10) {
+                this.bag.tool("sword") || this.bag.tool("axe");
+                this.bot.avatar.lookEntity(target);
+                if (allowedPrey(target))
+                    this.bot.avatar.attack(target);
+                this.lastAttack = tick;
+            }
+            return;
+        }
+        this.reason = hunting
+            ? "Exploring for reachable food animals/drops."
+            : "Exploring for food drops; hunting disabled.";
+        if (this.explorer.step(this.sim.location, home, tick, this.terrain, this.nav, range) === "blocked")
+            throw new TaskFault("No safe food-search frontier.", "retry");
+        if (this.blocked.size > 96)
+            this.blocked.delete(this.blocked.keys().next().value);
+    }
+}
+
+// ---------------------------------------------------------------- food.js
+
+/**
+ * Food Runtime - food healing combat readiness.
+ * Maintain sufficient food exploration sprinting combat emergency recovery.
+ * Track hunger health saturation availability replacement.
+ * Before dangerous fight eat when necessary when safe.
+ * Avoid beginning combat critical health insufficient resources unless no safer alternative.
+ * Prioritize escape cover survival vs multiple hostile unfavorable.
+ * Recognize every relevant hostile adjust tactics attack pattern range movement environmental advantages.
+ * After damage reassess instead blindly continuing plan.
+ */
+
+export class FoodDirector {
+    constructor(bot) {
+        this.bot = bot;
+        this.sim = bot.sim;
+        this.bag = bot.bag;
+        this.lastEatCheck = 0;
+        this.lastDamage = 0;
+        this.prevHealth = 20;
+        this.consecutiveAvoids = 0;
+    }
+
+    reset() {
+        this.lastEatCheck = 0;
+        this.consecutiveAvoids = 0;
+    }
+
+    tick(tick) {
+        const counts = this.bag.counts();
+        const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+        const health = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
+
+        // Track damage for reassess
+        if (health < this.prevHealth) {
+            this.lastDamage = tick;
+            try {
+                const threatInfo = this.bot.terrain.threatInfo(this.sim, this.bot.owner());
+                const reassess = reassessAfterDamage(null, this.prevHealth - health, health, threatInfo.list, { hasBlocks: (this.bot.builder?.countBlocks() ?? 0) > 0 });
+                if (reassess && reassess.priority >= 80) {
+                    this.bot.reason = `Food: ${reassess.reason} - reassess after damage ${this.prevHealth - health} dmg`;
+                }
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
+        this.prevHealth = health;
+
+        if (tick - this.lastEatCheck < 40) return false;
+        this.lastEatCheck = tick;
+
+        const reserves = assessFoodReserves(counts);
+        const threatInfo = this.bot.terrain.threatInfo(this.sim, this.bot.owner());
+        const threatTypes = threatInfo.list.map(e => e.typeId);
+
+        // Before dangerous fight eat when necessary when safe
+        if (threatInfo.nearest && threatInfo.count >= 1) {
+            const eatBefore = shouldEatBeforeFight(hunger, health, threatInfo.count, threatTypes);
+            if (eatBefore.shouldEat) {
+                const foodSlot = this.bag.food(health <= 8 || hunger <= 6);
+                if (foodSlot >= 0 && (threatInfo.closest > 6 || hunger <= 8)) {
+                    this.bot.reason = `Food: ${eatBefore.reason} - eating before fight`;
+                    this.bot.eat(tick);
+                    return true;
+                }
+            }
+
+            // Avoid beginning combat critical health insufficient resources unless no safer alternative
+            const avoidCombat = shouldAvoidCombat(health, hunger, reserves, { hasWeapon: this.bot.equipment.hasWeapon() }, threatInfo.count, threatTypes);
+            if (avoidCombat.avoid) {
+                this.consecutiveAvoids++;
+                if (this.consecutiveAvoids < 3) {
+                    this.bot.reason = `Food: ${avoidCombat.reason} - avoiding combat critical health insufficient resources`;
+                    const retreatSpot = this.findSafeSpot(12);
+                    if (retreatSpot) {
+                        const r = this.bot.navTo(retreatSpot, tick, 2);
+                        if (r !== "failed") return true;
+                    }
+                }
+            } else {
+                this.consecutiveAvoids = 0;
+            }
+
+            // Prioritize escape cover survival vs multiple hostile unfavorable
+            if (threatInfo.count >= 3) {
+                const escapePlan = prioritizeEscapeCoverSurvival(threatInfo.list, health, false, (this.bot.builder?.countBlocks() ?? 0) > 0);
+                if (escapePlan.priority >= 80) {
+                    this.bot.reason = `Food: ${escapePlan.reason} - prioritizing ${escapePlan.action} vs multiple hostile unfavorable`;
+                    return false;
+                }
+            }
+
+            // Recognize every relevant hostile adjust tactics
+            if (threatInfo.nearest) {
+                try {
+                    const tactic = adjustTacticForHostile(threatInfo.nearest.typeId, { distance: threatInfo.closest, health, hasShield: (counts["minecraft:shield"] ?? 0) > 0 });
+                    if (tactic.tactic !== "melee") {
+                        this.bot.reason = `Food: hostile ${threatInfo.nearest.typeId} tactic ${tactic.tactic} - ${tactic.reason}`;
+                    }
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            }
+        }
+
+        // Maintain sufficient food exploration sprinting combat emergency recovery
+        if (reserves.totalHunger < 20 && this.bot.mode !== "idle") {
+            this.bot.reason = `Food: reserves critical ${reserves.totalHunger} hunger - prioritize food before exploration`;
+            const foodSpot = this.bot.awareness?.getNearest("bread") ?? this.bot.awareness?.getNearest("potato");
+            if (foodSpot) {
+                const r = this.bot.navTo(foodSpot.pos, tick, 2);
+                if (r !== "failed") return true;
+            }
+        }
+
+        return false;
+    }
+
+    findSafeSpot(radius) {
+        try {
+            const p = this.bot.terrain.groundNear(this.sim.location.x, this.sim.location.z, this.sim.location.y, radius);
+            if (p && !this.bot.terrain.dangerous(p)) return p;
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        return null;
     }
 }

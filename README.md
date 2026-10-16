@@ -1,9 +1,10 @@
 # Verdant Bot — an autonomous simulated player for Minecraft Bedrock
 
-An experimental scripted survival bot for Minecraft Bedrock (1.21.114). It runs a
-real simulated player through the GameTest framework and drives it with a
-purpose-built brain: mining, crafting, smelting, foraging, defence, escape,
-exploration — and now persistent memory, night camping and death recovery.
+An experimental scripted survival bot for Minecraft Bedrock (1.21.114). It spawns
+a real simulated player with the engine's own `spawnSimulatedPlayer()`, hands
+movement to the engine's pathfinder, and drives it with a purpose-built brain:
+mining, crafting, smelting, foraging, defence, escape, exploration — plus
+persistent memory, night camping and death recovery.
 
 Everything the bot earns is earned in-game. Nothing is fabricated, duplicated or
 teleported into the inventory, and every action is verified against the world
@@ -20,9 +21,8 @@ before the next step trusts it.
 
 ```
 /tag @s add verdant.admin          # one-time operator setup
-!bot spawn                         # does everything else: sets up the remote
-                                   # host on first use (~20 s), spawns
-                                   # "Verdant" next to you already working
+!bot spawn                         # spawns "Verdant" two blocks away,
+                                   # already working
 !bot status                        # mission + state at a glance
 !bot mission                       # just the current objective, one line
 !bot follow                        # overrides when you want: follow / guard /
@@ -102,14 +102,14 @@ vanilla way — by walking over them:
   change — "picked up N item(s)", never a guess.
 - Items the bot itself mines or that it drops on death are collected through
   the same walk-over mechanic (mining sweep, `!bot recover`).
-- Only items inside loaded chunks are visible; beyond the ticking area and the
-  owner's loaded chunks the script cannot see the world at all.
+- Only loaded chunks are visible: what the script cannot see, it cannot plan
+  around. The bot keeps itself inside the owner's loaded area.
 
 ## Performance notes
 
 - Memory writes only when information changed (per-sighting deduplication).
-- Terrain reads are cached; planner is time-sliced (A* steps per tick, not a
-  blocking search).
+- Terrain reads are cached, and the engine does the pathfinding: the pack asks
+  `navigateTo*` and watches progress instead of stepping its own search.
 - The observer sweep is bounded and staggered across ticks.
 
 ## Current limits
@@ -124,14 +124,17 @@ vanilla way — by walking over them:
 
 ```
 manifest.json                  pack manifest (script entry: scripts/main.js)
-structures/verdant/host.mcstructure   GameTest host structure
 scripts/
   main.js                      chat commands, event wiring, tick loop
-  core/                        engine-free logic (unit-testable)
-    math, commands, policy, recipes, ores, navigation, survival, recovery, transfer, memory
-  runtime/                     engine-bound components
-    bot, drops, scouting, host, navigation, mining, world, inventory, equipment,
-    escape, furnace, foraging, exploration, survival, hands, memory
+  core/                        engine-free logic, 11 modules (unit-testable)
+    math, world, knowledge, recipes, arbiter, progression,
+    survival, nether, village, combat, memory
+  sim/avatar.js                the one owner of the simulated player
+  runtime/                     engine-bound components, 20 modules
+    bot, world, inventory, navigation, builder, combat, escape,
+    survival-master, survival, scouting, world-awareness, looting,
+    mining, nether, village, speedrun, equipment, memory, ui, host
+docs/ARCHITECTURE.md           layer map, rules, roadmap
 docs/COMMANDS.md               full command reference
 tools/                         self-contained verification suite (node tools/run-all.mjs)
 LICENSE (MIT), THIRD_PARTY_NOTICES.txt
@@ -146,13 +149,22 @@ dependencies (`@minecraft/*` is stubbed locally). One command runs everything:
 node tools/run-all.mjs
 ```
 
-In order: module-goal parse of every file (`parse.mjs` — one invalid line can
-silently kill the whole pack in-game, so files are parsed exactly how the engine
-parses them), link + evaluate against the stubs (`linkcheck.mjs` — catches
-missing exports, import cycles and top-level throws), the no-undef gate
-(`undef.mjs` — flags calls to names that were never imported and `this.<field>`
-reads that are never assigned; both classes were real shipped crashes), an
-import scan (`imports.mjs`), core unit tests (`test.mjs`), the walkable-block
-regex guard (`walkable.mjs`) and the drop-flush tests (`flush.mjs`).
+In order: the eight gates in `gates.mjs` — module-goal parse of every file (one
+invalid line can silently kill the whole pack in-game, so files are parsed
+exactly how the engine parses them), link + evaluate against the stubs (catches
+missing exports, import cycles and top-level throws), the no-undef gate (flags
+calls to names that were never imported and `this.<field>` reads that are never
+assigned; both classes were real shipped crashes), a missing-import scan, a
+component gate (a `<component>.<method>()` call that resolves to nothing — the
+class of bug a method-hoisting refactor introduces silently), an avatar gate
+(only `scripts/sim` may drive the simulated player), an engine-API gate (every
+method, enum value, `getComponent` id and event name checked against the
+typings this manifest targets, recorded in `api-surface.json` so it runs
+offline) and a module-scope gate (Script API 2.x runs module bodies before the
+world loads, so nothing may read the world there) — then `tests.mjs`
+(persistent-memory schema, capabilities and goal decomposition, the
+walkable-block regex guard, drop-flush tests), `sim.test.mjs` (the avatar driver
+and movement policy against a behavioural fake of the documented
+SimulatedPlayer contract) and `perf.test.mjs` (native-call budgets).
 `tools/selftest/` holds deliberately broken fixtures; the run requires those to
-fail, proving the no-undef gate still catches bugs.
+fail, proving the no-undef and module-scope gates still catch bugs.

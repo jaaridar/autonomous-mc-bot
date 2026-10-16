@@ -1,142 +1,149 @@
-# Verdant Bot — architecture v1.2.0 Nether Speedrun World-Class
+# Verdant Bot — architecture
 
 Where things live, who owns what, and the rules that keep the bot honest.
 If you are adding a feature, find its layer here first.
 
 ## Layers
 
-- `scripts/core/` — pure logic. No `@minecraft/server` imports, testable offline:
-  - `math.js` — vectors, distance, keys
-  - `policy.js` — MINE table, hazards, hostiles, food
-  - `recipes.js` — crafting, smelting dependencies
-  - `ores.js` — ore Y-levels, bulk detection
-  - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, big drops, bridge cost)
-  - `blocks.js` — exhaustive Bedrock block taxonomy (passable, solid, falling, hazard, climbable, value scoring, obstruction detection)
-  - `combat.js` — mob stats, threat scoring, tactics (kite/rush/retreat/pillar), strafe, crit windows
-  - `loot.js` — chest loot scoring, valuable detection, junk filtering, upgrade logic
-  - `mining-strategy.js` — branch patterns, quarry, vein clustering, optimal spacing, efficiency calc, best Y
-  - `resource.js` — speedrun phases (WOOD/STONE/IRON/DIAMOND/PORTAL), checklist, current phase, next needed
-  - `memory.js` — persistent memory schema, prefs sanitization
-  - `survival.js` — food fuel tables
-  - `recovery.js`, `transfer.js`, `commands.js`
-  - **NEW v1.2 Nether Speedrun:**
-    - `nether-strategy.js` — ROUTES ground_lava/cave_lava/ruined_portal/gather_ignition, evaluators with score distance size danger water, chooseNetherRoute time/feasibility balance, shouldRecalculate triggers village/ruined/lava_pool/useful_chest/hostile_group/obstacle, verifyPortalAction for 5 milestones
-    - `village-strategy.js` — VILLAGE_BENEFITS scores, FOOD_EFFICIENCY hay 90 bread 85, evaluateVillage distance penalty/bonus benefits, shouldCraftBedIndependently 3 wool + 3 planks sheep handling, evaluateVillageVsNetherRoute comparison
-    - `golem-strategy.js` — GOLEM_STATS health 100 dmg 14 range 2.5 knockback 1.5 drop 3-5 iron, 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, evaluateGolemFight iron deficit health equipment terrain blocks water, chooseBestGolemStrategy, shouldDisengage, collectIronDrops bucket priority
-    - `food-strategy.js` — FOOD_VALUES 12 foods, thresholds critical 6 low 10-14 safe 18, assessFoodReserves totalHunger/saturation, shouldEatBeforeFight dangerous fight check, shouldAvoidCombat critical health multiple mobs, prioritizeEscapeCoverSurvival, adjustTacticForHostile 10 mob types, reassessAfterDamage
-    - `bucket-strategy.js` — BUCKET_MILESTONE iron 3 priority 95, WATER_MECHANICS obsidian formation, LAVA_MECHANICS source vs flowing, PORTAL_FRAME min 10 full 14, evaluateBucketPriority, evaluateLavaPoolForBucket depth terrain water hostile escape cave warning, planObsidianFormation, planPortalConstruction, chooseFastestViableMethod
-    - `flint-steel-strategy.js` — IGNITION_METHODS 5 methods flint_and_steel 95 fire_charge 80 lava_wood 50, evaluateIgnitionOptions inventory+ruined chest, shouldObtainFlintAndSteelBeforePortal prefer before commit when no delay, evaluateRuinedPortalForIgnitionAndObsidian frame completeness crying obsidian replacement, ensureIronForBothBucketAndFlintSteel bucket 3 + 1 iron, planShortestSafeRouteToIgnition, shouldNotWasteTimeSearching
-    - `adaptive-planning.js` — ADAPTIVE_TRIGGERS village/ruined/lava/ground/cave/chest/hostile/obstacle/water/iron/gravel/sheep, ESSENTIAL_PROGRESSION wood/stone/iron/bucket/water/obsidian/flint_and_steel/portal/nether_entry vs OPTIONAL diamond/enchanting/redstone, shouldRecalculateAdaptive, prioritizeEssential, shouldAvoidFight, reassessRouteSafety health/terrain/enemies/escape, planBlockUsage bridges/barriers/cover/elevation, handlePlanFailure missing requirement safest alternative, preserveEmergencyResources blocks 16 food 6, verifyAction crafting/bucket/portal/ignition/entry
-    - `survival-scenarios.js` — 80 scenarios pure logic A Falls 1-15 B First night 16-30 C Resource shortages 31-45 D Shelter failures 46-60 E Multi-problem 61-80
-    - `world-awareness.js` — scoreSurrounding, prioritizeGoal, bridgingPlan, parkourPlan, planDeathRecovery
+```
+scripts/main.js     chat commands, event wiring, 20 Hz tick pump  (the only entry point)
+scripts/core/       pure logic: no @minecraft/*, unit-testable offline
+scripts/sim/        the avatar driver: the ONLY module that drives the simulated player
+scripts/runtime/    engine adapters: read the world, decide, and ask the driver to act
+tools/              self-contained verification suite (node tools/run-all.mjs)
+```
 
-- `scripts/runtime/` — engine adapters and the brain:
-  - `bot.js` — the brain v6: tick order, mode dispatch, task objects, integrates all advanced modules including Nether speedrun world-class: survivalMaster -> quick tool #1 -> death recovery -> food readiness adaptive recalc -> nether director -> village director -> golem director -> food director -> bucket director -> structure loot -> lava pool portal opportunity -> threat eval escape/retreat/eat/combat -> mode dispatch, obstruction clearing, scaffolding, retain important
-  - `navigation.js` — `Navigator`: rolling-horizon A* with parkour + bridging awareness, loop detection, threat avoidance, builder integration
-  - `builder.js` — `Builder`: bridging (find support, place with sneak), pillaring (jump-place), scaffolding, torch placement, obstruction clearing, portal frame 4x5 interior 2x3 min 10 full 14
-  - `combat.js` — `Combat`: tactical fighting (rush for ranged, retreat for creeper, kite for heavy, group positioning, crit jump, strafe)
-  - `looting.js` — `Looting`: scored chest scanning (16 blocks), home avoidance, valuable-first withdraw, village detection via entities
-  - `parkour.js` — `Parkour`: gap detection, step-up, sprint jump, ladder/vine climb, bridge assist
-  - `deepminer.js` — `DeepMiner`: shaft -> branch (branchPattern) -> vein (clusterVeins flood-fill) -> ascend, with drop collection, torching
-  - `mining.js` — `Miner`: legacy staircase + corridor, kept for compatibility, now supplemented by DeepMiner
-  - `resource.js` — `ResourceManager`: inventory organization, opportunistic gathering, deposit decisions
-  - `speedrun.js` — `SpeedrunDirector` v2.0 Nether speedrun overhaul: primary objective enter Nether quickly reliably without dying, adaptive speedrunner not fixed sequence, continuously compares ground/cave/ruined/gather, village-first, bucket milestone 95, flint steel prefer before commit, verify milestones, chooseNetherRoute, buildContext, executeNetherRoute, buildPortal, enterNether, wood/stone/iron/diamond/portal phases with upskilling retain important
-  - `drops.js` — loose-drop collection with entity tracking
-  - `scouting.js` — village detection + opportunistic foraging
-  - `world.js` — `Terrain` with enhanced scans (storeNear 14 blocks, scanOres, findObstructions, obstructionsBelow, safeToMineEx), `BlockScan`
-  - `escape.js` — `Escaper`: water/lava/trapped handling, probes 4 dirs goal-first, combat_escape for 8+ mobs bombNear ranged 6+ enderman low health
-  - `survival.js` — `SurvivalDirector`: gear ladder + food
-  - `foraging.js` — animal hunting
-  - `inventory.js` / `hands.js` / `equipment.js` / `furnace.js` / `host.js` / `memory.js` / `exploration.js`
-  - **NEW v1.2 Nether Speedrun:**
-    - `nether.js` — `NetherDirector`: world-class Nether entry decision system, bucket milestone check, water fill, ignition prefer-before-commit, evaluateNetherRoutes ground/cave/ruined/missing ignition, executeRoute build_portal_ground_lava/build_portal_cave_lava/repair_ruined_portal/gather_ignition, placeWaterOnLava water+source=obsidian, repairRuinedPortalFrame, buildPortal, ignitePortal, tryFillWaterBucket, countObsidianAround, hasCryingObsidianAround, findFlatGround, checkNewDiscoveries, getTimeOfDay
-    - `village.js` — `VillageDirector`: village-first strategy, min equipment for safe progression, food beds hay bales crafting loot, food sources best combo accessibility saturation hunger time efficiency, loot useful chests without wasting low-value, beds skip night when useful safe, wool wood craft bed independently sheep handling, compare distance risks vs immediate Nether route, findNearestVillage 128 with budget 800 block checks fast path awareness/structures, tryLocateVillage via /locate when permitted else legit detection, hay bale, bed, sheep, weapon tier
-    - `golem.js` — `GolemDirector`: iron golem combat risk management, recognize golem evaluate fighting worthwhile iron equipment health terrain time, only when benefit justifies risk reliable combat plan, understand attack range movement LOS knockback ability reach elevated, evaluate protected elevated position terrain separation, avoid fall damage unexpected block access hostile hazards, reassess health positioning continuously disengage if unsafe, collect iron drops bucket priority, never mandatory if safer faster route, 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, hill doorway detection, platform building, retreat spot, safer faster route check
-    - `food.js` — `FoodDirector`: food healing combat readiness, maintain sufficient exploration sprinting combat emergency recovery, track hunger health saturation availability replacement, before dangerous fight eat when necessary when safe, avoid critical health insufficient resources unless no safer alternative, prioritize escape cover survival vs multiple hostile unfavorable, recognize every hostile adjust tactics attack pattern range movement environmental advantages, after damage reassess
-    - `bucket.js` — `BucketDirector`: bucket major milestone enables ground-level lava pools, once obtained prioritize locating suitable lava pool or evaluating ruined portal, understand water placement lava manipulation portal-frame obsidian formation safe ignition, know how to construct Nether portal fastest viable method, evaluate ground/cave/ruined as alternative not single rigid, account depth accessibility surrounding terrain water availability hostile mobs escape routes, avoid entering cave solely because contains lava if unnecessary danger excessive travel, evaluateBucketPriority, evaluateLavaPoolForBucket, planObsidianFormation, gatherPortalOptions, tryFillWater, makeObsidian
-    - `world-awareness.js` — `WorldAwareness`: runtime scanning surroundings remembering important iron ore sheep lava pools structures, tryLocateStructures via /locate when permitted, trackExplored coords visited safe routes escape paths, scanHazards cliffs drops lava water currents before movement jumping sprint-jumping climbing swimming falling block placement safe traversal, scan blockCounts entityCounts distanceMap, rememberSpot, getGoals, getNearest, getLavaPool, getWaterSource, analyzePathTo bridgingPlan parkourPlan, shouldKeep retainScore
-    - `structures.js` — `StructureDetector`: detects village/ruined_portal/lava_pool via block signatures, priority queue, loot target, portal opportunity
-    - `survival-master.js` — `SurvivalMaster`: 80 scenarios handler A Falls B First night C Resource shortages D Shelter failures E Multi-problem, fall detection, torch placement, shelter sealing
+Three rules carry most of the design:
 
-- `scripts/main.js` — commands and 20 Hz brain pump, handles spawn takeover, rate limiting, new commands: speedrun, deepmine, nether status
+- **core never imports runtime.** Dependencies point one way, so the pure half
+  stays testable in plain Node.
+- **runtime only adapts.** Decisions (tables, scoring, phases, plans) live in
+  core; runtime performs ticks, block reads and native calls.
+- **only `sim/` drives the avatar.** The SimulatedPlayer API mixes coordinate
+  spaces - `move()` and `setBodyRotation()` are GameTest-relative, `moveRelative()`
+  is body-relative, and the navigation/look calls (`navigateTo*`, `moveTo*`,
+  `lookAt*`) take world coordinates - so the driver absorbs all three and engine
+  calls never throw outward: each becomes a value plus a recorded reason.
+  `node tools/gates.mjs sim` enforces the boundary: a raw `sim.moveToLocation()`
+  anywhere else fails the build.
+- **nothing touches the world before `worldLoad`.** Script API 2.x evaluates
+  every module body before the world exists: dimensions, time and dynamic
+  properties are not readable there (a constructor called at module scope counts
+  as module scope). Module scope may only register - event subscriptions and
+  `system.run*`; real work starts in `world.afterEvents.worldLoad.subscribe(...)`.
+  `node tools/gates.mjs scope` enforces it.
 
-## Advanced mining flow (v1.2)
+## core/ — engine-free logic (11 modules)
 
-1. **Obstruction clearing** — before mining a block below, `Terrain.obstructionsBelow` finds blocks in column; if <=3, they are cleared first via `obstructionClear` state instead of blacklisting target.
-2. **Tree scaffolding** — for logs >2 above bot, `Builder.scaffoldTo` pillars up with jump-place.
-3. **Deep mining** — `DeepMiner` starts shaft to `bestYFor(ore)`, then branchPattern with spacing `optimalSpacing(ore)`, scans for ores via `Terrain.scanOres`, clusters via `clusterVeins`, mines vein blocks nearest-first, then ascends via recorded route.
-4. **Tight scan** — 12 blocks, budget 600 cells/tick, nearest-first.
-5. **Wide sweep** — 28 blocks, budget 900, re-arms when moved 10 blocks.
-6. **Explore** — `Explorer` hops 12-20, with continuous 12-block watch; now also runs in `mine` mode, not just survival, so bot doesn't idle after wood/oat.
-7. **Loot** — tree loot remembered in `m.loot` Map, flushed within 6 blocks before wide sweep.
-8. **Drop handling** — `Drops.near` + `run` + `flush`, with `pushToward` for planner-refused hops.
-9. **Nether speedrun** — `NetherDirector` + `SpeedrunDirector` v2.0 continuously evaluates ground-level lava pool (bucket+water minimal digging) vs cave lava (only when accessible usable danger travel cost acceptable) vs ruined portal (inspect frame loot determine completing faster than building new) vs alternative nearby resources gather missing ignition portal-building when required, choose best balance time feasibility resource requirements survival probability, recalculate on village/ruined/lava/chest/hostile/obstacle discovery, verify important actions crafting bucket acquisition portal construction ignition Nether entry rather than assuming succeeded.
+| Module | Job |
+|---|---|
+| `math.js` | vectors, distances, block keys, cardinal/compass tables, position validity |
+| `world.js` | block taxonomy (passable/solid/falling/hazard), `standable()` walkability, ore Y-levels, MINE table, hostiles/ranged/explosive, food sets, tool tiers, branch-mining patterns |
+| `knowledge.js` | item/block info, mob tactics, structure signatures, "retain important" scoring, danger/goal prioritisation, death-recovery plan |
+| `recipes.js` | crafting + smelting dependency resolver, food/fuel tables, rollback-safe stack transfer |
+| `arbiter.js` | task arbiter (which director acts now) + the `TaskFault`/`blockedTask` contract |
+| `progression.js` | goal decomposition (`decomposeMission`), requirement analysis, speedrun phases/checklist |
+| `survival.js` | survival-scenario table (80 entries; the audit found 15 reachable - see Roadmap), capability composition, food strategy, adaptive recalculation |
+| `nether.js` | Nether route scoring, bucket milestone, obsidian/portal planning, ignition options |
+| `village.js` | village-first scoring (food/beds/hay) and iron-golem risk/strategy |
+| `combat.js` | mob stats, threat scoring, tactics (kite/rush/retreat/pillar), strafe, crit windows, escape plans |
+| `memory.js` | persistent-memory schema, prefs sanitisation, spot dedupe/caps |
 
-## Movement rules v1.2
+## runtime/ — engine adapters (20 components)
 
-- `Navigator` now supports: walk, step, drop, bigdrop (1-3), jump (1-gap), sprintjump (2-gap), jumpup, bridge (cost 8).
-- `allowBridge` true when builder has blocks; bridging tries to find solid neighbor support.
-- Loop detection: 5+ revisits in 6s or 8-11s travel with <1.5 approach.
-- `navTo(goal)` searches rings around goal (compass + 2x + up/down) for standable cells.
-- `Builder` owns all placement: `placeAt(target, anchor, {sneak, allowHazard, blockType})`, `bridge(dir)`, `pillar()`, `scaffoldTo()`, `buildPortalFrame(basePos)` 4x5 interior 2x3 min 10 full 14.
-- `Parkour` assists jumps: `canJumpGap`, `canStepUp`, `jump`, `sprintJump`, `climbIfNeeded`.
-- `Drops.pushToward` is still only sanctioned straight-line for short hops.
-- **NEW:** `WorldAwareness.scanHazards` detects cliffs drops lava water currents before movement, understands jumping sprint-jumping climbing swimming falling block placement safe traversal.
+| Component | Job |
+|---|---|
+| `bot.js` | the brain: tick order, mode dispatch, task objects, `think()` integration of every director below |
+| `world.js` | `Terrain` (cached block reads, ores, obstructions), `BlockScan`, `RollingSweep`, `threatInfo` |
+| `inventory.js` | `Bag` (per-tick inventory snapshot, tools/food counts), deposits/withdraw, organisation, resource decisions |
+| `avatar.js` (sim/) | `Avatar`: the one owner of the simulated player - per-tick snapshot, engine-navigation `goto()` with stall detection, `dig()`/`breakBlockAt()`, `use`/`useOn`/`interact`, `attack`, `stopAll`, and one `guard()` that turns every engine throw into a recorded reason |
+| `navigation.js` | `Navigator`: movement policy over the driver - goal contract (`done`/`running`/`failed`), hazard and water refusal, stall -> bridge fallback, urgent-threat step-away |
+| `builder.js` | bridging, pillaring, scaffolding, torch placement, obstruction clearing, portal frame + `Hands` (aim/place/verify) |
+| `combat.js` | `Combat` execution: rush ranged, retreat creeper, kite heavies, crit jumps, group positioning |
+| `escape.js` | `Escaper`: water/lava/trapped handling, probe order, combat escape |
+| `survival-master.js` | survival responses keyed by scenario: falls, night combat, resource shortage, shelter failure, multi-risk |
+| `survival.js` | `SurvivalDirector` (gear ladder + food), `Forager` (hunting), `FoodDirector` (healing/readiness) |
+| `scouting.js` | `Scout` (village/forage sweep) + `Explorer` (frontier walking) |
+| `world-awareness.js` | `WorldAwareness` surroundings scan (iron, sheep, lava, water) + `StructureDetector` |
+| `looting.js` | `Looting` (scored chest scanning) + `Drops` (loose item pickup, mining-sweep flush) |
+| `mining.js` | `Miner` (staircase/corridor) + `DeepMiner` (shaft → branch → vein → ascend) |
+| `nether.js` | `NetherDirector`: route choice, water/lava handling, portal build, ignition, entry; `BucketDirector` |
+| `village.js` | `VillageDirector` (village-first food/beds/loot) + `GolemDirector` (iron golem fights) |
+| `speedrun.js` | `SpeedrunDirector`: wood → stone → iron → diamond → portal phases, milestone verification |
+| `equipment.js` | `Equipment` (armour/weapon upkeep) + `Furnace` (smelting station) |
+| `memory.js` | `Memory`: loads/saves the persistent JSON document, passive bounded observation |
+| `ui.js` | scoreboard/HUD output |
+| `host.js` | `Host`: one `spawnSimulatedPlayer()` call in world coordinates, search for safe ground, v1.2.x anchor/ticking-area cleanup, and `relative()` - the single coordinate seam |
 
-## Combat v1.2
+## Rules that keep the bot honest
 
-- `Combat.evaluate` scores threats via `combatThreatScore`, picks highest priority within 8 blocks.
-- Tactics: `rush` for skeletons (close distance), `retreat` for creepers (<5 blocks), `kite` for heavy melee when hp<=10, `strafe`/`pillar` for golem/ravager, `flee` for warden.
-- Crit: jump then hit on way down, window 25 ticks.
-- Group: find position maximizing sum distance from all mobs.
-- Retreat: uses `groundNear` to find safe spot away from threat, up to 8 blocks, with hazard checks.
-- **NEW:** `GolemDirector` 5 strategies pillar_3_high 3 blocks elevated_platform 12 blocks terrain_hill doorway_trap water_bucket, evaluates iron deficit health equipment terrain blocks water, only when benefit justifies risk reliable plan, avoids fall damage unexpected block access hostile environmental hazards, reassess health positioning continuously disengage if unsafe, collect iron drops bucket priority, never mandatory if safer faster route.
-- **NEW:** `FoodDirector` maintains sufficient food exploration sprinting combat emergency recovery, tracks hunger health saturation availability replacement, before dangerous fight eat when necessary when safe, avoids critical health insufficient resources unless no safer alternative, prioritizes escape cover survival vs multiple hostile unfavorable, recognizes every hostile adjusts tactics attack pattern range movement environmental advantages, after damage reassess instead blindly continuing plan.
+- **No item fabrication.** Crafting, smelting and deposits move real stacks with
+  prepare-then-commit and rollback; a failed commit restores both inventories or
+  says `CRITICAL` and stops.
+- **Digging refuses hazards.** The miner and camp digger never break a cell with
+  lava or water beside it, never open a hole over a drop, and check tool tier
+  before touching ore.
+- **Shelters are always reopenable.** A niche is only sealed with a block the bot
+  can positively dig back out.
+- **Owner-gated.** No world mutation while the owner is offline or in another
+  dimension; commands require the `verdant:admin`/`verdant.admin` tag.
+- **Circuit breaker.** Three unhandled script errors pause the bot with the last
+  error instead of looping.
+- **Bounded budgets.** Every scan/director has a tick or attempt budget and ends
+  with an actionable message; `tell()` = chat, `reason` = HUD, `blockTask` =
+  stop with `manual`/`retry`.
+- **Honest reporting.** Entity disappearance = pickup success, inventory delta =
+  quota success. Items observed and moved, never fabricated.
 
-## Looting v1.2
-
-- `Looting.scan` every 20 ticks, radius 16, parity optimization.
-- `shouldLootChest` checks free slots, home distance <48 = player base, distance >16 = too far.
-- `chooseLoot` scores via `LOOT_VALUE`, valuable first, junk filtered.
-- `withdraw` uses same rollback-safe transfer as deposit.
-- Village detection via `villager/villager_v2/wandering_trader/cat/iron_golem` entities within 64 blocks.
-- **NEW:** `VillageDirector` village-first as soon as min equipment for safe progression, prioritizes villages food beds hay bales crafting loot speedrun advantages, inspects food sources best combo accessibility saturation hunger restoration time efficiency, loots useful chests gather food without wasting low-value, identifies beds skip night when useful safe, if no village/bed obtains wool wood craft bed efficiently hunts sheep wool when necessary wool blocks planks required, does not assume village always best compares distance risks vs immediate Nether route, hay bale at pos 9 wheat = 3 bread best efficiency, budgeted scanning 800 blocks.
-
-## Resource management v1.2
-
-- `ResourceManager` auto-organizes when >6 partial stacks.
-- Opportunistic: scans item entities within 8 blocks, picks high priority (>=50).
-- Deposit when low-value items >16 and free slots <5.
-- Phases via `currentPhase(counts)`, next needed via `nextNeeded`.
-- **NEW:** `BucketDirector` bucket major milestone priority 95 enables ground-level lava pools, once obtained prioritizes locating suitable lava pool or evaluating ruined portal, understands water placement lava manipulation portal-frame obsidian formation safe ignition, knows how to construct Nether portal fastest viable method, evaluates ground-level cave ruined as alternative not single rigid, accounts depth accessibility surrounding terrain water availability hostile mobs escape routes when choosing lava pool, avoids entering cave solely because contains lava if unnecessary danger excessive travel.
-- **NEW:** `FoodDirector` + `adaptive-planning` preserveEmergencyResources blocks 16 food 6 wood 8 cobblestone 16, retainScore never drop critical progression emergency supplies, drop genuinely unnecessary when needed never essential.
-
-## Speedrun v1.2 Nether Speedrun World-Class
-
-- Primary objective: enter Nether as quickly and reliably as possible without dying — autonomous, intelligent, survival over risk.
-- World Awareness & Exploration: continuous awareness entities hostile animals blocks terrain structures hazards resources, identify villages ruined portals lava pools caves ravines early, use /locate when permitted else legit detection via runCommand, evaluate structures usefulness/distance/loot/danger/time cost, track coords explored locations known lava pools safe routes escape paths, detect cliffs drops lava water currents before movement, understand jumping sprint-jumping climbing swimming falling block placement safe traversal.
-- Essential Resource Acquisition: gather only required for current stage while collecting useful extras when convenient, know recipes ingredients prerequisites uses essential survival speedrun items, understand tool progression crafting-table furnace inventory material efficiency, acquire wood stone food iron buckets correct order, monitor durability food reserves blocks inventory capacity remaining materials, drop genuinely unnecessary when needed never essential progression emergency supplies.
-- Village-First Strategy: as soon as min equipment for safe progression evaluate village vs independent, prioritize villages food beds hay bales crafting loot speedrun advantages, inspect food sources calculate best combo accessibility saturation hunger restoration time efficiency, loot useful chests gather food without wasting low-value, identify beds skip night when useful safe, if no village/bed obtain wool wood craft bed efficiently hunt sheep wool when necessary understand wool blocks planks required, do not assume village always best compare distance risks vs immediate Nether route.
-- Iron Golem Combat & Risk Management: recognize golem evaluate fighting worthwhile based iron equipment health terrain time, only attempt when benefit justifies risk reliable combat plan, understand attack range movement LOS knockback ability reach elevated, evaluate protected elevated position or suitable terrain separation, avoid fall damage unexpected block access other hostile environmental hazards, reassess health positioning continuously disengage if unsafe, collect iron drops efficiently prioritize bucket, never mandatory if safer faster route available.
-- Food Healing Combat Readiness: maintain sufficient food exploration sprinting combat emergency recovery, track hunger health saturation availability replacement, before dangerous fight eat when necessary when safe, avoid beginning combat critical health insufficient resources unless no safer alternative, prioritize escape cover survival vs multiple hostile unfavorable, recognize every relevant hostile adjust tactics attack pattern range movement environmental advantages, after damage reassess instead blindly continuing plan.
-- Bucket Acquisition & Nether Preparation: bucket major milestone enables ground-level lava pools, once obtained prioritize locating suitable lava pool or evaluating ruined portal, understand water placement lava manipulation portal-frame obsidian formation safe ignition, know how to construct Nether portal available resources fastest viable method, evaluate ground-level cave ruined as alternative not single rigid, account depth accessibility surrounding terrain water availability hostile mobs escape routes when choosing lava pool, avoid entering cave solely because contains lava if unnecessary danger excessive travel.
-- Flint and Steel & Portal Ignition: prefer obtaining flint and steel before committing to portal location when not creating unnecessary delays, check nearby ruined portals usable obsidian flint and steel fire charges loot, evaluate chest contents portal condition whether repairing faster than new, if unavailable evaluate crafting using iron flint, if flint missing locate gravel obtain using appropriate mining, ensure enough iron remains for flint and steel after bucket unless other ignition available, do not waste time searching if faster reliable ignition already available, if no ignition plan shortest safe route to obtain missing material before committing.
-- Nether Entry Decision System: continuously compare ground-level lava pool bucket water minimal digging, cave lava pool only when accessible usable danger travel cost acceptable, ruined portal inspect frame loot determine completing faster than building new, alternative nearby resources gather missing ignition portal-building when required, choose route best balance time feasibility resource requirements survival probability, do not insist original when world provides better alternative.
-- Adaptive Planning & Survival Rules: recalculate whenever discovers village ruined portal lava pool useful chest hostile mob group unexpected obstacle, prioritize essential progression over optional exploration unnecessary collection, avoid fights not contributing meaningfully, never assume route safe merely because worked previously reassess current health terrain enemies escape paths, use blocks intelligently bridges barriers emergency cover elevation controlled traversal, when plan fails identify missing requirement select safest efficient alternative, preserve enough resources recover common emergencies, verify important actions crafting bucket acquisition portal construction ignition Nether entry rather than assuming succeeded.
-- Final principle: behave like experienced adaptive speedrunner not fixed sequence scripted actions. Objective not collect everything or win every fight — reach Nether efficiently using resources opportunities available in current world while avoiding preventable deaths. Main goal enter nether anyhow prepare itself find resource recipe or in world use any advantage.
-
-## Honesty contract
-
-- Items observed and moved with rollback-protected transfers — never fabricated.
-- `tell()` = chat to owner; `reason` = HUD; `blockTask` = stop with kind manual/retry.
-- Entity disappearance = pickup success; inventory delta = quota success.
-- **NEW:** Verify important actions crafting bucket acquisition portal construction ignition Nether entry rather than assuming succeeded.
-
-## Adding a feature v1.2
+## Adding a feature
 
 1. Pure logic in `core/`, engine touches in `runtime/`.
-2. New modules: follow existing pattern — constructor(bot), tick(tick), reset(), with bounded budgets (max 800 block checks, max 20 ticks per scan, max 64 log entries, etc).
-3. Every loop budgeted (ticks or attempts) and ends with actionable message.
-4. Run verification: `node tools/run-all.mjs` — must pass parse, linkcheck, undef, imports, core tests, walkable, flush, and selftest must fail (proves no-undef gate still catches bugs).
-5. For fast dev: keep core pure, runtime thin, no circular deps, JSDoc comments, small files, no item fabrication, rollback-safe transfers, hazard checks before mining, shelters always reopenable, owner-gated, circuit breaker.
-6. **NEW:** For Nether speedrun, follow 9-point checklist above, ensure bucket milestone priority 95, village-first evaluation, golem risk management, food healing readiness, flint steel before commit, adaptive recalc on discovery, verify important actions.
+2. Runtime components follow the existing shape: `constructor(bot)`, `tick(tick)`,
+   `reset()`, bounded budgets.
+3. Run `node tools/run-all.mjs` — twelve steps: module-goal parse, link/evaluate
+   against the `@minecraft` stubs, the no-undef / import / component / avatar /
+   engine-API / module-scope gates, unit + sim + perf tests, and two must-fail
+   checks proving the no-undef and module-scope gates still catch their own
+   fixtures.
+4. Never call the engine directly from runtime: add a driver method instead, so
+   the call gets one owner, one try/catch and one place to test.
+
+## Verification suite (`tools/`)
+
+| File | Job |
+|---|---|
+| `run-all.mjs` | rebuilds `tools/load/scripts`, runs every gate in order |
+| `gates.mjs` | `parse` (module-goal syntax), `link` (ESM link + evaluate), `undef` (undefined calls + `this.<field>` typos), `imports` (missing paths), `components` (member calls that resolve to nothing), `sim` (only `scripts/sim` drives the avatar), `api` (members, enum values, `getComponent` ids and event names against the target API version), `scope` (no world work before `worldLoad`) |
+| `api.mjs` | builds/reads `api-surface.json`: the distilled surface of the typings this manifest targets (`build` needs the two `index.d.ts` files; `stats` reads the committed copy) |
+| `api-surface.json` | committed surface - 449 classes (144 `SimulatedPlayer` members), 65 enums, 80 component ids - so the API gate runs offline with no `npm install` |
+| `tests.mjs` | persistent-memory schema, capabilities/goal decomposition, WALKABLE regex guard, drop-flush tests |
+| `sim.test.mjs` | the avatar driver and movement policy against a behavioural fake of the documented SimulatedPlayer contract (return values, cooldowns, what throws), on a non-zero GameTest origin so missed relative conversions fail |
+| `perf.test.mjs` | native-call budgets (terrain cache, bag cache, arbiter evaluation) |
+| `selftest/` | deliberately broken fixtures the no-undef and module-scope gates must reject |
+
+## Roadmap
+
+Ranked by the previous planning pass; none of it is wired in yet, so it stays
+here rather than in `scripts/`:
+
+1. **65 unreachable survival scenarios** — 15 of the 80 scenario handlers can
+   fire; the rest (including 9 marked `critical: true`) are dead code. Either
+   wire them to real triggers or delete them. This is a product decision, not a
+   refactor: it removes advertised behaviour, so it is parked here.
+2. **Verification & recovery layer** — one place that verifies bucket, water,
+   obsidian, portal, ignition and entry instead of assuming success.
+3. **Reads behind the driver** — 482 read-only `sim.*` uses remain outside
+   `scripts/sim` (position, flags, components). They are safe but scattered;
+   routing them through the per-tick snapshot removes native reads per tick.
+4. **World model / blackboard** — single source of truth for lava pools,
+   villages, ruined portals, iron spots, hazards and safe routes, instead of the
+   same facts living in awareness, structures, memory and terrain.
+5. **Runtime test harness** — *started*: `tools/sim.test.mjs` now drives the
+   avatar and navigator through a behavioural fake. Next: the same fake behind
+   the directors (miner, escaper, survival-master), to catch the signature
+   mismatches that used to only show up in play.
+6. **Inventory & resource budget manager** — essentials vs optional in one place.
+7. **Full-game phases** — Nether → End → dragon, on top of the existing entry
+   pipeline.
+8. **Split `bot.js`** — the remaining god object is ~2.8k lines; extract tick
+   order and mode dispatch once the items above have tests.

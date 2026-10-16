@@ -1,46 +1,32 @@
-import { system, world, EntityComponentTypes, Direction, } from "@minecraft/server";
-import { add, floor, key, distance, away, horizontal, CARDINAL, COMPASS, UP, DOWN, center, } from "../core/math.js";
-import { MINE, priority, toolTier, diggable, RANGED, EXPLOSIVE, HOSTILES as MOB_DEFENCE, } from "../core/policy.js";
-import { RECIPES, craft, id, nextStep, matches, amountOf, bedTarget, } from "../core/recipes.js";
-import { isUndergroundOre, isBulk } from "../core/ores.js";
+import { Arbiter, TaskFault, blockedTask } from "../core/arbiter.js";
+import { needsQuickTool } from "../core/combat.js";
+import { retainScore } from "../core/knowledge.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, horizontal, key } from "../core/math.js";
 import { sanitizePrefs } from "../core/memory.js";
-import { Bag, NativeInventory } from "./inventory.js";
-import { Hands } from "./hands.js";
-import { Terrain, BlockScan } from "./world.js";
-import { Explorer } from "./exploration.js";
-import { SurvivalDirector } from "./survival.js";
+import { analyzeRequirements, decomposeMission } from "../core/progression.js";
+import { RECIPES, amountOf, bedTarget, craft, id, matches, nextStep } from "../core/recipes.js";
+import { assessFoodReserves, reassessAfterDamage } from "../core/survival.js";
+import { HOSTILES as MOB_DEFENCE, MINE, RANGED, diggable, isBulk, isPassable, isUnbreakable, isUndergroundOre, priority, toolTier } from "../core/world.js";
+import { Builder, Hands } from "./builder.js";
+import { Combat } from "./combat.js";
 import { Equipment } from "./equipment.js";
 import { Escaper } from "./escape.js";
-import { Miner } from "./mining.js";
-import { Drops } from "./drops.js";
-import { Scout } from "./scouting.js";
-import { TaskFault, blockedTask, } from "../core/recovery.js";
+import { Bag, NativeInventory, ResourceManager } from "./inventory.js";
+import { Drops, Looting } from "./looting.js";
+import { DeepMiner, Miner } from "./mining.js";
 import { Navigator } from "./navigation.js";
-// New advanced modules
-import { Builder } from "./builder.js";
-import { Combat } from "./combat.js";
-import { Looting } from "./looting.js";
-import { Parkour } from "./parkour.js";
-import { DeepMiner } from "./deepminer.js";
-import { ResourceManager } from "./resource.js";
+import { Avatar, DIGGING, DONE as AVATAR_DONE } from "../sim/avatar.js";
+import { BucketDirector, NetherDirector } from "./nether.js";
+import { Explorer, Scout } from "./scouting.js";
 import { SpeedrunDirector } from "./speedrun.js";
-import { WorldAwareness } from "./world-awareness.js";
-import { StructureDetector } from "./structures.js";
 import { SurvivalMaster } from "./survival-master.js";
-import { NetherDirector } from "./nether.js";
-import { VillageDirector } from "./village.js";
-import { GolemDirector } from "./golem.js";
-import { FoodDirector } from "./food.js";
-import { BucketDirector } from "./bucket.js";
-import { isPassable, isUnbreakable, isFalling } from "../core/blocks.js";
-import { needsQuickTool } from "../core/combat.js";
-import { retainScore, isCritical, SITUATION_USE, QUICK_TOOL_CHAIN } from "../core/knowledge.js";
-import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
-import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
+import { FoodDirector, SurvivalDirector } from "./survival.js";
 import { UI } from "./ui.js";
-import { Arbiter, REASON_CODES } from "../core/arbiter.js";
-import { decomposeMission, analyzeRequirements, isAnyLog, HIERARCHY } from "../core/goal-decomposition.js";
-import { shouldRecalculateAdaptive, verifyAction, handlePlanFailure, preserveEmergencyResources } from "../core/adaptive-planning.js";
+import { GolemDirector, VillageDirector } from "./village.js";
+import { StructureDetector, WorldAwareness } from "./world-awareness.js";
+import { BlockScan, Terrain, findBoat } from "./world.js";
+import { Direction, EntityComponentTypes, system, world } from "@minecraft/server";
+// New advanced modules
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -70,7 +56,6 @@ const BLOCKED_TTL = 1800;
 const VALUABLE = /^minecraft:(diamond|emerald|netherite|.*_ingot|.*enchanted_book|golden_apple|enchanted_golden_apple|totem_of_undying|heart_of_the_sea|nautilus_shell|.*_horse_armor|saddle|name_tag|.*_bucket|.*_smithing_template|.*_armor_trim|music_disc_.*|.*_spawn_egg|.*_shulker_box|ancient_debris|obsidian|ender_pearl|blaze_rod|ender_eye|elytra|trident|.*_bed|.*_wool)/;
 // UNBREAKABLE WOOD: any log/wood/stem is acceptable for wood needs
 const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
-const ANY_WOOD_DROPS = /(_log|_planks|stick|bamboo)/;
 function isAnyWood(type) { return ANY_WOOD.test(type); }
 function isWoodRequest(block) { return block && (block === "#logs" || block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
@@ -153,20 +138,20 @@ export class Bot {
         this.bag = new Bag(sim);
         this.terrain = new Terrain(sim.dimension);
         this.terrain.clock = () => system.currentTick;
-        this.nav = new Navigator(sim, host, this.terrain);
+        this.avatar = new Avatar(sim, host, this.terrain);
+        this.nav = new Navigator(this.avatar, host, this.terrain);
         this.escaper = new Escaper(this);
         this.miner = new Miner(this);
         this.drops = new Drops(this);
         this.scout = new Scout(this);
         this.lastDigReason = "";
-        this.equipment = new Equipment(sim, this.bag);
+        this.equipment = new Equipment(sim, this.bag, this.avatar);
         this.hands = new Hands(this);
         this.autonomy = new SurvivalDirector(this);
         // New advanced modules
         this.builder = new Builder(this);
         this.combat = new Combat(this);
         this.looting = new Looting(this);
-        this.parkour = new Parkour(this);
         this.deepMiner = new DeepMiner(this);
         this.resource = new ResourceManager(this);
         this.speedrun = new SpeedrunDirector(this);
@@ -213,10 +198,7 @@ export class Bot {
     tell(msg) { this.owner()?.sendMessage(`§a[Verdant] §r${msg}`); }
     stopActions() {
         this.nav.reset();
-        try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
-        try { this.sim.stopUsingItem(); } catch (_e) { this.fault(_e); }
-        try { this.sim.stopInteracting(); } catch (_e) { this.fault(_e); }
-        try { this.sim.isSneaking = false; } catch (_e) { this.fault(_e); }
+        this.avatar.stopAll();
         this.swingCell = undefined;
         this.grab = undefined;
         this.obstructionClear = undefined;
@@ -253,7 +235,6 @@ export class Bot {
         this.arbiter?.reset();
         this.awareness?.reset();
         this.structures?.reset();
-        this.parkour?.reset();
         this.survivalMaster?.reset();
         this.nether?.reset?.(system.currentTick);
         this.village?.reset?.(system.currentTick);
@@ -385,7 +366,6 @@ export class Bot {
         this.arbiter?.reset();
         this.awareness?.reset();
         this.structures?.reset();
-        this.parkour?.reset();
         this.survivalMaster?.reset();
         this.nether?.reset?.(system.currentTick);
         this.village?.reset?.(system.currentTick);
@@ -495,27 +475,20 @@ export class Bot {
      * shaft walls are never dug preemptively.
      */
     breakThrough(cell) {
-        const c = this.host.relative(center(cell));
-        this.sim.lookAtBlock(c);
-        let started = false;
-        try { started = this.sim.breakBlock(c); } catch { started = false; }
-        if (started) return "digging";
-        if (cell.y < floor(this.sim.location).y) {
-            const blocker = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+        const started = this.avatar.dig(cell);
+        if (started === DIGGING || started === AVATAR_DONE) return "digging";
+        if (cell.y < this.avatar.cell.y) {
+            const blocker = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.avatar.pos) : null;
             if (blocker && !(blocker.x === cell.x && blocker.y === cell.y && blocker.z === cell.z)) {
                 const bb = this.terrain.block(blocker);
                 const worthBreaking = bb && !bb.isAir && !bb.isLiquid && !isUnbreakable(bb.typeId) &&
                     bb.typeId !== "minecraft:obsidian" && bb.typeId !== "minecraft:crying_obsidian" &&
                     retainScore(bb.typeId) < 80;
                 if (worthBreaking) {
-                    const bc = this.host.relative(center(blocker));
-                    this.sim.lookAtBlock(bc);
-                    try {
-                        if (this.sim.breakBlock(bc)) {
-                            this.lastDigReason = `Cleared ${bb.typeId} blocking the swing.`;
-                            return "digging";
-                        }
-                    } catch (_e) { this.fault(_e); }
+                    if (this.avatar.dig(blocker) === DIGGING) {
+                        this.lastDigReason = `Cleared ${bb.typeId} blocking the swing.`;
+                        return "digging";
+                    }
                 }
             }
         }
@@ -537,14 +510,12 @@ export class Bot {
         return "digging";
     }
     placeTorch(support) {
-        try {
-            if (!this.terrain.solid(support)) return false;
-            const slot = this.bag.find((s) => s.typeId === "minecraft:torch");
-            if (slot < 0) return false;
-            const selected = this.bag.select(slot);
-            this.sim.lookAtBlock(this.host.relative(center(support)));
-            return this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(support)), Direction.Up);
-        } catch { return false; }
+        if (!this.terrain.solid(support)) return false;
+        const slot = this.bag.find((s) => s.typeId === "minecraft:torch");
+        if (slot < 0) return false;
+        const selected = this.bag.select(slot);
+        this.avatar.lookBlock(support);
+        return this.avatar.useOn(selected, support, Direction.Up);
     }
     /**
      * Enhanced deep mining with new DeepMiner for branch mining.
@@ -651,7 +622,9 @@ export class Bot {
     tick() {
         const tick = system.currentTick;
         if (this.state === "dead") { this.deadTick(tick); return; }
-        if (!this.sim.isValid) return;
+        // One snapshot per tick: the driver's calls and every cached read below
+        // then agree on where the bot is (the engine answers are not free).
+        if (!this.avatar.sync(tick).valid) return;
         try { this.lastKnown = { p: { ...this.sim.location }, dim: this.sim.dimension.id }; } catch (_e) { this.fault(_e); }
         // Fall detection for survival master
         try {
@@ -735,16 +708,16 @@ export class Bot {
         if (this.sim.isInWater) {
             // Force swimming behavior - jump every tick to stay at surface
             if (tick % 5 === 0) {
-                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
+                this.avatar.jump();
             }
             // If head in water, urgent surface
             try {
                 if (this.terrain.headInWater(this.sim)) {
                     this.reason = "In water head submerged - urgent surfacing - anti-drown swimming fix";
-                    try { this.sim.jump(); } catch (_e) { this.fault(_e); }
+                    this.avatar.jump();
                     const cur = this.sim.location;
                     try {
-                        this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
+                        this.avatar.hop({ x: cur.x, y: cur.y + 1.5, z: cur.z });
                     } catch (_e) { this.fault(_e); }
                     // Try boat immediately when drowning
                     const boatRes = this.escaper.boat(tick);
@@ -1198,7 +1171,7 @@ export class Bot {
             // Stop once on arrival (or after any tick where something else ran).
             if (this._followParkedTick !== tick - 1) {
                 this.nav.reset();
-                try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+                this.avatar.stopMoving();
             }
             this._followParkedTick = tick;
             return;
@@ -1307,7 +1280,7 @@ export class Bot {
                 try { this.explorer.step(this.sim.location, goal, tick, this.terrain, this.nav, Math.min(32, totalDist)); } catch (_e) { this.fault(_e); }
                 return;
             }
-            try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+            this.avatar.stopMoving();
             this.nav.reset();
             if (tick - this.followBlocked > 200) {
                 this.followBlocked = tick;
@@ -1370,7 +1343,6 @@ export class Bot {
         return undefined;
     }
 
-
     idle(tick) {
         // ULTRA AUTONOMY: if idle too long, auto-start survival instead of staying idle
         if (tick % 100 === 0 && this.mode === "idle" && !this.paused) {
@@ -1410,7 +1382,7 @@ export class Bot {
                     return;
                 }
                 this.nav.reset();
-                try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+                this.avatar.stopMoving();
                 if (!g.contact) g.contact = tick;
                 else if (tick - g.contact > 60) { this.grabIgnore.set(g.e.id, tick + 400); this.grab = undefined; }
                 return;
@@ -1483,7 +1455,6 @@ export class Bot {
         this.reason = "Active idle: guarding, ready - use !bot auto or !bot speedrun or !bot follow - never truly idle";
     }
 
-
     collect(tick) {
         const g = this.goal;
         if (!g?.anchor) { this.stop("Collect: no sweep point."); return; }
@@ -1505,7 +1476,7 @@ export class Bot {
                 if (this.nav.go(center(floor(drop.location)), tick) === "failed") { g.skipped.add(drop.id); this.record("collect: one drop unreachable; skipping"); }
                 return;
             }
-            this.nav.reset(); try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+            this.nav.reset(); this.avatar.stopMoving();
             if (!g.contact) g.contact = tick;
             else if (tick - g.contact > 80) { g.skipped.add(drop.id); g.contact = 0; }
             return;
@@ -1513,7 +1484,7 @@ export class Bot {
         const blocked = raw.filter((e) => g.skipped.has(e.id) || !this.terrain.safe(e.location)).length;
         if (raw.length && blocked === raw.length) return this.finishCollect(raw, g, "Sweep done");
         if (!raw.length) { if (!g.idleSince) g.idleSince = tick; if (tick - g.idleSince > 40) return this.finishCollect(raw, g, "Sweep done"); } else g.idleSince = 0;
-        try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+        this.avatar.stopMoving();
         this.reason = `Sweeping for drops: ${raw.length} in range of the sweep point.`;
     }
     finishCollect(raw, g, label) {
@@ -1530,9 +1501,9 @@ export class Bot {
             if (slot < 0) return;
             this.nav.reset();
             const held = this.bag.select(slot);
-            if (!this.sim.useItemInSlot(held)) { this.blockTask("Food use rejected by engine."); return; }
+            if (!this.avatar.use(held)) { this.blockTask("Food use rejected by engine."); return; }
             this.eatingUntil = tick + 40; this.reason = "Eating to recover hunger.";
-        } else if (tick >= this.eatingUntil) { try { this.sim.stopUsingItem(); } catch (_e) { this.fault(_e); } this.eatingUntil = 0; }
+        } else if (tick >= this.eatingUntil) { this.avatar.stopUsing(); this.eatingUntil = 0; }
     }
     fight(info, tick) {
         // Use advanced combat module
@@ -1610,11 +1581,11 @@ export class Bot {
     mine(m, tick) {
         // ANTI-DROWN: if in water while mining, surface first - never drown
         if (this.sim.isInWater) {
-            try { this.sim.jump(); } catch (_e) { this.fault(_e); }
+            this.avatar.jump();
             if (this.terrain.headInWater(this.sim)) {
                 this.reason = "Mining interrupted - in water head submerged, surfacing - anti-drown";
                 const cur = this.sim.location;
-                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch (_e) { this.fault(_e); }
+                this.avatar.hop({ x: cur.x, y: cur.y + 1.2, z: cur.z });
                 const boatRes = this.escaper.boat(tick);
                 if (boatRes) return false;
                 return false;
@@ -1623,8 +1594,8 @@ export class Bot {
             const shore = this.terrain.shoreNear(this.sim.location, 32);
             if (shore) {
                 this.reason = "Mining interrupted - in water, swimming to shore first - anti-drown";
-                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                if (tick % 10 === 0) { try { this.sim.jump(); } catch (_e) { this.fault(_e); } }
+                this.avatar.hop(center(shore.cell));
+                if (tick % 10 === 0) { this.avatar.jump(); }
                 return false;
             }
         }
@@ -1712,7 +1683,7 @@ export class Bot {
             if ((this.mode === "survival" || this.mode === "starter" || this.mode === "mine" || this.mode === "speedrun") && m.failures < 40) {
                 m.failures = (m.failures ?? 0) + 1;
                 m.exploring = true; m.target = undefined; m.breakingSince = undefined; m.noTargetSince = tick;
-                try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+                this.avatar.stopDigging();
                 this.explorer.reset(); this.nav.reset();
                 this.reason = `No ${m.item ?? m.block} nearby, exploring (${m.failures}/40) - advanced`;
                 return false;
@@ -1863,7 +1834,7 @@ export class Bot {
         if (b.typeId !== m.type) {
             this.terrain.invalidate(target);
             const wasBreaking = m.breakingSince !== undefined;
-            try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+            this.avatar.stopDigging();
             m.breakingSince = undefined;
             if (wasBreaking) {
                 m.broken++; m.noTargetSince = tick;
@@ -1940,7 +1911,7 @@ export class Bot {
             } else {
                 const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
                 if (tick - m.breakingSince > timeout) {
-                    try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+                    this.avatar.stopDigging();
                     m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout front - advanced");
                 }
                 return false;
@@ -1958,7 +1929,7 @@ export class Bot {
                     return false;
                 }
                 m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined;
-                try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); } m.breakingSince = undefined; return false;
+                this.avatar.stopDigging(); m.breakingSince = undefined; return false;
             }
         }
 
@@ -1969,10 +1940,9 @@ export class Bot {
             const horiz = horizontal(target, selfFloor);
             if (horiz <= 3) {
                 // Look up and break directly
-                try {
-                    this.sim.lookAtBlock(this.host.relative(center(target)));
+                {
                     if (!m.breakingSince) {
-                        if (this.sim.breakBlock(this.host.relative(center(target)))) {
+                        if (this.avatar.dig(target) === DIGGING) {
                             m.breakingSince = tick;
                             this.nav.reset();
                             this.reason = `Tree: breaking log at ${target.x},${target.y},${target.z} dy=${dy} direct fix - no scaffold`;
@@ -1980,14 +1950,14 @@ export class Bot {
                         }
                     } else {
                         if (tick - m.breakingSince > 80) {
-                            try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+                            this.avatar.stopDigging();
                             m.blocked.set(key(target), tick + 200); // short TTL for logs, not 1800
                             m.target = undefined;
                             m.breakingSince = undefined;
                         }
                         return false;
                     }
-                } catch (_e) { this.fault(_e); }
+                }
             }
         }
         if (m.treeMode && target.y > selfFloor.y + 6) {
@@ -2085,19 +2055,17 @@ export class Bot {
         } else {
             const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
             if (tick - m.breakingSince > timeout) {
-                try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+                this.avatar.stopDigging();
                 m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout quick - advanced");
             }
         }
         const held = this.bag.get(this.sim.selectedSlotIndex);
         if (rule && rule.tier > 0 && (!held?.typeId.endsWith("_pickaxe") || toolTier(held.typeId) < rule.tier)) {
-            try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
+            this.avatar.stopDigging();
             this.blockTask("Required pickaxe lost or broken.", "retry");
         }
         return false;
     }
-
-
 
     findAdjacentLogs(m, tick) {
         // Nearest-first 5x6x5 around the last log (150 cached reads, was 294
@@ -2247,7 +2215,7 @@ export class Bot {
             case "enter":
                 if (this.hands.nearCell(s.f2)) { s.stage = "seal"; s.actionSince = tick; }
                 else if (tick - s.actionSince > 160) { s.tried.add(s.dirKey); s.stage = "seek"; }
-                else { this.reason = "Camping: stepping into the shelter."; this.sim.moveToLocation(this.host.relative(center(s.f2)), { faceTarget: true }); }
+                else { this.reason = "Camping: stepping into the shelter."; this.avatar.hop(center(s.f2)); }
                 return true;
             case "seal": this.campSeal(s, tick); return true;
             case "sealCheck":
@@ -2305,12 +2273,15 @@ export class Bot {
         s.stage = "wait"; s.actionSince = tick;
     }
     campWait(s, tick) {
-        try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+        this.avatar.stopMoving();
         if (s.sealed) { this.reason = "Camping: sealed in until dawn."; if (!this.isNight()) { s.stage = "exit"; s.actionSince = tick; } return; }
         if (s.bedCell && !s.sleepTried && tick - s.actionSince > 10) {
             s.sleepTried = true;
             const bed = this.terrain.block(s.bedCell);
-            if (bed && bed.typeId.endsWith("_bed")) { try { if (typeof this.sim.interactWithBlock === "function" && !this.isSleeping()) this.sim.interactWithBlock(bed); } catch (_e) { this.fault(_e); } }
+            if (bed && bed.typeId.endsWith("_bed") && !this.isSleeping()) {
+                this.avatar.lookBlock(s.bedCell);
+                this.avatar.interactBlock(s.bedCell);
+            }
         }
         this.reason = s.bedCell ? "Camping: sleeping until dawn." : "Camping: standing watch until dawn.";
         if (!this.isNight()) { s.stage = "exit"; s.actionSince = tick; }
@@ -2322,12 +2293,12 @@ export class Bot {
             return;
         }
         if (s.bedCell && this.isSleeping()) {
-            if (tick - s.actionSince > 40) { s.actionSince = tick; try { const bed = this.terrain.block(s.bedCell); if (bed && typeof this.sim.interactWithBlock === "function") this.sim.interactWithBlock(bed); } catch (_e) { this.fault(_e); } }
+            if (tick - s.actionSince > 40) { s.actionSince = tick; const bed = this.terrain.block(s.bedCell); if (bed?.typeId?.endsWith("_bed")) { this.avatar.lookBlock(s.bedCell); this.avatar.interactBlock(s.bedCell); } }
             return;
         }
         if (s.p && !this.hands.nearCell(s.p)) {
             if (tick - s.actionSince > 200) { this.campState = undefined; this.record("camp: left the shelter"); return; }
-            this.sim.moveToLocation(this.host.relative(center(s.p)), { faceTarget: true }); return;
+            this.avatar.hop(center(s.p)); return;
         }
         this.campState = undefined; this.lastBranch = ""; this.record("camp: left the shelter");
     }
@@ -2340,7 +2311,7 @@ export class Bot {
         if (tick - this.sealSince > 400 || b.isLiquid) { 
             this.escapeSeal = undefined; 
             this.record("Sealed in timeout, opening robustly");
-            try { this.sim.stopMoving(); } catch (_e) { this.fault(_e); }
+            this.avatar.stopMoving();
             this.nav.reset();
             return true; 
         }
@@ -2479,9 +2450,9 @@ export class Bot {
         this.stop(found ? "Death point swept; drops collected." : "No drops remained at death point."); this.tell(this.reason);
     }
     attach(sim) {
-        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
-        this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag); this.autonomy = new SurvivalDirector(this);
-        this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
+        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.avatar = new Avatar(sim, this.host, this.terrain); this.nav = new Navigator(this.avatar, this.host, this.terrain);
+        this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag, this.avatar); this.autonomy = new SurvivalDirector(this);
+        this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
         this.nav.builder = this.builder; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;
     }
     aliveSim() {
@@ -2496,7 +2467,9 @@ export class Bot {
         if (tick - this.deadSince < 40) return;
         if (!this.respawnTried) {
             this.respawnTried = true; let ok = false;
-            try { if (typeof this.sim.respawn === "function") { this.sim.respawn(); ok = true; this.tell("Respawning automatically; the death point is remembered."); } } catch (e) { this.record("respawn failed: " + String(e).slice(0, 120)); }
+            this.avatar.respawn();
+            ok = true;
+            this.tell("Respawning automatically; the death point is remembered.");
             if (!ok) { this.state = "deadFailed"; this.reason = "Auto-respawn is not available in this build; use !bot spawn. Death point is remembered."; this.tell(this.reason); return; }
         }
         const back = this.aliveSim();
@@ -2628,7 +2601,7 @@ export class Bot {
             if (tick % 5 === 0) {
                 try { boat.applyImpulse({ x: (dir.x / len) * 0.15, y: 0.02, z: (dir.z / len) * 0.15 }); } catch { this.boatIgnore = tick + 1200; this.abortBoat("The engine refused boat impulses; swimming instead."); return false; }
             }
-        } else { this.sim.moveToLocation(this.host.relative({ x: target.x, y: this.sim.location.y, z: target.z }), { faceTarget: true }); }
+        } else { this.avatar.hop({ x: target.x, y: this.sim.location.y, z: target.z }); }
         this.reason = "Crossing open water by boat."; return true;
     }
     waterAhead(target) {
@@ -2671,7 +2644,7 @@ export class Bot {
     }
     onGround(boat) { try { return this.sim.isOnGround || (boat?.isOnGround ?? false); } catch { return false; } }
     boardBoat(tick) {
-        const existing = this.escaper.findBoat();
+        const existing = findBoat(this.sim);
         if (existing) { if (this.escaper.mount(existing)) { this.reason = "Boarding a boat for the crossing."; return "boarded"; } return "waiting"; }
         let slot = this.bag.find((s) => s.typeId.endsWith("_boat"));
         if (slot < 0) {
@@ -2703,8 +2676,8 @@ export class Bot {
         if (!cell) return "none";
         const selected = this.bag.select(slot);
         try {
-            this.sim.lookAtBlock(this.host.relative(center(cell)));
-            this.sim.useItemInSlot(selected);
+            this.avatar.lookBlock(cell);
+            this.avatar.use(selected);
             this.reason = "Floating a boat for the crossing - unbreakable water travel";
             if (tick - this.boatTrip.since > 120) return "none";
             return "waiting";
@@ -2759,7 +2732,7 @@ export class Bot {
         }
         this.nav.reset(); if (tick - run.lastHit < 14) return;
         if (!this.terrain.line(this.sim.getHeadLocation(), golem.getHeadLocation())) return;
-        this.bag.weapon(); this.sim.lookAtEntity(golem); this.sim.attackEntity(golem); run.lastHit = tick; run.hits++; run.backoffUntil = tick + 28;
+        this.bag.weapon(); this.avatar.lookEntity(golem); this.avatar.attack(golem); run.lastHit = tick; run.hits++; run.backoffUntil = tick + 28;
     }
     home() { return this.memory?.home() ?? this.anchor ?? this.sim.location; }
     cancelWork() { this.stopActions(); this.mining = undefined; this.workKey = ""; this.explorer.reset(); }
@@ -2834,8 +2807,8 @@ export class Bot {
         }
         const slot = this.bag.select(this.bag.find((s) => s.typeId === id("crafting_table")));
         const ground = add(p, { x: 0, y: -1, z: 0 });
-        this.sim.lookAtBlock(this.host.relative(ground));
-        if (!this.sim.useItemInSlotOnBlock(slot, this.host.relative(ground))) { this.blockTask("Table placement rejected."); return; }
+        this.avatar.lookBlock(ground);
+        if (!this.avatar.useOn(slot, ground)) { this.blockTask("Table placement rejected."); return; }
         this.pendingTable = { p, tick };
     }
     mission() {
@@ -2866,7 +2839,7 @@ export class Bot {
             equipment: this.equipment.report(),
             autonomy: this.autonomy.status(),
             speedrun: this.speedrun.status(),
-            navigation: { segments: this.nav.segments, expansions: this.nav.expansions, blockReads: this.terrain.reads, cacheHits: this.terrain.hits, },
+            navigation: { segments: this.nav.segments, fallbacks: this.nav.expansions, blockReads: this.terrain.reads, cacheHits: this.terrain.hits, },
             exploration: { areas: this.explorer.trips, range: this.settings.range },
             owner: this.ownerName, mode: this.mode, mission: this.mission(), paused: this.paused, state: this.state,
             escape: this.escaper.active ? this.escaper.mode : undefined, camp: this.campState?.stage, threat: this.threat?.typeId, reason: this.reason, health: hp,

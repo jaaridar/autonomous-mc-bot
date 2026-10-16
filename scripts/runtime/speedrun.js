@@ -1,3 +1,11 @@
+
+import { center, distance, floor } from "../core/math.js";
+import { chooseNetherRoute, ensureIronForBothBucketAndFlintSteel, evaluateBucketPriority, evaluateIgnitionOptions, evaluateLavaPoolForBucket, shouldObtainFlintAndSteelBeforePortal, shouldRecalculate, verifyPortalAction } from "../core/nether.js";
+import { PHASES, currentPhase } from "../core/progression.js";
+
+import { assessFoodReserves } from "../core/survival.js";
+import { timeOfDay } from "./world.js";
+
 /**
  * Speedrun Director v2.0 - Nether speedrun overhaul, world-class adaptive.
  * Primary objective: enter Nether as quickly and reliably as possible without dying.
@@ -13,15 +21,6 @@
  * - Adaptive planning: recalculate on village/ruined portal/lava pool/chest/hostile group/obstacle discovery
  * - Verify important actions crafting bucket portal ignition Nether entry
  */
-import { currentPhase, PHASES, CHECKLIST } from "../core/resource.js";
-import { amountOf } from "../core/recipes.js";
-import { distance, center, floor } from "../core/math.js";
-import { retainScore, isCritical } from "../core/knowledge.js";
-import { chooseNetherRoute, verifyPortalAction, shouldRecalculate } from "../core/nether-strategy.js";
-import { evaluateBucketPriority, evaluateLavaPoolForBucket, chooseFastestViableMethod } from "../core/bucket-strategy.js";
-import { evaluateIgnitionOptions, shouldObtainFlintAndSteelBeforePortal, ensureIronForBothBucketAndFlintSteel } from "../core/flint-steel-strategy.js";
-import { evaluateVillage, evaluateVillageVsNetherRoute } from "../core/village-strategy.js";
-import { assessFoodReserves } from "../core/food-strategy.js";
 
 export class SpeedrunDirector {
     constructor(bot) {
@@ -302,7 +301,7 @@ export class SpeedrunDirector {
             hasGravelNearby: this.checkGravelNearby(16),
             distanceToGravel: this.findGravelDistance(24) ?? 50,
             phase: this.phaseName(),
-            time: this.getTimeOfDay(),
+            time: timeOfDay(),
             hostileCount,
             netherRoute: this.currentRoute,
             health: b.sim.getComponent("minecraft:health")?.currentValue ?? 20,
@@ -447,12 +446,12 @@ export class SpeedrunDirector {
             const selected = b.bag.select(slot);
             const portalPos = this.currentRoute?.pos ?? floor(b.sim.location);
             const interior = { x: portalPos.x + 1, y: portalPos.y, z: portalPos.z };
-            b.sim.lookAtBlock(b.host.relative(center(interior)));
-            const ok = b.sim.useItemInSlot(selected);
+            b.avatar.lookBlock(interior);
+            const ok = b.avatar.use(selected);
             this.ignitionTries++;
             if (ok) {
                 b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved, verify success`;
-                try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { b.avatar.hop(center(interior)); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 // Verify entry
                 const verify = verifyPortalAction("ignite_portal", "ignited", counts);
                 if (verify.success) {
@@ -530,14 +529,6 @@ export class SpeedrunDirector {
         return null;
     }
 
-    getTimeOfDay() {
-        try {
-            const tod = this.bot.sim.dimension.getTimeOfDay ? this.bot.sim.dimension.getTimeOfDay() : 0;
-            if (tod >= 12000 && tod < 13000) return "sunset";
-            if (tod >= 13000 && tod < 23000) return "night";
-            return "day";
-        } catch { return "day"; }
-    }
 
     woodPhase(tick, counts) {
         const b = this.bot;
@@ -829,8 +820,8 @@ export class SpeedrunDirector {
                                         const selected = b.bag.select(waterSlot);
                                         const lavaBlock = b.terrain.block(pos);
                                         if (lavaBlock) {
-                                            b.sim.lookAtBlock(b.host.relative(center(pos)));
-                                            b.sim.useItemInSlot(selected);
+                                            b.avatar.lookBlock(pos);
+                                            b.avatar.use(selected);
                                             this.lavaPoolTries++;
                                             return;
                                         }

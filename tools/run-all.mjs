@@ -5,7 +5,8 @@
 //   2. Runs every gate in order; a non-zero exit from a real gate fails the
 //      run.
 //   3. Runs the deliberately broken fixtures in tools/selftest and REQUIRES
-//      them to fail - that proves the no-undef gate still catches bugs.
+//      them to fail - that proves the no-undef and module-scope gates still
+//      catch bugs rather than just passing.
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -19,17 +20,19 @@ mkdirSync(join(tools, "load", "scripts"), { recursive: true });
 cpSync(join(repo, "scripts"), join(tools, "load", "scripts"), { recursive: true });
 
 const steps = [
-    { name: "module-goal parse (exactly how the engine parses it)", file: "parse.mjs", args: ["scripts"] },
-    { name: "link + evaluate against @minecraft stubs", file: "linkcheck.mjs", args: ["tools/load/scripts"] },
-    { name: "no-undef gate (missing imports + this.<field> typos)", file: "undef.mjs", args: ["scripts"] },
-    { name: "import scan", file: "imports.mjs", args: ["scripts"] },
-    { name: "core unit tests", file: "test.mjs" },
-    { name: "brain layer tests (offline toy world + fuzz + mutation)", file: "brain.test.mjs" },
-    { name: "survival capability tests", file: "test-capabilities.mjs" },
-    { name: "walkable regex guard", file: "walkable.mjs" },
-    { name: "drop-flush tests", file: "flush.mjs" },
-    { name: "perf/efficiency tests (native-call + A* budgets, equivalence vs v1.2.4)", file: "perf.test.mjs" },
-    { name: "no-undef gate catches its fixtures (expected to fail)", file: "undef.mjs", args: ["tools/selftest"], mustFail: true },
+    { name: "module-goal parse (exactly how the engine parses it)", file: "gates.mjs", args: ["parse"] },
+    { name: "link + evaluate against @minecraft stubs", file: "gates.mjs", args: ["link"] },
+    { name: "no-undef gate (missing imports + this.<field> typos)", file: "gates.mjs", args: ["undef"] },
+    { name: "import scan", file: "gates.mjs", args: ["imports"] },
+    { name: "component-method gate (member calls that resolve to nothing)", file: "gates.mjs", args: ["components"] },
+    { name: "avatar boundary (only scripts/sim drives the simulated player)", file: "gates.mjs", args: ["sim"] },
+    { name: "engine API conformance (members, enums, component ids vs the target API version)", file: "gates.mjs", args: ["api"] },
+    { name: "module-scope gate (no world work before worldLoad)", file: "gates.mjs", args: ["scope"] },
+    { name: "unit tests (memory schema, capabilities, walkable guard, drop flush)", file: "tests.mjs" },
+    { name: "sim tests (avatar driver + movement policy against a behavioural fake)", file: "sim.test.mjs" },
+    { name: "perf/efficiency tests (native-call budgets)", file: "perf.test.mjs" },
+    { name: "no-undef gate catches its fixtures (expected to fail)", file: "gates.mjs", args: ["undef", "tools/selftest"], mustFail: true },
+    { name: "module-scope gate catches its fixture (expected to fail)", file: "gates.mjs", args: ["scope", "tools/selftest"], mustFail: true },
 ];
 
 let failed = 0;

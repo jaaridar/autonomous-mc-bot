@@ -1,4 +1,4 @@
-import { world, system } from "@minecraft/server";
+import { world } from "@minecraft/server";
 import { floor, distance } from "../core/math.js";
 
 /**
