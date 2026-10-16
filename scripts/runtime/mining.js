@@ -20,6 +20,7 @@ const short = (id) => id.replace("minecraft:", "");
 export class Miner {
     constructor(bot) {
         this.bot = bot;
+        this.trail = []; // breadcrumb map of the whole trip; survives reset()
         this.reset();
     }
     get active() {
@@ -47,6 +48,52 @@ export class Miner {
         this.blocked = new Map();
         this.breakingSince = 0;
         this.breakTarget = null;
+    }
+
+    /**
+     * Breadcrumb map of the whole trip: settle() records every cell the miner
+     * walks and bot.mine() records nav-walk positions too. The trail is
+     * deliberately NOT cleared by reset(), so a mid-trip recovery or blocked
+     * task can never lose the concrete way back to the surface again.
+     */
+    track(cell) {
+        const trail = (this.trail ??= []);
+        const n = trail.length;
+        if (n) {
+            const last = trail[n - 1];
+            if (last.x === cell.x && last.y === cell.y && last.z === cell.z) return;
+            // Revisited an older cell (wandering / backtracking): unwind the loop
+            // so the map stays the shortest path from the shaft head outward.
+            for (let i = n - 8; i >= 0 && i >= n - 60; i--) {
+                const t = trail[i];
+                if (t.x === cell.x && t.y === cell.y && t.z === cell.z) {
+                    trail.length = i + 1;
+                    return;
+                }
+            }
+        }
+        trail.push({ ...cell });
+        if (trail.length > 1200) trail.splice(0, 400);
+    }
+
+    /** Ascend prep: prefer the full breadcrumb map over the reduced route. */
+    adoptTrail() {
+        const trail = this.trail ?? [];
+        if (trail.length <= this.route.length) return;
+        let end = trail.length;
+        const spot = this.bot.sim.location;
+        while (end > 1) {
+            const c = trail[end - 1];
+            if (horizontal(spot, center(c)) < 1.2 && Math.abs(spot.y - c.y) < 2) end--;
+            else break;
+        }
+        this.route = trail.slice(0, end).map((c) => ({ ...c }));
+        this.reason = `Mapping the whole way back (${this.route.length} marked cells) - front fix`;
+    }
+
+    /** Clear the map when the trip is genuinely over (fresh command). */
+    dropTrail() {
+        this.trail = [];
     }
 
     tryBridge(target, fromPos, tick) {
@@ -232,6 +279,15 @@ export class Miner {
         const b = this.bot;
         const loc = center(cell);
         if (horizontal(b.sim.location, loc) < 0.8 && Math.abs(b.sim.location.y - cell.y) < 1.4) return "arrived";
+        // Proactively clear fallen gravel / sand / rock along the backtrack path
+        const footBlock = b.terrain.block(cell);
+        if (footBlock && !footBlock.isAir && !isUnbreakable(footBlock.typeId) && !footBlock.isLiquid) {
+            this.tryDirectBreak(cell, tick);
+        }
+        const headBlock = b.terrain.block(add(cell, UP));
+        if (headBlock && !headBlock.isAir && !isUnbreakable(headBlock.typeId) && !headBlock.isLiquid) {
+            this.tryDirectBreak(add(cell, UP), tick);
+        }
         b.nav.reset();
         b.sim.isSprinting = false;
         // Jump only from the ground: the old unguarded jump fired every tick and
@@ -259,6 +315,7 @@ export class Miner {
             this.movingSince = 0;
             this.movingStart = undefined;
             this.route.push({ ...cell });
+            this.track(cell);
             this.dug++;
             this.turns = 0;
             this.refills = 0;
@@ -451,8 +508,9 @@ export class Miner {
             if (horizontal(b.sim.location, center(tail)) < 1.0 && Math.abs(b.sim.location.y - tail.y) < 1.4) this.route.pop();
             else break;
         }
+        const p = floor(b.sim.location);
+        const origin = this.site?.origin;
         if (this.route.length <= 1) {
-            const origin = this.site?.origin;
             if (!origin || (horizontal(b.sim.location, center(origin)) < 2.0 && Math.abs(b.sim.location.y - origin.y) < 2.0)) {
                 this.reset();
                 this.reason = "Back on surface - front fix";
@@ -460,11 +518,21 @@ export class Miner {
             }
         }
         if (!this.route.length) {
+            if (origin && p.y < origin.y - 1) {
+                b.nav.go(center(origin), tick);
+                this.reason = `Shaft route finished; climbing towards surface origin Y=${origin.y}`;
+                return "working";
+            }
             this.reset();
             this.reason = "Back on surface - front fix";
             return "surface";
         }
-        if (tick - this.ascendSince > 3000) {
+        if (tick - this.ascendSince > 4000) {
+            if (origin && p.y < origin.y - 1) {
+                b.nav.go(center(origin), tick);
+                this.reason = "Retrying climb towards shaft origin";
+                return "working";
+            }
             this.reason = "Could not retrace shaft - needs help - advanced";
             this.wantsOut = false;
             return "stalled";
@@ -728,6 +796,15 @@ export class DeepMiner {
         const loc = center(cell);
         if (horizontal(b.sim.location, loc) < 0.8 && Math.abs(b.sim.location.y - cell.y) < 1.4)
             return "arrived";
+        // Proactively clear fallen gravel / sand / rock along backtrack route
+        const footBlock = b.terrain.block(cell);
+        if (footBlock && !footBlock.isAir && !isUnbreakable(footBlock.typeId) && !footBlock.isLiquid) {
+            this.tryDirectBreak(cell, tick);
+        }
+        const headBlock = b.terrain.block(add(cell, UP));
+        if (headBlock && !headBlock.isAir && !isUnbreakable(headBlock.typeId) && !headBlock.isLiquid) {
+            this.tryDirectBreak(add(cell, UP), tick);
+        }
         b.nav.reset();
         b.sim.isSprinting = false;
         if (cell.y > floor(b.sim.location).y && b.sim.isOnGround) b.sim.jump();
@@ -753,6 +830,7 @@ export class DeepMiner {
             this.movingSince = 0;
             this.movingStart = undefined;
             this.route.push({ ...cell });
+            this.track(cell);
             this.dug++;
             this.turns = 0;
             this.refills = 0;
@@ -1079,8 +1157,9 @@ export class DeepMiner {
                 this.route.pop();
             else break;
         }
+        const p = floor(b.sim.location);
+        const origin = this.site?.origin;
         if (this.route.length <= 1) {
-            const origin = this.site?.origin;
             if (!origin || (horizontal(b.sim.location, center(origin)) < 2.0 && Math.abs(b.sim.location.y - origin.y) < 2.0)) {
                 this.reset();
                 this.reason = "Back on surface - advanced unbreakable";
@@ -1088,10 +1167,21 @@ export class DeepMiner {
             }
         }
         if (!this.route.length) {
+            // NEVER declare surface if still deep underground!
+            if (origin && p.y < origin.y - 1) {
+                b.nav.go(center(origin), tick);
+                this.reason = `Retracing shaft towards surface origin Y=${origin.y}`;
+                return "working";
+            }
             this.reset();
             return "surface";
         }
-        if (tick - this.ascendSince > 4000) {
+        if (tick - this.ascendSince > 5000) {
+            if (origin && p.y < origin.y - 1) {
+                b.nav.go(center(origin), tick);
+                this.reason = "Ascending towards surface origin";
+                return "working";
+            }
             this.reason = "Cannot retrace shaft - needs help - advanced";
             this.wantsOut = false;
             return "stalled";

@@ -603,7 +603,7 @@ export class SkillRunner {
                     const result = bot.navTo?.({ x: target.x, y: target.y, z: target.z }, system.currentTick, leash);
                     if (result === "done")
                         return "arrived";
-                    if (result === "running" || result === "digging")
+                    if (result === "running" || result === "digging" || result === "working")
                         return "moving";
                     return "blocked";
                 }
@@ -823,6 +823,8 @@ export class SkillRunner {
             swimUp: () => {
                 try {
                     sim.swim?.();
+                    sim.jump?.();
+                    try { sim.applyImpulse?.({ x: 0, y: 0.28, z: 0 }); } catch {}
                     return true;
                 }
                 catch {

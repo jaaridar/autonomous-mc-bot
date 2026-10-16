@@ -500,41 +500,12 @@ export class Escaper {
         return this.retreatFar(tick);
     }
 
-    water(tick) {
+    water(tick, dest = undefined) {
         const sim = this.sim;
         const bot = this.bot;
         const p = floor(sim.location);
-        
-        // If riding boat
-        if (this.riding) {
-            const shore = this.terrain.shoreNear(sim.location, 64);
-            if (!sim.isInWater || (shore && shore.distance <= 2)) {
-                this.eject();
-                this.lastReason = "Ashore; leaving boat - swimming fix";
-                return "running";
-            }
-            if (shore) {
-                try { sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch {}
-                this.lastReason = "Boating to shore - swimming fix";
-                return "running";
-            }
-            // If in boat but no shore, boat towards owner or goal
-            const owner = bot.owner();
-            const target = owner ? owner.location : bot.home();
-            if (target) {
-                try { sim.moveToLocation(this.host.relative({ x: target.x, y: sim.location.y, z: target.z }), { faceTarget: true }); } catch {}
-                this.lastReason = "Boating towards owner/home - swimming fix";
-                return "running";
-            }
-            if (tick - this.boatSince > 300) {
-                this.eject();
-                this.boatTries = 0;
-                this.lastReason = "Boat not moving to shore, swimming - fix";
-            }
-            return "running";
-        }
-        
-        // Not in water anymore - done
+
+        // Not in water anymore - cleanly exit
         if (!sim.isInWater) {
             if (this.swimming) {
                 try { sim.stopSwimming(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
@@ -544,17 +515,17 @@ export class Escaper {
             this.reset();
             return "done";
         }
-        
+
         // === IN WATER - CHECK BOAT RIDING FIRST ===
         const ridingBoat = this.ridingEntity ?? this.bot.ridingBoat();
-        if (ridingBoat?.isValid) {
+        if (this.riding || ridingBoat?.isValid) {
             this.riding = true;
             this.ridingEntity = ridingBoat;
             const shore = this.terrain.shoreNear(sim.location, 64);
             const owner = this.bot.owner();
-            const dest = shore ? center(shore.cell) : (owner ? owner.location : this.bot.home());
-            if (dest) {
-                const dir = { x: dest.x - sim.location.x, z: dest.z - sim.location.z };
+            const boatTarget = dest ? (dest.x !== undefined ? dest : center(dest)) : (shore ? center(shore.cell) : (owner ? owner.location : this.bot.home()));
+            if (boatTarget) {
+                const dir = { x: boatTarget.x - sim.location.x, z: boatTarget.z - sim.location.z };
                 const dist = Math.hypot(dir.x, dir.z);
                 if (dist <= 2.5 || (this.terrain.solid(floor(sim.location)) && !this.terrain.waterAt(floor(sim.location)))) {
                     this.eject();
@@ -563,141 +534,127 @@ export class Escaper {
                     return "done";
                 }
                 const len = Math.max(1, dist);
-                try { sim.lookAtLocation(this.host.relative({ x: dest.x, y: sim.location.y, z: dest.z })); } catch {}
-                if (tick % 3 === 0) {
-                    try { ridingBoat.applyImpulse({ x: (dir.x / len) * 0.35, y: 0.0, z: (dir.z / len) * 0.35 }); } catch {}
+                try { sim.lookAtLocation(this.host.relative({ x: boatTarget.x, y: sim.location.y, z: boatTarget.z })); } catch {}
+                if (tick % 2 === 0 && ridingBoat) {
+                    try { ridingBoat.applyImpulse({ x: (dir.x / len) * 0.4, y: 0.0, z: (dir.z / len) * 0.4 }); } catch {}
                 }
-                this.lastReason = `Steering boat to shore (${Math.round(dist)}b)`;
+                this.lastReason = `Steering boat to ${dest ? 'destination' : 'shore'} (${Math.round(dist)}b)`;
                 return "running";
             }
         }
 
-        // === IN WATER - CRITICAL SWIMMING LOGIC - NEVER DROWN ===
+        // === ACTIVE SWIMMING - BEDROCK SIMULATED PLAYER PHYSICS ===
         this.nav.reset();
         sim.isSprinting = false;
-        
-        // Always try to be swimming
+
+        // Keep swimming state active
         if (!this.swimming) {
             this.swimming = true;
-            try { sim.swim(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
-        
-        // Check if head in water - DROWNING RISK - must surface immediately
+        try { sim.swim(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+
+        // Buoyancy: simulated player sinks in Bedrock water unless jump is triggered
+        try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+
+        // Submersion / Drowning check: head in water requires immediate upward thrust to breathe
         const headInWater = this.terrain.headInWater(sim);
-        const feetInWater = this.terrain.waterAt(p);
-        const belowWater = this.terrain.waterAt(add(p, DOWN));
-        
         if (headInWater) {
             if (this.drowning === undefined) this.drowning = tick;
-            // If drowning more than 20 ticks (1 sec), urgent boat attempt
+            // Immediate buoyancy impulse to breach surface and regain air
+            try { sim.applyImpulse({ x: 0, y: 0.28, z: 0 }); } catch {}
+            try {
+                const lookUp = { x: sim.location.x, y: sim.location.y + 4, z: sim.location.z };
+                sim.lookAtLocation(this.host.relative(lookUp));
+            } catch {}
+
+            // If submerged for over 20 ticks (1s), urgently try placing/using boat
             if (tick - this.drowning > 20) {
                 const r = this.boat(tick);
                 if (r) {
-                    this.lastReason = "DROWNING! Head in water, urgent boat - swimming fix";
+                    this.lastReason = "DROWNING: Submerged, urgent boat deployment";
                     return r;
                 }
             }
-            // SURFACE IMMEDIATELY: jump + look up + move up
-            try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            try { 
-                const lookUp = { x: sim.location.x, y: sim.location.y + 5, z: sim.location.z };
-                sim.lookAtLocation(this.host.relative(lookUp));
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            const cur = sim.location;
-            // Move up aggressively
-            try {
-                sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            this.lastReason = "DROWNING! Surfacing to breathe - swimming fix, never drown";
-            return "running";
+        } else {
+            this.drowning = undefined;
         }
-        
-        // Not head in water but still in water - try to get to shore or surface
-        this.drowning = undefined;
-        
-        // Try boat aggressively if far from shore or deep water
+
+        // Determine destination: provided destination, nearest shore, owner, or home
         const shore = this.terrain.shoreNear(sim.location, 64);
         const owner = bot.owner();
         const ownerDist = owner ? distance(owner.location, sim.location) : Infinity;
-        
-        // If in deep water (no shore within 16 or owner far), craft/use boat
-        if (!shore || shore.distance > 12 || ownerDist > 16 || tick % 40 === 0) {
+
+        // In very deep water far from shore, attempt boat placement
+        if (!dest && (!shore || shore.distance > 14 || ownerDist > 18) && tick % 30 === 0) {
             const r = this.boat(tick);
             if (r) {
-                this.lastReason = `Deep water ${shore ? Math.round(shore.distance)+'b to shore' : 'no shore'}, using boat - swimming fix`;
+                this.lastReason = `Deep water ${shore ? Math.round(shore.distance)+'b to shore' : 'no shore'}, deploying boat`;
                 return r;
             }
         }
-        
-        // If has blocks, try to create island to stand on - pillar from water
-        if (bot.settings.bridge && this.bag.buildBlock() >= 0 && (feetInWater || belowWater)) {
-            // Try to place block below to make land
-            const below = add(p, DOWN);
-            const belowBlock = this.terrain.block(below);
-            if (!belowBlock || belowBlock.isAir || this.terrain.waterAt(below)) {
-                const support = this.builder ? this.builder.findSupportFor(below) : null;
-                // Try place at feet level
-                const feetPos = p;
-                if (this.builder) {
-                    const r = this.builder.placeAt(feetPos, below, { sneak: true, autoAnchor: true, allowFalling: false });
-                    if (r === "placed") {
-                        this.lastReason = "In water, placing block to create island - swimming fix";
-                        return "running";
-                    }
-                }
-                // Try pillar
-                const pillarResult = this.pillar(tick);
-                if (pillarResult !== "failed") {
-                    this.lastReason = "In water, pillaring to create land - swimming fix";
-                    return pillarResult;
-                }
-            }
+
+        // Pick swim target position
+        let targetPos = null;
+        if (dest) {
+            targetPos = dest.x !== undefined ? dest : center(dest);
+        } else if (shore) {
+            targetPos = center(shore.cell);
+        } else if (owner) {
+            targetPos = owner.location;
+        } else if (bot.home()) {
+            targetPos = bot.home();
+        } else {
+            targetPos = { x: sim.location.x + 4, y: sim.location.y, z: sim.location.z };
         }
-        
-        // Swim to shore if found
-        if (shore) {
-            // If shore is close, swim to it
+
+        const dirX = targetPos.x - sim.location.x;
+        const dirZ = targetPos.z - sim.location.z;
+        const dist = Math.hypot(dirX, dirZ);
+
+        if (dist > 0.1) {
+            const normX = dirX / dist;
+            const normZ = dirZ / dist;
+
+            // Turn towards swim target
             try {
-                sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            if (tick % 10 === 0) {
-                try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            }
-            this.lastReason = `Swimming to shore ${Math.round(shore.distance)}b - swimming fix, jump every 10 ticks`;
-            return "running";
-        }
-        
-        // No shore - swim towards owner or home or random
-        const target = owner ? owner.location : bot.home();
-        if (target) {
-            const dir = { 
-                x: target.x - sim.location.x, 
-                y: 0.3, // slight up to stay at surface
-                z: target.z - sim.location.z 
-            };
-            const len = Math.hypot(dir.x, dir.z) || 1;
-            const cur = sim.location;
+                const eyeY = Math.max(sim.location.y + (headInWater ? 1.0 : 0.2), targetPos.y);
+                sim.lookAtLocation(this.host.relative({ x: targetPos.x, y: eyeY, z: targetPos.z }));
+            } catch {}
+
+            // Directional movement input
+            try { sim.move(normX, normZ, 1); } catch {}
+            try { sim.moveRelative(0, 1, 1); } catch {}
+
+            // Hydrodynamic swimming impulse
+            const forwardImpulse = 0.18;
+            const upwardImpulse = headInWater ? 0.24 : 0.08;
             try {
-                sim.moveToLocation(this.host.relative({ 
-                    x: cur.x + (dir.x/len) * 4, 
-                    y: cur.y + 0.5, 
-                    z: cur.z + (dir.z/len) * 4 
-                }), { faceTarget: true });
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            if (tick % 8 === 0) {
-                try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                sim.applyImpulse({ x: normX * forwardImpulse, y: upwardImpulse, z: normZ * forwardImpulse });
+            } catch {}
+
+            // Climbing out onto bank/shore:
+            // Bank ledges are 1 block above water surface. When within 1.8 blocks of shore, jump onto ledge!
+            if (shore && dist <= 1.8) {
+                try { sim.jump(); } catch {}
+                try {
+                    sim.applyImpulse({ x: normX * 0.25, y: 0.38, z: normZ * 0.25 });
+                } catch {}
+                try {
+                    sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
+                } catch {}
+
+                if (dist <= 0.8 && !this.terrain.waterAt(floor(sim.location))) {
+                    try { sim.stopSwimming(); } catch {}
+                    this.swimming = false;
+                    this.drowning = undefined;
+                    this.reset();
+                    this.lastReason = "Climbed out onto shore successfully";
+                    return "done";
+                }
             }
-            this.lastReason = `No shore, swimming to ${owner ? 'owner' : 'home'} at surface - swimming fix`;
-            return "running";
         }
-        
-        // Last resort: just keep swimming up and moving
-        const cur = sim.location;
-        try {
-            sim.moveToLocation(this.host.relative({ x: cur.x + 1, y: cur.y + 0.5, z: cur.z }), { faceTarget: true });
-        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        this.lastReason = "Deep water no target, swimming up and moving - never drown fix";
+
+        this.lastReason = `Swimming towards ${dest ? 'destination' : shore ? 'shore' : owner ? 'owner' : 'safety'} (${Math.round(dist)}b)`;
         return "running";
     }
 

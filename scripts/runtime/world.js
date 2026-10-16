@@ -226,14 +226,20 @@ export class Terrain {
         return !!b && b.isLiquid && /water/.test(b.typeId);
     }
 
-    shoreNear(location, radius = 64) { // Increased from 28 to 64 for deep water swimming fix
+    shoreNear(location, radius = 64) {
         const p = floor(location);
         let best, bestD = Infinity;
-        for (const n of [2, 4, 6, 8, 12, 16, 24, 28, 32, 48, 64]) {
+        const DIRS = [
+            { x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 },
+            { x: 1, z: 1 }, { x: 1, z: -1 }, { x: -1, z: 1 }, { x: -1, z: -1 }
+        ];
+        for (const n of [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64]) {
             if (n > radius) break;
-            for (const d of COMPASS) {
-                const q = this.groundNear(p.x + d.x * n, p.z + d.z * n, p.y, 4);
-                if (!q || this.dangerous(q) || q.y < p.y - 1) continue;
+            for (const d of DIRS) {
+                const targetX = Math.round(p.x + d.x * n);
+                const targetZ = Math.round(p.z + d.z * n);
+                const q = this.groundNear(targetX, targetZ, p.y, 4);
+                if (!q || this.dangerous(q) || q.y < p.y - 1 || this.waterAt(q) || this.waterAt(add(q, UP))) continue;
                 const dd = distance(q, location);
                 if (dd < bestD) { bestD = dd; best = q; }
             }

@@ -251,6 +251,20 @@ export class Bot {
         if (this.log.length > 64) this.log.shift();
     }
     tell(msg) { this.owner()?.sendMessage(`§a[Verdant] §r${msg}`); }
+    navTo(goal, tick, leash = 1) {
+        if (!goal) return "failed";
+        const loc = goal.x !== undefined ? goal : center(goal);
+        if (this.sim.isInWater) {
+            const res = this.escaper.water(tick, loc);
+            if (res === "done") return "done";
+            return "running";
+        }
+        if (leash && horizontal(this.sim.location, loc) <= leash && Math.abs(this.sim.location.y - loc.y) <= 1.5) {
+            this.nav.reset();
+            return "done";
+        }
+        return this.nav.go(loc, tick);
+    }
     stopActions() {
         this.nav.reset();
         try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
@@ -544,6 +558,9 @@ export class Bot {
             cropMode: /(wheat|carrot|potato|beetroot|berry|melon|pumpkin|cactus|sugar_cane|kelp|bamboo|deadbush|dead_bush)/.test(block ?? ""),
             anyWood: isWoodReq, // UNBREAKABLE: accept any wood type
             desertFallback: isWoodReq, // also try dead bushes in desert
+            entrance: floor(this.sim.location),
+            breadcrumbs: [{ ...floor(this.sim.location) }],
+            returning: false,
         };
     }
     pickaxeGuard(m) {
@@ -807,13 +824,29 @@ export class Bot {
                 const r = this.deepMiner.ascend(tick);
                 this.reason = this.deepMiner.reason;
                 if (r === "surface") {
+                    const origin = this.deepMiner.site?.origin;
+                    if (origin && floor(this.sim.location).y < origin.y - 2) {
+                        this.nav.go(center(origin), tick);
+                        return "continue";
+                    }
                     const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
                     this.deepMiner.reset();
                     this.miner.reset();
                     if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
                     return "done";
                 }
-                if (r === "stalled") { this.record("DeepMiner stalled: " + this.deepMiner.reason + ", retrying"); this.deepMiner.reset(); this.miner.reset(); return "done"; }
+                if (r === "stalled") {
+                    const origin = this.deepMiner.site?.origin ?? m.entrance;
+                    if (origin && floor(this.sim.location).y < origin.y - 2) {
+                        this.nav.go(center(origin), tick);
+                        this.reason = "Ascending towards surface entrance";
+                        return "continue";
+                    }
+                    this.record("DeepMiner stalled: " + this.deepMiner.reason + ", retrying");
+                    this.deepMiner.reset();
+                    this.miner.reset();
+                    return "done";
+                }
                 return "continue";
             }
             // Scan for ores to feed deepMiner
@@ -836,12 +869,27 @@ export class Bot {
             const r = this.miner.ascend(tick);
             this.reason = this.miner.reason;
             if (r === "surface") {
+                const origin = this.miner.site?.origin;
+                if (origin && floor(this.sim.location).y < origin.y - 2) {
+                    this.nav.go(center(origin), tick);
+                    return "continue";
+                }
                 const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
                 this.miner.reset();
                 if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
                 return "done";
             }
-            if (r === "stalled") { this.record("Miner stalled: " + this.miner.reason + ", retrying"); this.miner.reset(); return "done"; }
+            if (r === "stalled") {
+                const origin = this.miner.site?.origin ?? m.entrance;
+                if (origin && floor(this.sim.location).y < origin.y - 2) {
+                    this.nav.go(center(origin), tick);
+                    this.reason = "Ascending towards surface entrance";
+                    return "continue";
+                }
+                this.record("Miner stalled: " + this.miner.reason + ", retrying");
+                this.miner.reset();
+                return "done";
+            }
             return "continue";
         }
         if (met) return "done";
@@ -987,24 +1035,13 @@ export class Bot {
         this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
 
-        // ANTI-DROWN: if in water, immediately handle swimming - never drown
+        // ANTI-DROWN: if in water, handle swimming, buoyancy, and shore exit
         if (this.sim.isInWater) {
-            // Force swimming behavior - jump every tick to stay at surface
-            if (tick % 5 === 0) {
-                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-            }
-            // If head in water, urgent surface
             try {
+                this.escaper.water(tick);
                 if (this.terrain.headInWater(this.sim)) {
-                    this.reason = "In water head submerged - urgent surfacing - anti-drown swimming fix";
-                    try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-                    const cur = this.sim.location;
-                    try {
-                        this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
-                    } catch (_e) { this.fault(_e); }
-                    // Try boat immediately when drowning
-                    const boatRes = this.escaper.boat(tick);
-                    if (boatRes) return;
+                    this.reason = "In water head submerged - urgent surfacing - anti-drown";
+                    return;
                 }
             } catch (_e) { this.fault(_e); }
         }
@@ -1935,24 +1972,26 @@ export class Bot {
     mine(m, tick) {
         // ANTI-DROWN: if in water while mining, surface first - never drown
         if (this.sim.isInWater) {
-            try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-            if (this.terrain.headInWater(this.sim)) {
-                this.reason = "Mining interrupted - in water head submerged, surfacing - anti-drown";
-                const cur = this.sim.location;
-                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                const boatRes = this.escaper.boat(tick);
-                if (boatRes) return false;
-                return false;
-            }
-            // Try to get to shore while mining
-            const shore = this.terrain.shoreNear(this.sim.location, 32);
-            if (shore) {
-                this.reason = "Mining interrupted - in water, swimming to shore first - anti-drown";
-                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                if (tick % 10 === 0) { try { this.sim.jump(); } catch (_e) { this.fault(_e); } }
+            const waterRes = this.escaper.water(tick);
+            if (waterRes === "running" || this.terrain.headInWater(this.sim)) {
+                this.reason = "Mining interrupted: in water, swimming to shore - anti-drown";
                 return false;
             }
         }
+
+        // Breadcrumb mapping: remember every step of the path while mining
+        const curLoc = floor(this.sim.location);
+        if (!m.breadcrumbs) {
+            m.breadcrumbs = [{ ...curLoc }];
+            m.entrance = { ...curLoc };
+            m.returning = false;
+        }
+        const lastBreadcrumb = m.breadcrumbs[m.breadcrumbs.length - 1];
+        if (distance(curLoc, lastBreadcrumb) >= 2.5) {
+            m.breadcrumbs.push({ ...curLoc });
+            if (m.breadcrumbs.length > 500) m.breadcrumbs.shift();
+        }
+
         const stock = this.bag.counts();
         // Met check
         let met = false;
@@ -1987,12 +2026,48 @@ export class Bot {
         // Delegate underground to deep miners
         if (m.underground) {
             const deep = this.deepMine(m, tick, met);
-            if (deep === "done") return true;
+            if (deep === "done") {
+                if (m.entrance && curLoc.y < m.entrance.y - 1) {
+                    m.returning = true;
+                } else {
+                    return true;
+                }
+            }
             if (deep === "blocked") { 
                 this.blockTask(this.deepMiner.reason || this.miner.reason, "retry"); 
                 return false; 
             }
             if (deep === "continue") return false;
+        }
+
+        // Backtrack: retrace mapped path back to entrance upon quota completion
+        if (met && !m.treeMode && (m.underground || (m.entrance && distance(curLoc, m.entrance) > 3.5 && curLoc.y < m.entrance.y - 1))) {
+            m.returning = true;
+        }
+        if (m.returning) {
+            while (m.breadcrumbs.length > 1) {
+                const nextTarget = m.breadcrumbs[m.breadcrumbs.length - 1];
+                if (distance(curLoc, nextTarget) < 1.4) {
+                    m.breadcrumbs.pop();
+                } else {
+                    break;
+                }
+            }
+            const exitTarget = m.breadcrumbs[m.breadcrumbs.length - 1] ?? m.entrance;
+            const distToExit = distance(curLoc, exitTarget);
+            const distToEntrance = m.entrance ? distance(curLoc, m.entrance) : distToExit;
+            if (distToExit <= 1.8 && (m.breadcrumbs.length <= 1 || distToEntrance <= 2.5)) {
+                m.returning = false;
+                this.record("Mining quota complete; returned safely to surface entrance.");
+                return true;
+            }
+            this.reason = `Returning to surface entrance along mapped path (${m.breadcrumbs.length} left)`;
+            const navRes = this.navTo(center(exitTarget), tick, 1);
+            if (navRes === "failed" || navRes === "blocked") {
+                this.digCell(exitTarget, tick);
+                this.digCell(add(exitTarget, UP), tick);
+            }
+            return false;
         }
         if (met) return true;
         if (this.bag.container.emptySlotsCount < 1) { 
