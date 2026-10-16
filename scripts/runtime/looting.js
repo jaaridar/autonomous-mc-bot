@@ -401,7 +401,7 @@ export class Drops {
             return;
         }
         b.sim.isSprinting = false;
-        b.sim.moveToLocation(b.host.relative({ x: loc.x, y: loc.y, z: loc.z }), { faceTarget: true });
+        try { b.sim.moveToLocation(b.host.relative({ x: loc.x, y: loc.y, z: loc.z }), { faceTarget: true }); } catch {}
         if (b.sim.isOnGround)
             b.sim.jump();
     }

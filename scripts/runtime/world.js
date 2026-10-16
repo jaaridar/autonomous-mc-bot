@@ -155,9 +155,9 @@ export class Terrain {
     blockUncached(p) {
         try { return this.dimension.getBlock(floor(p)); } catch { return undefined; }
     }
-    solid(p) { const b = this.block(p); return !!b && b.isSolid; }
-    empty(p) { const b = this.block(p); return !b || b.isAir; }
-    liquid(p) { const b = this.block(p); return !!b && b.isLiquid; }
+    solid(p) { try { const b = this.block(p); return !!b && b.isSolid; } catch { return false; } }
+    empty(p) { try { const b = this.block(p); return !b || b.isAir; } catch { return true; } }
+    liquid(p) { try { const b = this.block(p); return !!b && b.isLiquid; } catch { return false; } }
     // Environment predicates read the cached Cell snapshot: no native call on a
     // cache hit. They used to fetch a live Block and read 2-3 native properties
     // per neighbour on every call (waterNear = 7 getBlock + 14 property reads).
@@ -214,9 +214,11 @@ export class Terrain {
                 if (dx * dx + dz * dz > radius * radius) continue;
                 for (let dy = -4; dy <= 4; dy++) {
                     const p = add(base, { x: dx, y: dy, z: dz });
-                    const b = this.block(p);
-                    if (b && (b.typeId === "minecraft:chest" || b.typeId === "minecraft:trapped_chest" || b.typeId === "minecraft:barrel" || b.typeId.includes("shulker_box") || b.typeId === "minecraft:ender_chest"))
-                        found.push({ ...p });
+                    try {
+                        const b = this.block(p);
+                        if (b && (b.typeId === "minecraft:chest" || b.typeId === "minecraft:trapped_chest" || b.typeId === "minecraft:barrel" || b.typeId.includes("shulker_box") || b.typeId === "minecraft:ender_chest"))
+                            found.push({ ...p });
+                    } catch {}
                 }
             }
         return found.sort((a, b) => distance(a, base) - distance(b, base));
@@ -239,10 +241,12 @@ export class Terrain {
                 y: Math.floor(fromFloor.y + (toFloor.y - fromFloor.y) * t),
                 z: Math.floor(fromFloor.z + (toFloor.z - fromFloor.z) * t),
             };
-            const b = this.block(p);
-            if (b && !b.isAir && !WALKABLE.test(b.typeId)) {
-                obstruct.push(p);
-            }
+            try {
+                const b = this.block(p);
+                if (b && !b.isAir && !WALKABLE.test(b.typeId)) {
+                    obstruct.push(p);
+                }
+            } catch {}
         }
         return obstruct;
     }
@@ -256,10 +260,12 @@ export class Terrain {
         if (targetPos.x === bp.x && targetPos.z === bp.z && targetPos.y < bp.y) {
             for (let y = bp.y - 1; y > targetPos.y; y--) {
                 const cell = { x: bp.x, y, z: bp.z };
-                const b = this.block(cell);
-                if (b && !b.isAir && !WALKABLE.test(b.typeId)) {
-                    obstruct.push(cell);
-                }
+                try {
+                    const b = this.block(cell);
+                    if (b && !b.isAir && !WALKABLE.test(b.typeId)) {
+                        obstruct.push(cell);
+                    }
+                } catch {}
             }
             // Head-front side cells are deliberately NOT listed here: when mining
             // straight down they are just the shaft walls, and listing them made
@@ -280,10 +286,12 @@ export class Terrain {
         for (const d of dirs) {
             for (const dy of [1, 0]) {
                 const p = { x: bp.x + d.x, y: bp.y + dy, z: bp.z + d.z };
-                const b = this.block(p);
-                if (b && !b.isAir && b.isSolid && !WALKABLE.test(b.typeId) && !b.isLiquid) {
-                    return p;
-                }
+                try {
+                    const b = this.block(p);
+                    if (b && !b.isAir && b.isSolid && !WALKABLE.test(b.typeId) && !b.isLiquid) {
+                        return p;
+                    }
+                } catch {}
             }
         }
         return null;
@@ -294,23 +302,25 @@ export class Terrain {
      * plus check for blocks above that would fall.
      */
     safeToMineEx(p, checkAbove = true) {
-        const self = floor(p);
-        const around = [...CARDINAL, { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }];
-        for (const d of around) {
-            const b = this.block(add(self, d));
-            if (!b) return false;
-            if (b.isLiquid) return false;
-            if (/^(minecraft:)(sand|red_sand|gravel|suspicious_sand|suspicious_gravel)$/.test(b.typeId)) {
-                // Falling block adjacent - risky but not fatal if above is not falling
-                if (d.y === 1 && checkAbove) {
-                    // Block above is falling - would fall on bot
-                    return false;
+        try {
+            const self = floor(p);
+            const around = [...CARDINAL, { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }];
+            for (const d of around) {
+                const b = this.block(add(self, d));
+                if (!b) return false;
+                if (b.isLiquid) return false;
+                if (/^(minecraft:)(sand|red_sand|gravel|suspicious_sand|suspicious_gravel)$/.test(b.typeId)) {
+                    // Falling block adjacent - risky but not fatal if above is not falling
+                    if (d.y === 1 && checkAbove) {
+                        // Block above is falling - would fall on bot
+                        return false;
+                    }
                 }
             }
-        }
-        // Check lava/water near
-        if (this.lavaNear(self) || this.waterNear(self)) return false;
-        return true;
+            // Check lava/water near
+            if (this.lavaNear(self) || this.waterNear(self)) return false;
+            return true;
+        } catch { return false; }
     }
 
     safe(p) { return standable(this.read, floor(p)); }

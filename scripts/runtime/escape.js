@@ -514,7 +514,7 @@ export class Escaper {
                 return "running";
             }
             if (shore) {
-                sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
+                try { sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch {}
                 this.lastReason = "Boating to shore - swimming fix";
                 return "running";
             }
@@ -522,7 +522,7 @@ export class Escaper {
             const owner = bot.owner();
             const target = owner ? owner.location : bot.home();
             if (target) {
-                sim.moveToLocation(this.host.relative({ x: target.x, y: sim.location.y, z: target.z }), { faceTarget: true });
+                try { sim.moveToLocation(this.host.relative({ x: target.x, y: sim.location.y, z: target.z }), { faceTarget: true }); } catch {}
                 this.lastReason = "Boating towards owner/home - swimming fix";
                 return "running";
             }
@@ -965,7 +965,7 @@ export class Escaper {
         if (!cells.length) {
             const walk = this.terrain.groundNear(foot.x, foot.z, p.y, 4);
             if (walk && !this.terrain.dangerous(walk)) {
-                sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true });
+                try { sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true }); } catch {}
                 this.lastReason = "Tunnelling forward.";
                 return "running";
             }
@@ -980,8 +980,12 @@ export class Escaper {
         else if (rule.tool === "axe") this.bag.tool("axe");
         else if (rule.tool === "shovel") this.bag.tool("shovel");
         if (this.breaking !== key(cell)) {
-            sim.lookAtBlock(this.host.relative(center(cell)));
-            if (!sim.breakBlock(this.host.relative(center(cell)))) return this.giveUp(`${type} out of reach to tunnel.`);
+            try {
+                sim.lookAtBlock(this.host.relative(center(cell)));
+                if (!sim.breakBlock(this.host.relative(center(cell)))) return this.giveUp(`${type} out of reach to tunnel.`);
+            } catch {
+                return this.giveUp(`${type} out of reach to tunnel.`);
+            }
             this.breaking = key(cell);
         }
         this.lastReason = "Tunnelling through " + type;
@@ -995,7 +999,7 @@ export class Escaper {
             if (!this.terrain.solid(add(walk, DOWN))) { this.crossing = undefined; }
             else {
                 sim.isSprinting = false;
-                sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true });
+                try { sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true }); } catch {}
                 const flat = Math.hypot(sim.location.x - (walk.x + 0.5), sim.location.z - (walk.z + 0.5));
                 if (flat < 0.6 && Math.abs(sim.location.y - walk.y) < 1.1) {
                     this.crossing = undefined;
@@ -1017,15 +1021,17 @@ export class Escaper {
         if (tick - this.since > 600) return this.giveUp("Bridge escape timed out.");
         if (this.terrain.solid(target)) {
             sim.isSprinting = false;
-            sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true });
+            try { sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true }); } catch {}
             this.crossing = walk;
             this.lastReason = "Stepping across.";
             return "running";
         }
         const tb = this.terrain.block(target);
         if (tb && !tb.isAir && !tb.isLiquid && !tb.isSolid) {
-            sim.lookAtBlock(this.host.relative(center(target)));
-            sim.breakBlock(this.host.relative(center(target)));
+            try {
+                sim.lookAtBlock(this.host.relative(center(target)));
+                sim.breakBlock(this.host.relative(center(target)));
+            } catch {}
             this.lastReason = "Clearing bridge line.";
             return "running";
         }

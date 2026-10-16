@@ -60,9 +60,40 @@ const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
 function isAnyWood(type) { return ANY_WOOD.test(type); }
 function isWoodRequest(block) { return block && (block === "#logs" || block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
+function wrapSim(sim) {
+    if (!sim || sim._verdantWrapped) return sim;
+    try { sim._verdantWrapped = true; } catch {}
+    const methods = [
+        "lookAtBlock",
+        "lookAtLocation",
+        "lookAtEntity",
+        "moveToLocation",
+        "moveToBlock",
+        "breakBlock",
+        "interactWithBlock",
+        "useItemOnBlock",
+        "attackEntity",
+    ];
+    for (const m of methods) {
+        try {
+            const orig = sim[m];
+            if (typeof orig === "function") {
+                sim[m] = function(...args) {
+                    try {
+                        return orig.apply(this, args);
+                    } catch (err) {
+                        return false;
+                    }
+                };
+            }
+        } catch {}
+    }
+    return sim;
+}
+
 export class Bot {
     constructor(sim, ownerName, host, memory) {
-        this.sim = sim;
+        this.sim = wrapSim(sim);
         this.ownerName = ownerName;
         this.host = host;
         this.memory = memory ?? null;
@@ -288,8 +319,19 @@ export class Bot {
         return false;
     }
     blockTask(reason, recovery = "retry") {
-        // ULTRA AUTONOMY: never bother the player about wood types - any wood demand self-heals to #logs
         const why = String(reason);
+        if (why.includes("LocationInUnloadedChunkError") || why.includes("not in a chunk currently loaded")) {
+            this.record("Auto-recover: location in unloaded chunk, resuming safe navigation/survival");
+            this.nav?.reset?.();
+            if (this.mining) this.mining.target = undefined;
+            if (this.explorer) this.explorer.reset?.();
+            if (this.autonomy) this.autonomy.recover();
+            this.stopActions();
+            this.state = "idle";
+            this.reason = "Repositioning from unloaded chunk boundary.";
+            return;
+        }
+        // ULTRA AUTONOMY: never bother the player about wood types - any wood demand self-heals to #logs
         if ((why.includes("No acquisition skill") || why.includes("Missing ")) && /(#planks|#logs|bamboo|_planks|_log|_wood|_stem|_hyphae|oak)/.test(why)) {
             this.record("Auto-fix: wood-type blocked, falling back to #logs for autonomy");
             try { this.obtain("#logs", 8, system.currentTick); return; } catch (_e) { this.fault(_e); }
@@ -533,35 +575,43 @@ export class Bot {
      * front of the head/body, clear that front blocker first so reach succeeds.
      */
     breakThrough(cell) {
-        const b = this.terrain.block(cell);
-        if (b) {
-            const rule = MINE[b.typeId];
-            if (rule?.tool) this.bag.tool(rule.tool, rule.tier ?? 0);
-            else if (isAnyWood(b.typeId)) this.bag.tool("axe");
-        }
-        const c = this.host.relative(center(cell));
-        this.sim.lookAtBlock(c);
-        let started = false;
-        try { started = this.sim.breakBlock(c); } catch { started = false; }
-        if (started) return "digging";
-
-        // Find blocker between head and cell (or front obstruction)
-        const head = this.sim.getHeadLocation();
-        const obs = this.terrain.findObstructions ? this.terrain.findObstructions(head, cell) : [];
-        const candidates = obs.length ? obs : [this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null].filter(Boolean);
-        for (const blocker of candidates) {
-            if (blocker.x === cell.x && blocker.y === cell.y && blocker.z === cell.z) continue;
-            const bb = this.terrain.block(blocker);
-            if (bb && !bb.isAir && !bb.isLiquid && !isUnbreakable(bb.typeId) && bb.typeId !== "minecraft:obsidian") {
-                const bc = this.host.relative(center(blocker));
-                this.sim.lookAtBlock(bc);
+        try {
+            const b = this.terrain.block(cell);
+            if (b) {
                 try {
-                    if (this.sim.breakBlock(bc)) {
-                        this.lastDigReason = `Cleared front block ${bb.typeId} obstructing reach.`;
-                        return "digging";
-                    }
-                } catch (_e) { this.fault(_e); }
+                    const rule = MINE[b.typeId];
+                    if (rule?.tool) this.bag.tool(rule.tool, rule.tier ?? 0);
+                    else if (isAnyWood(b.typeId)) this.bag.tool("axe");
+                } catch {}
             }
+            const c = this.host.relative(center(cell));
+            try { this.sim.lookAtBlock(c); } catch {}
+            let started = false;
+            try { started = this.sim.breakBlock(c); } catch { started = false; }
+            if (started) return "digging";
+
+            // Find blocker between head and cell (or front obstruction)
+            const head = this.sim.getHeadLocation();
+            const obs = this.terrain.findObstructions ? this.terrain.findObstructions(head, cell) : [];
+            const candidates = obs.length ? obs : [this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null].filter(Boolean);
+            for (const blocker of candidates) {
+                if (blocker.x === cell.x && blocker.y === cell.y && blocker.z === cell.z) continue;
+                try {
+                    const bb = this.terrain.block(blocker);
+                    if (bb && !bb.isAir && !bb.isLiquid && !isUnbreakable(bb.typeId) && bb.typeId !== "minecraft:obsidian") {
+                        const bc = this.host.relative(center(blocker));
+                        try { this.sim.lookAtBlock(bc); } catch {}
+                        try {
+                            if (this.sim.breakBlock(bc)) {
+                                this.lastDigReason = `Cleared front block ${bb.typeId} obstructing reach.`;
+                                return "digging";
+                            }
+                        } catch (_e) { this.fault(_e); }
+                    }
+                } catch {}
+            }
+        } catch {
+            return "blocked";
         }
         return "blocked";
     }
@@ -1241,7 +1291,16 @@ export class Bot {
                     this.mining = undefined;
                     this.reason = "Mining quota complete, continuing.";
                 }
-            } catch (error) { this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual"); }
+            } catch (error) {
+                const why = String(error?.message ?? error);
+                if (why.includes("LocationInUnloadedChunkError") || why.includes("not in a chunk currently loaded")) {
+                    this.record("Unloaded chunk error during director mining - resetting target");
+                    this.mining.target = undefined;
+                    this.nav.reset();
+                    return;
+                }
+                this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual");
+            }
             return;
         }
         try {
@@ -1275,7 +1334,18 @@ export class Bot {
                 case "loot": this.loot(tick); break;
                 case "golem": this.golemTick(tick); break;
             }
-        } catch (error) { this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual"); }
+        } catch (error) {
+            const why = String(error?.message ?? error);
+            if (why.includes("LocationInUnloadedChunkError") || why.includes("not in a chunk currently loaded")) {
+                this.record("Unloaded chunk error in " + this.mode + " - resetting nav and recovering");
+                this.nav.reset();
+                if (this.autonomy) this.autonomy.recover();
+                this.state = "idle";
+                this.reason = "Repositioning from unloaded chunk boundary.";
+                return;
+            }
+            this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual");
+        }
         if (tick % 100 === 0) this.save();
     }
     navTo(goal, tick, leash) {
@@ -2481,7 +2551,7 @@ export class Bot {
             case "enter":
                 if (this.hands.nearCell(s.f2)) { s.stage = "seal"; s.actionSince = tick; }
                 else if (tick - s.actionSince > 160) { s.tried.add(s.dirKey); s.stage = "seek"; }
-                else { this.reason = "Camping: stepping into the shelter."; this.sim.moveToLocation(this.host.relative(center(s.f2)), { faceTarget: true }); }
+                else { this.reason = "Camping: stepping into the shelter."; try { this.sim.moveToLocation(this.host.relative(center(s.f2)), { faceTarget: true }); } catch (_e) { this.fault(_e); } }
                 return true;
             case "seal": this.campSeal(s, tick); return true;
             case "sealCheck":
@@ -2561,7 +2631,7 @@ export class Bot {
         }
         if (s.p && !this.hands.nearCell(s.p)) {
             if (tick - s.actionSince > 200) { this.campState = undefined; this.record("camp: left the shelter"); return; }
-            this.sim.moveToLocation(this.host.relative(center(s.p)), { faceTarget: true }); return;
+            try { this.sim.moveToLocation(this.host.relative(center(s.p)), { faceTarget: true }); } catch (_e) { this.fault(_e); } return;
         }
         this.campState = undefined; this.lastBranch = ""; this.record("camp: left the shelter");
     }
@@ -2717,7 +2787,7 @@ export class Bot {
         // a new terrain, old directors with a dead bag) made post-respawn
         // behaviour erratic. Mirrors the constructor, including the live clock
         // and the cross-module wiring done after construction.
-        this.sim = sim;
+        this.sim = wrapSim(sim);
         this.bag = new Bag(sim);
         this.terrain = new Terrain(sim.dimension);
         this.terrain.clock = () => system.currentTick;
@@ -2899,7 +2969,7 @@ export class Bot {
             if (tick % 5 === 0) {
                 try { boat.applyImpulse({ x: (dir.x / len) * 0.15, y: 0.02, z: (dir.z / len) * 0.15 }); } catch { this.boatIgnore = tick + 1200; this.abortBoat("The engine refused boat impulses; swimming instead."); return false; }
             }
-        } else { this.sim.moveToLocation(this.host.relative({ x: target.x, y: this.sim.location.y, z: target.z }), { faceTarget: true }); }
+        } else { try { this.sim.moveToLocation(this.host.relative({ x: target.x, y: this.sim.location.y, z: target.z }), { faceTarget: true }); } catch (_e) { this.fault(_e); } }
         this.reason = "Crossing open water by boat."; return true;
     }
     waterAhead(target) {
@@ -3131,7 +3201,7 @@ export class Bot {
         this.placeTries = 0;
         const slot = this.bag.select(this.bag.find((s) => s.typeId === id("crafting_table")));
         const ground = add(p, { x: 0, y: -1, z: 0 });
-        this.sim.lookAtBlock(this.host.relative(ground));
+        try { this.sim.lookAtBlock(this.host.relative(ground)); } catch {}
         if (!this.sim.useItemInSlotOnBlock(slot, this.host.relative(ground))) { this.blockTask("Table placement rejected."); return; }
         this.pendingTable = { p, tick };
     }

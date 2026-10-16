@@ -237,7 +237,7 @@ export class Miner {
         // Jump only from the ground: the old unguarded jump fired every tick and
         // made the bot bunny-hop in place whenever the step-up was blocked.
         if (cell.y > floor(b.sim.location).y && b.sim.isOnGround) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true });
+        try { b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true }); } catch {}
         return "moving";
     }
 
@@ -248,7 +248,7 @@ export class Miner {
         b.nav.reset();
         b.sim.isSprinting = false;
         if (cell.y > floor(b.sim.location).y && b.sim.isOnGround) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true });
+        try { b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true }); } catch {}
     }
 
     settle(tick = 0) {
@@ -731,7 +731,7 @@ export class DeepMiner {
         b.nav.reset();
         b.sim.isSprinting = false;
         if (cell.y > floor(b.sim.location).y && b.sim.isOnGround) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true });
+        try { b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true }); } catch {}
         return "moving";
     }
 
@@ -742,7 +742,7 @@ export class DeepMiner {
         b.nav.reset();
         b.sim.isSprinting = false;
         if (cell.y > floor(b.sim.location).y && b.sim.isOnGround) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true });
+        try { b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true }); } catch {}
     }
 
     settle(tick = 0) {

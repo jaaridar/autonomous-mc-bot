@@ -296,7 +296,7 @@ export class SurvivalMaster {
             }
             // Ascend
             const surface = { x: ctx.p.x, y: ctx.p.y + 8, z: ctx.p.z };
-            this.bot.sim.moveToLocation(this.bot.host.relative(center(surface)));
+            try { this.bot.sim.moveToLocation(this.bot.host.relative(center(surface))); } catch {}
             return true;
         }
         return false;
@@ -1183,10 +1183,14 @@ export class SurvivalMaster {
             const toBreak = add(ctx.p, { x: 1, y: 0, z: 0 });
             const b = this.terrain.block(toBreak);
             if (b && !b.isAir) {
-                this.sim.lookAtBlock(this.host.relative(center(toBreak)));
-                this.sim.breakBlock(this.host.relative(center(toBreak)));
-                this.bot.reason = "Shelter 55: blocks inside one-block entrance - reopening safely";
-                return true;
+                try {
+                    this.sim.lookAtBlock(this.host.relative(center(toBreak)));
+                    this.sim.breakBlock(this.host.relative(center(toBreak)));
+                    this.bot.reason = "Shelter 55: blocks inside one-block entrance - reopening safely";
+                    return true;
+                } catch {
+                    return false;
+                }
             }
         }
         return false;

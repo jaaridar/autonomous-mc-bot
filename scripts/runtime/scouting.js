@@ -281,11 +281,15 @@ export class Scout {
         b.reason = "Grabbing logs from a nearby tree.";
         if (!b.bag.tool("axe"))
             b.bag.emptyHand();
-        b.sim.lookAtBlock(b.host.relative(c.cell));
-        if (b.sim.breakBlock(b.host.relative(c.cell)))
-            c.breaking = tick;
-        else
-            c.cell = undefined; // cannot open it from here; pick another cell
+        try {
+            b.sim.lookAtBlock(b.host.relative(c.cell));
+            if (b.sim.breakBlock(b.host.relative(c.cell)))
+                c.breaking = tick;
+            else
+                c.cell = undefined; // cannot open it from here; pick another cell
+        } catch {
+            c.cell = undefined;
+        }
         return true;
     }
 }

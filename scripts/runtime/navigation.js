@@ -598,7 +598,7 @@ export class Parkour {
         this.sim.jump();
         this.lastJump = tick;
         const target = add(floor(this.sim.location), dir);
-        this.sim.moveToLocation(this.host.relative(center(target)), { faceTarget: true });
+        try { this.sim.moveToLocation(this.host.relative(center(target)), { faceTarget: true }); } catch {}
         return true;
     }
 
@@ -612,7 +612,7 @@ export class Parkour {
         // For gapSize, jump further
         const dist = Math.hypot(dir.x, dir.z);
         const target = add(p, { x: dir.x * Math.ceil(dist), y: dir.y, z: dir.z * Math.ceil(dist) });
-        this.sim.moveToLocation(this.host.relative(center(target)), { faceTarget: true });
+        try { this.sim.moveToLocation(this.host.relative(center(target)), { faceTarget: true }); } catch {}
         return true;
     }
 
@@ -623,7 +623,7 @@ export class Parkour {
             const b = this.terrain.block(q);
             if (!b) continue;
             if (/ladder|vine|scaffolding|weeping_vines|twisting_vines/.test(b.typeId)) {
-                this.sim.moveToLocation(this.host.relative(center(q)), { faceTarget: true });
+                try { this.sim.moveToLocation(this.host.relative(center(q)), { faceTarget: true }); } catch {}
                 if (d.y === 1 && this.sim.isOnGround) this.sim.jump();
                 return true;
             }
@@ -800,7 +800,7 @@ export class Parkour {
             if (drop.safe) {
                 // If water, just walk off, else check safe
                 if (drop.water || drop.height <= 3) {
-                    this.sim.moveToLocation(this.host.relative(center(drop.land)), { faceTarget: true });
+                    try { this.sim.moveToLocation(this.host.relative(center(drop.land)), { faceTarget: true }); } catch {}
                     return true;
                 }
                 // For higher drops, try water clutch if have bucket
