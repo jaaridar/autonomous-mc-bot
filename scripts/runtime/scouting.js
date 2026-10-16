@@ -335,7 +335,7 @@ export class Explorer {
         const origin = floor(position), options = [];
         this.turns++;
         for (let dir = 0; dir < 8; dir++)
-            for (const radius of [20, 14]) {
+            for (const radius of [24, 20, 16, 12, 8]) {
                 const angle = (dir * Math.PI) / 4;
                 const x = Math.round(Math.cos(angle) * radius), z = Math.round(Math.sin(angle) * radius);
                 for (const y of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
@@ -360,12 +360,30 @@ export class Explorer {
                         score: penalty +
                             turnDiff * 6 +
                             Math.abs(y) * 2 +
-                            (20 - radius),
+                            (24 - radius),
                     });
                     break;
                 }
             }
         options.sort((a, b) => a.score - b.score);
+        if (!options.length) {
+            this.blocked.clear();
+            for (let dir = 0; dir < 8; dir++) {
+                const angle = (dir * Math.PI) / 4;
+                for (const radius of [12, 8, 5]) {
+                    const x = Math.round(Math.cos(angle) * radius), z = Math.round(Math.sin(angle) * radius);
+                    for (const y of [0, 1, -1, 2, -2]) {
+                        const p = add(origin, { x, y, z });
+                        if (terrain.safe(p)) {
+                            options.push({ p, dir, score: (24 - radius) });
+                            break;
+                        }
+                    }
+                    if (options.length) break;
+                }
+            }
+            options.sort((a, b) => a.score - b.score);
+        }
         if (!options.length) {
             this.heading = undefined;
             return "blocked";

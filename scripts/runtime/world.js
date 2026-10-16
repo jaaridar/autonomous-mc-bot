@@ -136,18 +136,58 @@ export class Terrain {
      * state but saves the native getBlock() call (the old cache was keyed so
      * read() overwrote it and nearly every block() call hit the engine).
      */
+    /**
+     * Throw-proof Block access. Native Block handles keep throwing
+     * LocationInUnloadedChunkError long after getBlock() succeeded, whenever
+     * the chunk unloads between the handle read and the consumer's property
+     * access (that throw used to escape into the bot's task loops and park the
+     * whole autonomy on "Task needs attention"). Every property read goes
+     * through this guarded snapshot: on a failed read the cell is evicted and
+     * the property falls back conservatively - an unreadable block behaves as
+     * an impassable solid obstacle instead of throwing.
+     */
+    safeBlock(b, p, k) {
+        const self = this;
+        const dead = {};
+        const evict = () => {
+            if (k !== undefined) { self.handles.delete(k); self.cache.delete(k); }
+        };
+        const g = (prop, fallback) => {
+            if (dead[prop]) return fallback;
+            try { return b[prop]; }
+            catch { dead[prop] = true; evict(); return fallback; }
+        };
+        return {
+            get $raw() { return b; },
+            get location() { return { x: p.x, y: p.y, z: p.z }; },
+            get typeId() { return g("typeId", "minecraft:unloaded"); },
+            get isAir() { return g("isAir", false); },
+            get isSolid() { return g("isSolid", true); },
+            get isLiquid() { return g("isLiquid", false); },
+            get isWaterlogged() { return g("isWaterlogged", false); },
+        };
+    }
     block(p) {
+        const fp = floor(p);
+        const k = key(fp);
         try {
-            const fp = floor(p);
-            const k = key(fp);
             const h = this.handles.get(k);
             if (h && h.expires > this.tick) return h.b;
             this.nativeReads++;
             const b = this.dimension.getBlock(fp);
-            if (b) this.handles.set(k, { b, expires: this.tick + HANDLE_TTL });
-            else this.handles.delete(k);
-            return b;
-        } catch { return undefined; }
+            if (!b) { this.handles.delete(k); return undefined; }
+            const s = this.safeBlock(b, fp, k);
+            this.handles.set(k, { b: s, expires: this.tick + HANDLE_TTL });
+            return s;
+        } catch {
+            this.handles.delete(k);
+            this.cache.delete(k);
+            return undefined;
+        }
+    }
+    /** Raw native Block for engine pass-through calls (interactWithBlock and friends). */
+    handle(p) {
+        try { return this.dimension.getBlock(floor(p)); } catch { return undefined; }
     }
     /** Cached type id (no native call when the cell was read recently). */
     typeAt(p) { return this.read(floor(p))?.type; }
@@ -313,6 +353,16 @@ export class Terrain {
                     // Falling block adjacent - risky but not fatal if above is not falling
                     if (d.y === 1 && checkAbove) {
                         // Block above is falling - would fall on bot
+                        return false;
+                    }
+                }
+            }
+            // Check higher column for falling blocks (up to 5 blocks above target)
+            if (checkAbove) {
+                for (let dy = 1; dy <= 5; dy++) {
+                    const above = this.block({ x: self.x, y: self.y + dy, z: self.z });
+                    if (!above || above.isAir) break;
+                    if (/^(minecraft:)(sand|red_sand|gravel|suspicious_sand|suspicious_gravel)$/.test(above.typeId)) {
                         return false;
                     }
                 }

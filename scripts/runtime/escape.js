@@ -545,6 +545,33 @@ export class Escaper {
             return "done";
         }
         
+        // === IN WATER - CHECK BOAT RIDING FIRST ===
+        const ridingBoat = this.ridingEntity ?? this.bot.ridingBoat();
+        if (ridingBoat?.isValid) {
+            this.riding = true;
+            this.ridingEntity = ridingBoat;
+            const shore = this.terrain.shoreNear(sim.location, 64);
+            const owner = this.bot.owner();
+            const dest = shore ? center(shore.cell) : (owner ? owner.location : this.bot.home());
+            if (dest) {
+                const dir = { x: dest.x - sim.location.x, z: dest.z - sim.location.z };
+                const dist = Math.hypot(dir.x, dir.z);
+                if (dist <= 2.5 || (this.terrain.solid(floor(sim.location)) && !this.terrain.waterAt(floor(sim.location)))) {
+                    this.eject();
+                    this.reset();
+                    this.lastReason = "Reached shore by boat; dismounting.";
+                    return "done";
+                }
+                const len = Math.max(1, dist);
+                try { sim.lookAtLocation(this.host.relative({ x: dest.x, y: sim.location.y, z: dest.z })); } catch {}
+                if (tick % 3 === 0) {
+                    try { ridingBoat.applyImpulse({ x: (dir.x / len) * 0.35, y: 0.0, z: (dir.z / len) * 0.35 }); } catch {}
+                }
+                this.lastReason = `Steering boat to shore (${Math.round(dist)}b)`;
+                return "running";
+            }
+        }
+
         // === IN WATER - CRITICAL SWIMMING LOGIC - NEVER DROWN ===
         this.nav.reset();
         sim.isSprinting = false;
@@ -1039,7 +1066,15 @@ export class Escaper {
         if (!f) return this.giveUp("Invalid bridge direction.");
         const placed = this.hands.place(anchor, f, { sneak: true });
         if (placed === "no-block") return this.giveUp("No blocks to bridge.");
-        if (placed === "rejected") return this.giveUp("Bridge placement rejected.");
+        if (placed === "rejected") {
+            this.deadDirs.push(dir);
+            this.escapeDir = undefined;
+            if (this.candidateDirs().length > 0) {
+                this.lastReason = "Bridge placement rejected; trying alternate candidate direction.";
+                return "running";
+            }
+            return this.giveUp("Bridge placement rejected in all directions.");
+        }
         this.crossing = walk;
         this.lastReason = "Bridging gap.";
         return "running";

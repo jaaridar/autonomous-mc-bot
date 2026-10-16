@@ -469,7 +469,7 @@ function command(p, text) {
                 }
                 if (!isStore(block) || distance(block.location, b.sim.location) > 4)
                     throw Error("Look at a chest/barrel within 4 blocks of both you and bot (or stand beside a remembered chest).");
-                const inv = block.getComponent("minecraft:inventory")?.container;
+                const inv = (block.$raw ?? block).getComponent("minecraft:inventory")?.container;
                 if (!inv)
                     throw Error("Container not accessible.");
                 b.stop("Deposit");

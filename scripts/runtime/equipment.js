@@ -289,7 +289,7 @@ export class Furnace {
         if (!b ||
             !["minecraft:furnace", "minecraft:lit_furnace"].includes(b.typeId))
             throw Error("Owned furnace missing/unloaded; recover it manually.");
-        const c = b.getComponent("minecraft:inventory")?.container;
+        const c = (b.$raw ?? b).getComponent("minecraft:inventory")?.container;
         if (!c || c.size < 3)
             throw Error("Native furnace inventory unavailable.");
         return new NativeInventory(c);

@@ -232,6 +232,27 @@ export class SurvivalDirector {
             }
         }
 
+        // ---- Opportunistic Iron Mining: mine nearby iron ore whenever holding a stone+ pickaxe ----
+        const hasIronPickOrStone = (usable[id("stone_pickaxe")] ?? 0) > 0 || hasTier("pickaxe");
+        const totalIron = (stock[ID_IRON_INGOT] ?? 0) + (stock[ID_RAW_IRON] ?? 0);
+        if (hasIronPickOrStone && totalIron < 32 && !b.threat && b.mode !== "mine") {
+            const nearOre = b.awareness?.getNearest("iron_ore") ?? b.awareness?.getNearest("raw_iron");
+            let orePos = (nearOre && distance(nearOre.pos ?? nearOre, b.sim.location) <= 14) ? (nearOre.pos ?? nearOre) : null;
+            if (!orePos) {
+                const scanned = b.terrain.scanOres(b.sim.location, 12, (t) => t.includes("iron_ore") || t.includes("raw_iron"), 50);
+                if (scanned.length > 0) orePos = scanned[0];
+            }
+            if (orePos) {
+                if (!b.mining || (b.mining.block !== "minecraft:iron_ore" && b.mining.block !== "minecraft:deepslate_iron_ore")) {
+                    b.record(`Opportunistic iron ore spotted at ${orePos.x},${orePos.y},${orePos.z} — mining immediately`);
+                    b.assignMine("minecraft:iron_ore", 4, true);
+                    this.enter("opportunistic-iron");
+                    b.reason = `Opportunistic mining: iron ore at ${orePos.x},${orePos.y},${orePos.z}`;
+                    return;
+                }
+            }
+        }
+
         // ---- Stone tools -------------------------------------------------
         const toolKinds = ["pickaxe", "axe", "sword"];
         const TIERS     = ["iron_", "diamond_", "netherite_"];
@@ -479,8 +500,12 @@ export class Forager {
 
         // 6. Explore.
         this.reason = hunting ? "Exploring for food animals/drops." : "Exploring for drops; hunting disabled.";
-        if (this.explorer.step(this.sim.location, home, tick, this.terrain, this.nav, range) === "blocked")
-            throw new TaskFault("No safe food-search frontier.", "retry");
+        const exRes = this.explorer.step(this.sim.location, home, tick, this.terrain, this.nav, range);
+        if (exRes === "blocked") {
+            this.explorer.reset();
+            this.reason = "Food search frontier blocked; resetting and scanning wider.";
+            return;
+        }
     }
 }
 

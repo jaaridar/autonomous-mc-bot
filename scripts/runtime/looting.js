@@ -129,7 +129,7 @@ export class Looting {
 
         this.nav.reset();
         try {
-            const inv = block.getComponent("minecraft:inventory")?.container;
+            const inv = (block.$raw ?? block).getComponent("minecraft:inventory")?.container;
             if (!inv) throw Error("no inv");
             const chest = new NativeInventory(inv);
             const items = [];

@@ -754,7 +754,8 @@ export class SkillRunner {
             },
             sleep: () => {
                 try {
-                    sim.interactWithBlock?.(this.bot.terrain.block(floor(sim.location)));
+                    const bed = this.bot.terrain.handle(floor(sim.location));
+                    if (bed) sim.interactWithBlock?.(bed);
                     return true;
                 }
                 catch {
@@ -763,7 +764,8 @@ export class SkillRunner {
             },
             openContainer: (pos) => {
                 try {
-                    sim.interactWithBlock?.(this.bot.terrain.block({ x: pos.x, y: pos.y, z: pos.z }));
+                    const chest = this.bot.terrain.handle({ x: pos.x, y: pos.y, z: pos.z });
+                    if (chest) sim.interactWithBlock?.(chest);
                     return true;
                 }
                 catch {
