@@ -188,7 +188,7 @@ export class NetherDirector {
             hasGravelNearby: this.checkGravelNearby(16),
             distanceToGravel: this.findGravelDistance(24) ?? 50,
             phase,
-            time: timeOfDay(this.sim),
+            time: timeOfDay(),
             distanceToLavaPool: lavaPool ? distance(lavaPool, this.sim.location) : 100,
             hostileCount: this.bot.terrain.threatInfo(this.sim, this.bot.owner()).count,
             netherRoute: this.currentRoute,

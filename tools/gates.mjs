@@ -6,6 +6,8 @@
 //   node tools/gates.mjs imports [scripts]              imports that point at files that do not exist
 //   node tools/gates.mjs components [scripts]           component member calls that resolve to nothing
 //   node tools/gates.mjs sim [scripts]                  raw avatar control outside scripts/sim
+//   node tools/gates.mjs api [scripts]                  engine members/enums/component ids vs the target API version
+//   node tools/gates.mjs scope [scripts]                engine work at module scope, before the world is loaded
 //
 // Each mode exits 0 when clean and 1 on findings (2 on a usage error), so
 // run-all.mjs can fail the run on any gate. The checks used to live in four
@@ -27,6 +29,93 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import { spawnSync } from "node:child_process";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { enumMembersOf, load, members } from "./api.mjs";
+
+/** Replace strings and comments with inert placeholders of equal shape. */
+function strip(src) {
+    let out = "";
+    let i = 0;
+    const n = src.length;
+    while (i < n) {
+        const c = src[i];
+        if (c === "/" && src[i + 1] === "/") {
+            const start = i;
+            while (i < n && src[i] !== "\n") i++;
+            // Keep the exemption marker visible to the member-scope check.
+            if (/undef-ok/.test(src.slice(start, i)))
+                out += " undef-ok";
+            continue;
+        }
+        if (c === "/" && src[i + 1] === "*") {
+            const start = i;
+            i += 2;
+            while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+                if (src[i] === "\n")
+                    out += "\n"; // keep line numbers aligned
+                i++;
+            }
+            if (/undef-ok/.test(src.slice(start, i)))
+                out += " undef-ok";
+            i += 2;
+            continue;
+        }
+        // Regex literal: avoid treating /.../.test as division + name
+        if (c === "/" && !/[A-Za-z0-9_$)]/.test(out.trimEnd().slice(-1))) {
+            let j = i + 1;
+            let esc = false;
+            let inClass = false;
+            while (j < n) {
+                const ch = src[j];
+                if (!esc) {
+                    if (ch === "[" ) inClass = true;
+                    else if (ch === "]") inClass = false;
+                    else if (ch === "/" && !inClass) break;
+                    else if (ch === "\n") break;
+                }
+                esc = !esc && ch === "\\";
+                if (ch !== "\\") esc = ch === "\\" ? !esc : false;
+                // simpler escape tracking
+                if (src[j] === "\\") { j++; if (j < n) j++; continue; }
+                j++;
+            }
+            if (j < n && src[j] === "/") {
+                // consume flags
+                j++;
+                while (j < n && /[gimsuy]/.test(src[j])) j++;
+                out += '""';
+                i = j;
+                continue;
+            }
+        }
+        if (c === '"' || c === "'") {
+            i++;
+            while (i < n && src[i] !== c) {
+                if (src[i] === "\\") i++;
+                i++;
+            }
+            i++;
+            out += '""';
+            continue;
+        }
+        if (c === "`") {
+            i++;
+            let depth = 0;
+            while (i < n) {
+                if (src[i] === "\\") { i += 2; continue; }
+                if (src[i] === "$" && src[i + 1] === "{") { depth++; i += 2; continue; }
+                if (depth > 0 && src[i] === "}") { depth--; i++; continue; }
+                if (depth === 0 && src[i] === "`") break;
+                i++;
+            }
+            i++;
+            out += '""';
+            continue;
+        }
+        out += c;
+        i++;
+    }
+    return out;
+}
 
 function undefGate(root) {
     const BUILTINS = new Set([
@@ -43,91 +132,7 @@ function undefGate(root) {
         "import", "export", "from", "as", "static", "get", "set",
     ]);
 
-    /** Replace strings and comments with inert placeholders of equal shape. */
-    function strip(src) {
-        let out = "";
-        let i = 0;
-        const n = src.length;
-        while (i < n) {
-            const c = src[i];
-            if (c === "/" && src[i + 1] === "/") {
-                const start = i;
-                while (i < n && src[i] !== "\n") i++;
-                // Keep the exemption marker visible to the member-scope check.
-                if (/undef-ok/.test(src.slice(start, i)))
-                    out += " undef-ok";
-                continue;
-            }
-            if (c === "/" && src[i + 1] === "*") {
-                const start = i;
-                i += 2;
-                while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-                    if (src[i] === "\n")
-                        out += "\n"; // keep line numbers aligned
-                    i++;
-                }
-                if (/undef-ok/.test(src.slice(start, i)))
-                    out += " undef-ok";
-                i += 2;
-                continue;
-            }
-            // Regex literal: avoid treating /.../.test as division + name
-            if (c === "/" && !/[A-Za-z0-9_$)]/.test(out.trimEnd().slice(-1))) {
-                let j = i + 1;
-                let esc = false;
-                let inClass = false;
-                while (j < n) {
-                    const ch = src[j];
-                    if (!esc) {
-                        if (ch === "[" ) inClass = true;
-                        else if (ch === "]") inClass = false;
-                        else if (ch === "/" && !inClass) break;
-                        else if (ch === "\n") break;
-                    }
-                    esc = !esc && ch === "\\";
-                    if (ch !== "\\") esc = ch === "\\" ? !esc : false;
-                    // simpler escape tracking
-                    if (src[j] === "\\") { j++; if (j < n) j++; continue; }
-                    j++;
-                }
-                if (j < n && src[j] === "/") {
-                    // consume flags
-                    j++;
-                    while (j < n && /[gimsuy]/.test(src[j])) j++;
-                    out += '""';
-                    i = j;
-                    continue;
-                }
-            }
-            if (c === '"' || c === "'") {
-                i++;
-                while (i < n && src[i] !== c) {
-                    if (src[i] === "\\") i++;
-                    i++;
-                }
-                i++;
-                out += '""';
-                continue;
-            }
-            if (c === "`") {
-                i++;
-                let depth = 0;
-                while (i < n) {
-                    if (src[i] === "\\") { i += 2; continue; }
-                    if (src[i] === "$" && src[i + 1] === "{") { depth++; i += 2; continue; }
-                    if (depth > 0 && src[i] === "}") { depth--; i++; continue; }
-                    if (depth === 0 && src[i] === "`") break;
-                    i++;
-                }
-                i++;
-                out += '""';
-                continue;
-            }
-            out += c;
-            i++;
-        }
-        return out;
-    }
+
 
     function addIdentifiers(set, chunk) {
         for (const name of chunk.split(/[^A-Za-z0-9_$]+/)) {
@@ -174,13 +179,35 @@ function undefGate(root) {
             addIdentifiers(defined, m[2]);
         }
         // for (const x of y) / for (x of y) / for (x in y)
-        for (const m of src.matchAll(/for\s*\(\s*(?:const|let|var\s+)?([A-Za-z_$][\w$]*)\s+(?:of|in)\s/g))
+        for (const m of src.matchAll(/for\s*\(\s*(?:const|let|var)\s*([A-Za-z_$][\w$]*)\s+(?:of|in)\s/g))
             defined.add(m[1]);
+        // for (const [a, b] of y) / for (const {a, b} of y)
+        for (const m of src.matchAll(/for\s*\(\s*(?:const|let|var)\s*[\[{]([^\]}]*)[\]}]\s+(?:of|in)\s/g))
+            addIdentifiers(defined, m[1].replace(/:/g, ","));
         // catch (e)
         for (const m of src.matchAll(/catch\s*\(\s*([A-Za-z_$][\w$]*)/g))
             defined.add(m[1]);
 
         const findings = [];
+        // Bare identifier used as a receiver (`world.getTimeOfDay()`): it must be
+        // imported, declared or a JS global, or the line throws a ReferenceError
+        // the moment it runs.
+        for (const m of src.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\.\s*[A-Za-z_$]/g)) {
+            const name = m[1];
+            if (defined.has(name) || BUILTINS.has(name))
+                continue;
+            const lineStart = src.lastIndexOf("\n", m.index) + 1;
+            let lineEnd = src.indexOf("\n", m.index);
+            if (lineEnd === -1) lineEnd = src.length;
+            const line = src.slice(lineStart, lineEnd);
+            if (/undef-ok/.test(line))
+                continue;
+            findings.push({
+                line: src.slice(0, m.index).split("\n").length,
+                name,
+                text: line.trim().slice(0, 100),
+            });
+        }
         for (const m of src.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) {
             const name = m[1];
             if (defined.has(name) || BUILTINS.has(name)) continue;
@@ -541,12 +568,198 @@ function simGate(dir) {
     return 0;
 }
 
-const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate, components: componentGate, sim: simGate };
-const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts", components: "scripts", sim: "scripts" };
+/**
+ * Engine API gate: every member access, enum member and component id the pack
+ * uses must exist in the typings of the API version this manifest targets
+ * (tools/api-surface.json, distilled from @minecraft/server 2.3.0-beta and
+ * @minecraft/server-gametest 1.0.0-beta on engine 1.21.114).
+ *
+ * The other gates check the pack against itself. This one checks it against the
+ * engine, because that is where a whole class of silent failure lives:
+ * `sim.isSprint` instead of `isSprinting`, an enum member that does not exist
+ * in this API version, or a component id spelled differently are invisible
+ * offline - they are either a no-op inside a try/catch or a crash at the exact
+ * moment the bot depends on the value.
+ *
+ * Reads and writes are both covered: `sim.<member>` must be a real member of
+ * SimulatedPlayer (own or inherited), so the check also protects fields the
+ * driver only ever sets.
+ */
+const API_RECEIVERS = {
+    // Dotted entries are Object.assign-style receivers on another engine object.
+    // A typo in an event name is invisible at runtime - the subscription simply
+    // never fires - so these are worth checking even though there are few.
+    "world.afterEvents": "WorldAfterEvents",
+    "world.beforeEvents": "WorldBeforeEvents",
+    "system.afterEvents": "SystemAfterEvents",
+    "system.beforeEvents": "SystemBeforeEvents",
+    sim: "SimulatedPlayer",
+    world: "World",
+    system: "System",
+    dimension: "Dimension",
+    dim: "Dimension",
+    owner: "Player",
+    player: "Player",
+    container: "Container",
+    stack: "ItemStack",
+    // Deliberately NOT mapped: `block` holds a block-id *string* in this pack
+    // (isWoodRequest(block), mission.block, MINE[block]); it is never a Block
+    // object, so mapping it would only ever produce false positives. Engine
+    // Block values are read through locals with their own names (b, bb, pad).
+
+};
+/** Members every JS value has, so they are absent from the typings. */
+const JS_MEMBERS = new Set(["toString", "valueOf", "constructor", "hasOwnProperty", "isPrototypeOf", "then"]);
+
+function apiGate(dir) {
+    const surface = load();
+    const memberCache = new Map();
+    const memberSet = (cls) => {
+        if (!memberCache.has(cls))
+            memberCache.set(cls, new Set(members(surface, cls)));
+        return memberCache.get(cls);
+    };
+    const components = new Set(surface.components);
+    const enumCache = new Map();
+    const enumOf = (name) => {
+        if (!enumCache.has(name))
+            enumCache.set(name, enumMembersOf(surface, name));
+        return enumCache.get(name);
+    };
+    const version = surface.source;
+
+    let bad = 0;
+    let files = 0;
+    let checked = 0;
+    for (const file of collectJs(dir)) {
+        files++;
+        const raw = readFileSync(file, "utf8");
+        const src = strip(raw);
+        const rel = relative(dir, file).split("\\").join("/");
+        const report = (index, what, basis = src, text = src) => {
+            const line = basis.slice(0, index).split("\n").length;
+            const body = text.slice(index).split("\n")[0].trim().slice(0, 90);
+            console.error(`${rel}:${line}: ${what}\n    ${body}`);
+            bad++;
+        };
+        // 1. member access on an engine receiver, both `this.sim.x` and `sim.x`
+        for (const [name, cls] of Object.entries(API_RECEIVERS)) {
+            for (const prefix of ["\\.", "(?<![\\w$.])"]) {
+                const re = new RegExp(prefix + name.replace(/\./g, "\\.") + "(\\??\\.)([A-Za-z_$][\\w$]*)", "g");
+                for (const m of src.matchAll(re)) {
+                    const member = m[2];
+                    if (JS_MEMBERS.has(member))
+                        continue;
+                    checked++;
+                    if (!memberSet(cls).has(member))
+                        report(m.index, `${name}.${member} is not a member of ${cls} (${version})`);
+                }
+            }
+        }
+        // 2. enum members
+        for (const m of src.matchAll(/(?<![\w$.])([A-Z][\w$]*)(\??\.)([A-Za-z_$][\w$]*)/g)) {
+            const values = enumOf(m[1]);
+            if (!values)
+                continue;
+            checked++;
+            if (!(m[3] in values))
+                report(m.index, `${m[1]}.${m[3]} is not a member of that enum (${version})`);
+        }
+        // 3. component ids - read from the raw text, since strip() blanks strings
+        for (const m of raw.matchAll(/getComponent\(\s*"([^"]+)"/g)) {
+            checked++;
+            if (!components.has(m[1]))
+                report(m.index, `getComponent("${m[1]}") is not a component id in this API version`, raw, src);
+        }
+    }
+    if (bad) {
+        console.error(`\napi: FAIL - ${bad} engine API mismatch(es) across ${files} files (${checked} checked)`);
+        return 1;
+    }
+    console.log(`api: OK - ${checked} engine references match ${version}`);
+    return 0;
+}
+
+/**
+ * Script API 2.x runs every module body BEFORE the world is loaded. `world` is
+ * importable at that point but not awake: dimensions, time, entities and
+ * dynamic properties either throw or answer nothing, so anything done here that
+ * touches the world is a silent no-op (the constructor of a class built at
+ * module scope counts too). The only module-scope engine work that is both
+ * legal and necessary is registration:
+ *
+ *   * `x.afterEvents.E.subscribe(...)` / `x.beforeEvents.E.subscribe(...)` -
+ *     subscribing early is how a pack hears `worldLoad` at all;
+ *   * `system.run / runInterval / runTimeout / runJob / clearRun` - scheduling
+ *     needs no loaded world.
+ *
+ * Real work belongs in a `world.afterEvents.worldLoad.subscribe(...)` body, as
+ * the Bedrock wiki's Script API 2.0.0 section describes.
+ */
+function scopeGate(dir) {
+    const names = [...new Set(Object.keys(API_RECEIVERS).map((k) => k.split(".")[0]))].join("|");
+    const RECEIVER = new RegExp(`(?<![\\w$.])(${names})(\\??\\.)`, "g");
+    const ALLOWED = [
+        /\.(?:afterEvents|beforeEvents)\.[A-Za-z_$][\w$]*\s*\.\s*subscribe\s*\(/,
+        /\bsystem\s*\.\s*(?:run|runInterval|runTimeout|runJob|clearRun)\s*\(/,
+    ];
+
+    let bad = 0;
+    let files = 0;
+    let checked = 0;
+    for (const file of collectJs(dir)) {
+        files++;
+        const src = strip(readFileSync(file, "utf8"));
+        const rel = relative(dir, file).split("\\").join("/");
+        const lines = src.split("\n");
+        let depth = 0;
+        for (let n = 0; n < lines.length; n++) {
+            const line = lines[n];
+            if (depth === 0) {
+                for (const m of line.matchAll(RECEIVER)) {
+                    checked++;
+                    // The statement the receiver belongs to, so that a call
+                    // spread over several lines is judged as one thing.
+                    let stmt = "";
+                    for (let k = n; k < Math.min(lines.length, n + 4); k++) {
+                        stmt += k === n ? lines[k].slice(m.index) : lines[k];
+                        if (stmt.includes(";"))
+                            break;
+                    }
+                    if (ALLOWED.some((re) => re.test(stmt)))
+                        continue;
+                    console.error(`${rel}:${n + 1}: ${m[1]} is used at module scope, before the world is loaded\n    ${line.trim().slice(0, 90)}`);
+                    bad++;
+                }
+            }
+            for (const ch of line) {
+                if (ch === "{" || ch === "(" || ch === "[")
+                    depth++;
+                else if (ch === "}" || ch === ")" || ch === "]")
+                    depth--;
+            }
+        }
+        // Never report a clean file that could not be read: an unbalanced copy
+        // means the depth model is wrong, so every line in it was judged blind.
+        if (depth !== 0) {
+            console.error(`${rel}: could not analyse - bracket depth ends at ${depth}, not 0`);
+            bad++;
+        }
+    }
+    if (bad) {
+        console.error(`\nscope: FAIL - ${bad} module-scope engine use(s) across ${files} files`);
+        return 1;
+    }
+    console.log(`scope: OK - module scope only registers handlers across ${files} files (${checked} engine references, all subscriptions or scheduling)`);
+    return 0;
+}
+
+const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate, components: componentGate, sim: simGate, api: apiGate, scope: scopeGate };
+const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts", components: "scripts", sim: "scripts", api: "scripts", scope: "scripts" };
 
 const mode = process.argv[2];
 if (!MODES[mode]) {
-    console.error("usage: node tools/gates.mjs <parse|link|undef|imports|components|sim> [root]");
+    console.error("usage: node tools/gates.mjs <parse|link|undef|imports|components|sim|api|scope> [root]");
     process.exit(2);
 }
 const root = process.argv[3] ?? DEFAULT_ROOT[mode];

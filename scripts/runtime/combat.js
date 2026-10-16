@@ -326,7 +326,7 @@ export class Combat {
 
         // Check if on fire - need water or retreat
         try {
-            if (this.sim.isOnFire) {
+            if (this.bot.avatar.burning) {
                 const hasWater = this.bag.find(s => s.typeId === "minecraft:water_bucket") >= 0;
                 if (hasWater && tick - this.waterPlaced > 100) {
                     this.placeWater(tick);

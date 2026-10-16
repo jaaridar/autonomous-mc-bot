@@ -1,3 +1,4 @@
+import { world } from "@minecraft/server";
 import { CARDINAL, COMPASS, DOWN, UP, add, distance, floor, key } from "../core/math.js";
 import { EXPLOSIVE, HAZARDS, HOSTILES, RANGED, standable, threatRank } from "../core/world.js";
 const THREAT_RADIUS = 18;
@@ -543,9 +544,12 @@ export class RollingSweep {
  * Shared by every director that reasons about night (they each carried an
  * identical private copy).
  */
-export function timeOfDay(sim) {
+export function timeOfDay() {
     try {
-        const tod = sim.dimension.getTimeOfDay ? sim.dimension.getTimeOfDay() : 0;
+        // World.getTimeOfDay() is the API this version has - Dimension has no
+        // getTimeOfDay(), so the old `sim.dimension.getTimeOfDay ? ... : 0`
+        // always answered 0 and every caller was told it was daytime.
+        const tod = world.getTimeOfDay();
         if (tod >= 12000 && tod < 13000)
             return "sunset";
         if (tod >= 13000 && tod < 23000)

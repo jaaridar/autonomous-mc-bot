@@ -155,7 +155,7 @@ export class VillageDirector {
             hasFuel,
             hasMinimumEquipment: hasWood && (hasFood || foodAmount >= 3),
             phase,
-            time: timeOfDay(this.sim),
+            time: timeOfDay(),
             distanceToSheep: sheepNearby ? distance(sheepNearby.pos, this.sim.location) : 100,
             sheepCount: sheepNearby ? 1 : 0,
             hasVillage: null, // avoid recursive expensive scan in buildContext
@@ -555,7 +555,7 @@ export class GolemDirector {
             hasWaterBucket,
             otherHostileCount,
             hasVillage,
-            time: timeOfDay(this.sim),
+            time: timeOfDay(),
             saferFasterRouteAvailable: saferFasterRoute,
             hasFurnace: (counts["minecraft:furnace"] ?? 0) > 0
         };

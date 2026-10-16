@@ -5,7 +5,8 @@
 //   2. Runs every gate in order; a non-zero exit from a real gate fails the
 //      run.
 //   3. Runs the deliberately broken fixtures in tools/selftest and REQUIRES
-//      them to fail - that proves the no-undef gate still catches bugs.
+//      them to fail - that proves the no-undef and module-scope gates still
+//      catch bugs rather than just passing.
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -25,10 +26,13 @@ const steps = [
     { name: "import scan", file: "gates.mjs", args: ["imports"] },
     { name: "component-method gate (member calls that resolve to nothing)", file: "gates.mjs", args: ["components"] },
     { name: "avatar boundary (only scripts/sim drives the simulated player)", file: "gates.mjs", args: ["sim"] },
+    { name: "engine API conformance (members, enums, component ids vs the target API version)", file: "gates.mjs", args: ["api"] },
+    { name: "module-scope gate (no world work before worldLoad)", file: "gates.mjs", args: ["scope"] },
     { name: "unit tests (memory schema, capabilities, walkable guard, drop flush)", file: "tests.mjs" },
     { name: "sim tests (avatar driver + movement policy against a behavioural fake)", file: "sim.test.mjs" },
     { name: "perf/efficiency tests (native-call budgets)", file: "perf.test.mjs" },
     { name: "no-undef gate catches its fixtures (expected to fail)", file: "gates.mjs", args: ["undef", "tools/selftest"], mustFail: true },
+    { name: "module-scope gate catches its fixture (expected to fail)", file: "gates.mjs", args: ["scope", "tools/selftest"], mustFail: true },
 ];
 
 let failed = 0;

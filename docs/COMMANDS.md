@@ -6,10 +6,9 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 
 | Command | What it does |
 |---|---|
-| `!bot init` | Optional. Previews the remote GameTest host site (about 4096 blocks away, kept loaded by a ticking area). Nothing is placed yet. |
-| `!bot init confirm` | Optional. Creates/updates the host early. `!bot spawn` does this automatically on first use. |
-| `!bot spawn` | One-command setup: brings host up if needed, then spawns \"Verdant\" simulated player two blocks from you and starts working by itself (starter kit when unequipped, then auto survival). If a previous session/script reload left the Verdant player online without its brain, spawn takes that one over instead (position and inventory kept; use `!bot remove` first for a fresh body). Restores remembered settings/base/spots. |
-| `!bot host` | Shows host status (running/pending/position/stored anchor). |
+| `!bot init` | Informational. There is no setup step any more - the engine spawns the simulated player directly, so `!bot spawn` is all that is needed. |
+| `!bot spawn` | Spawns a \"Verdant\" simulated player two blocks from you and starts it working by itself (starter kit when unequipped, then auto survival). If a previous session, script reload or crash left the Verdant player online without its brain, spawn takes that one over instead (position and inventory kept; use `!bot remove` first for a fresh body). Restores remembered settings/base/spots. |
+| `!bot host` | Shows the raw host status: whether a simulated player is live, where it is, its spawn point, and whether an upgraded world still carries the v1.2.x remote-host anchor (cleared on the next spawn). |
 | `!bot remove` | Disconnects the bot. Refuses while it holds items, equipment, or a tracked furnace has contents. Deposits first. |
 | `!bot journal` | Prints the last saved status/journal document (includes advanced stats). |
 | `!bot memory` | Prints the persistent memory summary (home, death point, known spots, stored settings). |
@@ -18,9 +17,9 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 
 | Command | What it does |
 |---|---|
-| `!bot follow` | Follows the owner (leash 3). Uses advanced parkour: 1-gap, 2-gap sprint jumps, jump-up, big drops, bridging, pillaring. |
+| `!bot follow` | Follows the owner (leash 3). The engine's pathfinder does the walking: it climbs, jumps gaps, opens doors and swims. The pack adds the engine cannot know - refuse hazards and unsafe starts, bridge or pillar when allowed, stop and report instead of grinding. |
 | `!bot guard` | Holds position at anchor where mode started (leash 2). Camps at night. |
-| `!bot goto x y z` | Paths to coordinates with advanced navigation, stops on arrival. Handles water via boat, gaps via bridge. |
+| `!bot goto x y z` | Paths to coordinates with the engine's navigator, stops on arrival. Water goes through the boat path, a stall through one bridging attempt, a hazard is refused. |
 | `!bot range 32..4096` | Sets exploration home radius (default 256). |
 | `!bot base [clear]` | Sets remembered base to bot's current spot (persists across sessions). `clear` forgets it. |
 
@@ -66,7 +65,7 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 | `camp` | on | Night camping (bed or dug-in shelter) while idle/guarding/survival/mine/speedrun. |
 | `pickup` | on | While idle, walk over and pick up loose drops within 8 blocks (never hazards). Also opportunistic high-value gathering. |
 | `fast` | on | Sprint when safe, always when urgent (fleeing/combat). |
-| `parkour` | on | Advanced parkour: 1-block gap, 2-block sprint gap, jump-up, big drops (3 blocks), bridging awareness. |
+| `parkour` | on | Allow the driver's verified straight-line shortcut for short, clear walks (under 6 blocks, line checked). Off = every walk is real engine navigation. The engine's pathfinder handles climbing, gap jumps and drops either way. |
 | `hunting` | on | Forager may hunt animals for food; while roaming, bot chops nearby trees for logs and hunts sheep for wool/mutton. |
 | `armor` | on | Auto-equip better armour. |
 | `bridge` | on | Allow builder to bridge gaps and pillar out (Navigator + Escaper + Builder). |

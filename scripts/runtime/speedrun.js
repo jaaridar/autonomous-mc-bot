@@ -301,7 +301,7 @@ export class SpeedrunDirector {
             hasGravelNearby: this.checkGravelNearby(16),
             distanceToGravel: this.findGravelDistance(24) ?? 50,
             phase: this.phaseName(),
-            time: timeOfDay(this.bot.sim),
+            time: timeOfDay(),
             hostileCount,
             netherRoute: this.currentRoute,
             health: b.sim.getComponent("minecraft:health")?.currentValue ?? 20,

@@ -1,8 +1,8 @@
 // Movement policy on top of the avatar driver.
 //
 // This used to be a rolling-horizon A* with its own step/edge model, parkour
-// planner, bridging planner and jump/sprint execution - about 1,200 lines
-// across this file and core/navigation.js. The engine already ships a
+// planner, bridging planner and jump/sprint execution - about 1,200 lines.
+// The engine already ships a
 // pathfinder for simulated players (navigateToLocation / navigateToBlock route
 // around obstacles, climb, open doors and swim; moveToLocation is the straight
 // line), so the pack now uses it and keeps only the policy the engine cannot
@@ -29,6 +29,12 @@ export class Navigator {
         this.terrain = terrain;
         // Flags the rest of the pack sets (kept as the same public surface).
         this.fast = false;
+        /**
+         * `!bot config parkour on|off`. The engine's pathfinder does the actual
+         * parkour (climbing, gap jumps, doors, swimming); this flag only allows
+         * the driver's verified straight-line shortcut for short, clear walks.
+         * Off = every walk is a real engine navigation.
+         */
         this.parkour = true;
         this.allowBridge = false;
         this.allowWater = false;   // callers that own water handling turn this on
@@ -64,13 +70,13 @@ export class Navigator {
      * conditions, so no caller had to change.
      */
     go(goal, tick) {
-        const sim = this.avatar;
+        const avatar = this.avatar;
         this.target = { ...goal };
         this.lastGoal = { ...goal };
-        if (sim.inWater && !this.allowWater) {
+        if (avatar.inWater && !this.allowWater) {
             return this.fail("In water, need boat or swim to shore - water navigation");
         }
-        const start = sim.cell;
+        const start = avatar.cell;
         if (!this.terrain.safe(start) && !this.terrain.safe({ x: start.x, y: start.y - 1, z: start.z })) {
             if (this.terrain.waterNear(start)) {
                 return this.fail("Start in water or unsafe, need boat/bridge - water detected");
@@ -83,7 +89,7 @@ export class Navigator {
             const flee = this.flee(tick);
             if (flee) return flee;
         }
-        const result = sim.goto(goal, { leash: LEASH, speed: this.fast ? 1 : 0.85, allowWater: this.allowWater });
+        const result = avatar.goto(goal, { leash: LEASH, speed: this.fast ? 1 : 0.85, allowWater: this.allowWater, allowHop: this.parkour });
         if (result === DONE) {
             this.done++;
             this.reason = "";
@@ -92,13 +98,13 @@ export class Navigator {
             return "done";
         }
         if (result === RUNNING) {
-            if (sim.navPartial && this.reason !== "Partial path; still trying.") {
+            if (avatar.navPartial && this.reason !== "Partial path; still trying.") {
                 this.reason = "Partial path; still trying.";
             }
             return "running";
         }
         // FAILED: either the engine refused the goal, or the walk stalled.
-        if (sim.isStuck) {
+        if (avatar.isStuck) {
             this.stuck = true;
             this.expansions++;
             if (this.allowBridge && this.builder) {
@@ -106,7 +112,7 @@ export class Navigator {
                 if (bridged) return "running";
             }
         }
-        this.reason = sim.reason || "Path failed.";
+        this.reason = avatar.reason || "Path failed.";
         return "failed";
     }
 
@@ -133,26 +139,26 @@ export class Navigator {
      * nowhere to run, so the normal goal path still runs.
      */
     flee(tick) {
-        const sim = this.avatar;
+        const avatar = this.avatar;
         let near;
         for (const a of this.avoid) {
-            const d = horizontal(sim.pos, a);
+            const d = horizontal(avatar.pos, a);
             if (d < (a.radius ?? 6) && (!near || d < near.d)) near = { a, d };
         }
         if (!near) return undefined;
-        let dx = sim.pos.x - near.a.x, dz = sim.pos.z - near.a.z;
+        let dx = avatar.pos.x - near.a.x, dz = avatar.pos.z - near.a.z;
         let len = Math.hypot(dx, dz);
         if (len < 0.001) {
             // A threat exactly on top of us leaves no "away" vector: take the
             // first safe cardinal side instead of standing still.
-            const side = CARDINAL.find((c) => this.terrain.safe({ x: sim.cell.x + c.x, y: sim.cell.y, z: sim.cell.z + c.z }));
+            const side = CARDINAL.find((c) => this.terrain.safe({ x: avatar.cell.x + c.x, y: avatar.cell.y, z: avatar.cell.z + c.z }));
             if (!side) return undefined;
             dx = side.x;
             dz = side.z;
             len = 1;
         }
-        const step = { x: sim.pos.x + (dx / len) * 5, y: sim.pos.y, z: sim.pos.z + (dz / len) * 5 };
-        const r = sim.goto(step, { leash: 2, speed: 1 });
+        const step = { x: avatar.pos.x + (dx / len) * 5, y: avatar.pos.y, z: avatar.pos.z + (dz / len) * 5 };
+        const r = avatar.goto(step, { leash: 2, speed: 1 });
         if (r === DONE) { this.reset(); return "done"; }
         if (r === RUNNING) return "running";
         return undefined;

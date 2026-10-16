@@ -1,20 +1,22 @@
 import { Arbiter, DEFERRED } from "../scripts/core/arbiter.js";
-import { BlockScan, RollingSweep, Terrain } from "../scripts/runtime/world.js";
+import { BlockScan, RollingSweep, Terrain } from "./load/scripts/runtime/world.js";
 import { Bag } from "./load/scripts/runtime/inventory.js";
 // Ultra-efficiency regression suite.
 //
-// Proves the lag fixes are real AND behaviour-preserving, offline:
-//   * A* neighbour generation is equivalent to the frozen v1.2.4 search
-//     (fuzzed on random worlds), minus the bogus "big gap" candidates on
-//     solid ground, and expands fewer nodes / does fewer block reads.
-//   * Terrain answers repeated environment queries from cache (native
-//     getBlock / property reads counted on a fake dimension).
+// Proves the efficiency work is real AND behaviour-preserving, offline:
+//   * Terrain answers repeated environment queries from cache (native getBlock
+//     and property reads counted on a fake dimension) and the caches stay
+//     bounded, so a long session cannot grow them without limit.
 //   * threatInfo() runs one entity query per tick no matter how many callers.
-//   * Bag reads the inventory once per tick and never selects a slot when
-//     only asked "do I have a tool?".
+//   * Bag reads the inventory once per tick and never selects a slot when only
+//     asked "do I have a tool?".
 //   * The arbiter no longer ticks mission/combat/escape with wrong arguments
 //     (which reset the navigator every 5 ticks) and never double-evaluates.
-//   * Navigator uses the reduced budgets and walks short clear hops directly.
+//   * BlockScan/RollingSweep stay within their native-read budgets.
+//
+// The old A* equivalence suite went with the hand-rolled pathfinder: the engine
+// owns pathfinding now (navigateTo*), and driver behaviour is covered by
+// tools/sim.test.mjs instead.
 //
 // Runtime modules that import @minecraft/* are loaded from tools/load (the
 // stubbed copy rebuilt by run-all.mjs); pure modules from scripts/.

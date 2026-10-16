@@ -223,6 +223,26 @@ const setup = (opts = {}, overrides = {}) => {
     ok(done, "goto: reports done once inside the leash");
     ok(sim.stops.moving >= 1, "goto: arrival stops the engine's movement");
 }
+
+// ------------------------------------------------- parkour flag (allowHop off)
+{
+    // `!bot config parkour off` must mean something: no straight-line shortcut,
+    // every walk is real engine navigation.
+    const { avatar, sim } = setup();
+    sim.location = { x: 0.5, y: 1, z: 0.5 };
+    for (let t = 1; t <= 40; t++)
+        avatar.sync(t), avatar.goto({ x: 0.5, y: 1, z: 3.5 }, { allowHop: false }), sim.engineTick();
+    ok(sim.moveCalls.length === 0, `goto: parkour off never uses the moveToLocation shortcut (${sim.moveCalls.length})`);
+    ok(sim.navCalls.length === 1, `goto: parkour off routes the same short walk through the pathfinder (${sim.navCalls.length})`);
+}
+{
+    // The shortcut is the default: a plain caller is unaffected.
+    const { avatar, sim } = setup();
+    sim.location = { x: 0.5, y: 1, z: 0.5 };
+    for (let t = 1; t <= 40; t++)
+        avatar.sync(t), avatar.goto({ x: 0.5, y: 1, z: 3.5 }, { allowHop: true }), sim.engineTick();
+    ok(sim.moveCalls.length === 1 && sim.navCalls.length === 0, "goto: allowHop on keeps the short-hop shortcut");
+}
 {
     const { avatar, sim } = setup();
     for (let t = 1; t <= 20; t++) { avatar.sync(t); avatar.goto({ x: 60.5, y: 1, z: 60.5 }); sim.engineTick(); }

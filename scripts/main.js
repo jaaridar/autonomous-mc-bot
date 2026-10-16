@@ -424,6 +424,8 @@ world.afterEvents.playerLeave.subscribe((e) => {
 });
 system.runInterval(() => bot?.tick(), 1);
 world.afterEvents.worldLoad.subscribe(() => {
+    // The first moment this pack may touch the world at all (Script API 2.x).
+    host.checkLegacy();
     console.warn("[Verdant] loaded. Type !bot spawn to bring the bot in, !bot help for commands.");
-    world.sendMessage("§a[Verdant] v1.2.7 speedrun-fix + ultra-efficient survival-master 80 scenarios - !bot spawn to begin. Handles all falls, night mobs, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, quick tool #1.");
+    world.sendMessage("§a[Verdant] v1.2.7 ready - !bot spawn to bring in a simulated player, !bot help for every command. Owner-gated: follow/guard, mining and deep mining, crafting, smelting, chests, exploring, night camping, combat support and death recovery.");
 });

@@ -1,7 +1,7 @@
 
 import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor } from "../core/math.js";
 import { assessFallDepth, composeCapabilities, detectScenario, multiRiskPriority, shouldRecalculateAdaptive } from "../core/survival.js";
-import { Direction } from "@minecraft/server";
+import { Direction, world } from "@minecraft/server";
 import { findBoat } from "./world.js";
 /**
  * Survival Master - world-class handler for all 80 bedrock.dev scenarios.
@@ -106,7 +106,7 @@ export class SurvivalMaster {
         // Time detection
         let time = "day";
         try {
-            const tod = sim.dimension.getTimeOfDay ? sim.dimension.getTimeOfDay() : 0;
+            const tod = world.getTimeOfDay();
             // 0-12000 day, 12000-13000 sunset, 13000-23000 night, 23000-24000 sunrise
             if (tod >= 12000 && tod < 13000) time = "sunset";
             else if (tod >= 13000 && tod < 23000) time = "night";

@@ -34,7 +34,6 @@ export class Host {
         this.at = undefined;
         /** True when an upgrade from v1.2.x left the old remote host behind. */
         this.legacy = false;
-        this.checkLegacy();
     }
 
     /**
@@ -42,6 +41,14 @@ export class Host {
      * saved anchor in `verdant:remote_host`. Neither is used any more. The
      * property is dropped here; the ticking area needs a dimension, so it is
      * removed on the next spawn (retireLegacyArea).
+     *
+     * This deliberately does NOT run in the constructor. Script API 2.x
+     * evaluates module bodies before the world is loaded, where dynamic
+     * properties are not readable - the read would throw, the migration would
+     * look "already done" and an upgraded world would keep its stale anchor for
+     * ever. It is called where the world is known to be awake (main.js on
+     * worldLoad) and again before the first spawn. Returns true once the check
+     * could actually run.
      */
     checkLegacy() {
         let stored;
@@ -49,10 +56,10 @@ export class Host {
             stored = world.getDynamicProperty("verdant:remote_host");
         }
         catch {
-            return;   // dynamic properties unavailable: nothing to migrate
+            return false;   // world not awake yet: the worldLoad hook retries
         }
         if (typeof stored !== "string")
-            return;
+            return true;
         this.legacy = true;
         try {
             world.setDynamicProperty("verdant:remote_host", undefined);
@@ -60,6 +67,7 @@ export class Host {
         catch (e) {
             console.warn(`[Verdant] Could not clear the old remote-host anchor: ${e}`);
         }
+        return true;
     }
 
     /** Best effort: an upgraded world should not keep a needless loaded chunk. */
@@ -92,6 +100,7 @@ export class Host {
     spawn(player) {
         if (typeof spawnSimulatedPlayer !== "function")
             throw Error("This engine build cannot spawn a simulated player: @minecraft/server-gametest 1.0.0-beta on engine 1.21.114 or newer is required.");
+        this.checkLegacy();
         const base = floor(player.location);
         const terrain = new Terrain(player.dimension);
         const at = CARDINAL

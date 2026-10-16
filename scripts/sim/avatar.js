@@ -116,6 +116,19 @@ export class Avatar {
         return this;
     }
 
+    /**
+     * Am I on fire? `Entity.isOnFire` does not exist in the API version this
+     * pack targets (verified against its typings), so read the component that
+     * does - the old `sim.isOnFire` check was always undefined, which meant a
+     * burning bot never put itself out.
+     */
+    get burning() {
+        return this.guard("onfire", () => {
+            const c = this.sim.getComponent("minecraft:onfire");
+            return (c?.onFireTicksRemaining ?? 0) > 0;
+        }, false);
+    }
+
     get cell() {
         return floor(this.pos);
     }
@@ -193,7 +206,11 @@ export class Avatar {
         return RUNNING;
     }
 
-    /** Start engine navigation, or a verified short hop when that is enough. */
+    /**
+     * Start engine navigation, or a verified short hop when that is enough.
+     * `opts.allowHop: false` forbids the straight-line shortcut (`!bot config
+     * parkour off`), so every walk goes through the engine's pathfinder.
+     */
     startNav(target, speed, opts) {
         this.navGoal = { ...target };
         this.navSince = this.tick;
@@ -203,7 +220,7 @@ export class Avatar {
         this.lastPos = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
         // Feet cell to goal cell: a body-line through the head can never be
         // "safe" (its support is the air the body stands in).
-        if (horizontal(this.pos, target) <= SHORT_HOP && this.lineClear(this.cell, floor(target))) {
+        if (opts.allowHop !== false && horizontal(this.pos, target) <= SHORT_HOP && this.lineClear(this.cell, floor(target))) {
             this.guard("moveToLocation", () => this.sim.moveToLocation(this.host.relative(center(target)), { faceTarget: true, speed }), undefined);
             return;
         }
