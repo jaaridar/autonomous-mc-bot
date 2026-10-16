@@ -300,6 +300,7 @@ export class Explorer {
         this.since = 0;
         this.turns = 0;
         this.trips = 0;
+        this.heading = undefined;
     }
     reset() {
         this.goal = undefined;
@@ -308,6 +309,7 @@ export class Explorer {
         if (this.goal && distance(this.goal, home) > range) {
             nav.reset();
             this.goal = undefined;
+            this.heading = undefined;
         }
         if (this.goal) {
             const result = nav.go(this.goal, tick);
@@ -317,8 +319,10 @@ export class Explorer {
             const v = this.visits.get(k);
             if (v) v.n++;
             else this.visits.set(k, { x: this.goal.x, y: this.goal.y, z: this.goal.z, n: 1 });
-            if (result !== "done")
-                this.blocked.set(k, tick + 1200);
+            if (result !== "done") {
+                this.blocked.set(k, tick + 600);
+                this.heading = undefined;
+            }
             this.goal = undefined;
             this.trips++;
             nav.reset();
@@ -327,7 +331,7 @@ export class Explorer {
         const origin = floor(position), options = [];
         this.turns++;
         for (let dir = 0; dir < 8; dir++)
-            for (const radius of [12, 20]) {
+            for (const radius of [20, 14]) {
                 const angle = (dir * Math.PI) / 4;
                 const x = Math.round(Math.cos(angle) * radius), z = Math.round(Math.sin(angle) * radius);
                 for (const y of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
@@ -336,28 +340,34 @@ export class Explorer {
                         (this.blocked.get(key(p)) ?? 0) > tick ||
                         !terrain.safe(p))
                         continue;
-                    // Visits keep parsed coordinates (this used to split+parse
-                    // every visit key for every candidate).
                     let penalty = 0;
                     for (const v of this.visits.values()) {
-                        if (distance(p, v) < 12)
-                            penalty += v.n * 20;
+                        if (distance(p, v) < 16)
+                            penalty += v.n * 40;
+                    }
+                    let turnDiff = 0;
+                    if (this.heading !== undefined) {
+                        const raw = Math.abs(dir - this.heading);
+                        turnDiff = Math.min(raw, 8 - raw);
                     }
                     options.push({
                         p,
+                        dir,
                         score: penalty +
+                            turnDiff * 6 +
                             Math.abs(y) * 2 +
-                            Math.abs(dir - (this.turns % 8)) * 0.35 +
-                            16 -
-                            radius,
+                            (20 - radius),
                     });
                     break;
                 }
             }
         options.sort((a, b) => a.score - b.score);
-        if (!options.length)
+        if (!options.length) {
+            this.heading = undefined;
             return "blocked";
+        }
         this.goal = options[0].p;
+        this.heading = options[0].dir;
         this.since = tick;
         if (this.visits.size > 96)
             this.visits.delete(this.visits.keys().next().value);

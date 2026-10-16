@@ -20,6 +20,7 @@ export const SPOT_KINDS = new Set([
     "furnace",
     "bed",
     "portal",
+    "village",
 ]);
 const DIM = /^minecraft:[a-z_]+$/;
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);

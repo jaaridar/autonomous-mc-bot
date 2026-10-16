@@ -1,0 +1,14 @@
+import V3 from "Helpers/Vectors/V3";
+import AbstractPathfindingTest from "./AbstractPathfindingTest";
+class BridgePathfindingTest extends AbstractPathfindingTest {
+    constructor(...args){
+        super(...args);
+        this.identifier = "bridge";
+        this.entityLocation = new V3(13, 13, 7);
+        this.primaryLocation = new V3(1, 13, 7);
+        this.isCoreTest = true;
+    }
+}
+export { BridgePathfindingTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkJyaWRnZVBhdGhmaW5kaW5nVGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgVjMgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9WM1wiO1xyXG5pbXBvcnQgQWJzdHJhY3RQYXRoZmluZGluZ1Rlc3QgZnJvbSBcIi4vQWJzdHJhY3RQYXRoZmluZGluZ1Rlc3RcIjtcclxuXHJcbmV4cG9ydCBkZWZhdWx0IGNsYXNzIEJyaWRnZVBhdGhmaW5kaW5nVGVzdCBleHRlbmRzIEFic3RyYWN0UGF0aGZpbmRpbmdUZXN0IHtcclxuICAgIHB1YmxpYyByZWFkb25seSBpZGVudGlmaWVyID0gXCJicmlkZ2VcIjtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBlbnRpdHlMb2NhdGlvbjogVjMgPSBuZXcgVjMoMTMsIDEzLCA3KTtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBwcmltYXJ5TG9jYXRpb246IFYzID0gbmV3IFYzKDEsIDEzLCA3KTtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBpc0NvcmVUZXN0OiBib29sZWFuID0gdHJ1ZTtcclxufVxyXG4iXSwibmFtZXMiOlsiVjMiLCJBYnN0cmFjdFBhdGhmaW5kaW5nVGVzdCIsIkJyaWRnZVBhdGhmaW5kaW5nVGVzdCIsImlkZW50aWZpZXIiLCJlbnRpdHlMb2NhdGlvbiIsInByaW1hcnlMb2NhdGlvbiIsImlzQ29yZVRlc3QiXSwibWFwcGluZ3MiOiJBQUFBLE9BQU9BLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLDZCQUE2Qiw0QkFBNEI7QUFFakQsTUFBTUMsOEJBQThCRDs7O2FBQy9CRSxhQUFhO2FBQ1ZDLGlCQUFxQixJQUFJSixHQUFHLElBQUksSUFBSTthQUNwQ0ssa0JBQXNCLElBQUlMLEdBQUcsR0FBRyxJQUFJO2FBQ3BDTSxhQUFzQjs7QUFDN0M7QUFMQSxTQUFxQkosbUNBS3BCIn0=

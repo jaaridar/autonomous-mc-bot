@@ -1,0 +1,40 @@
+import { ItemStack, TicksPerSecond } from "@minecraft/server";
+import { EmptyRoutine } from "BigBrain/Routines/EmptyRoutine";
+import V3 from "Helpers/Vectors/V3";
+import VirtualInventoryComponent from "Inventory/VirtualInventoryComponent";
+import AbstractTest from "Test/AbstractTest";
+class MergeStacksTest extends AbstractTest {
+    async run(test) {
+        super.run(test);
+        const aip = this.spawnAIP(test, new V3(1, 2, 1), {
+            root: EmptyRoutine
+        });
+        await test.idle(1);
+        // Give the AIP multiple partial stacks of the same item
+        const inv = VirtualInventoryComponent.get(aip);
+        inv.setSlot(0, new ItemStack("minecraft:cobblestone", 1));
+        inv.setSlot(1, new ItemStack("minecraft:cobblestone", 1));
+        inv.setSlot(2, new ItemStack("minecraft:cobblestone", 1));
+        inv.setSlot(3, new ItemStack("minecraft:iron_ingot", 63));
+        inv.setSlot(4, new ItemStack("minecraft:iron_ingot", 5));
+        inv.setSlot(5, new ItemStack("minecraft:iron_ingot", 10));
+        inv.setSlot(6, new ItemStack("minecraft:cobblestone", 64));
+        await test.idle(1 * TicksPerSecond);
+        // Merge stacks
+        inv.mergeAndCompact();
+        // Assert only 4 occupied slots remain
+        const occupiedSlots = inv.slots.filter((slot)=>slot !== undefined).length;
+        test.assert(occupiedSlots === 4, `Should have 4 occupied slots but has ${occupiedSlots}`);
+        test.succeed();
+    }
+    constructor(...args){
+        super(...args);
+        this.namespace = "inventory";
+        this.identifier = "merge_stacks";
+        this.structure = "grass";
+        this.maxTicks = 2 * TicksPerSecond;
+    }
+}
+export { MergeStacksTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIk1lcmdlU3RhY2tzVGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgeyBJdGVtU3RhY2ssIFRpY2tzUGVyU2Vjb25kIH0gZnJvbSBcIkBtaW5lY3JhZnQvc2VydmVyXCI7XHJcbmltcG9ydCB7IFRlc3QgfSBmcm9tIFwiQG1pbmVjcmFmdC9zZXJ2ZXItZ2FtZXRlc3RcIjtcclxuaW1wb3J0IHsgRW1wdHlSb3V0aW5lIH0gZnJvbSBcIkJpZ0JyYWluL1JvdXRpbmVzL0VtcHR5Um91dGluZVwiO1xyXG5pbXBvcnQgVjMgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9WM1wiO1xyXG5pbXBvcnQgVmlydHVhbEludmVudG9yeUNvbXBvbmVudCBmcm9tIFwiSW52ZW50b3J5L1ZpcnR1YWxJbnZlbnRvcnlDb21wb25lbnRcIjtcclxuaW1wb3J0IEFic3RyYWN0VGVzdCBmcm9tIFwiVGVzdC9BYnN0cmFjdFRlc3RcIjtcclxuaW1wb3J0IHsgVGVzdE5hbWVzcGFjZSwgVGVzdFN0cnVjdHVyZXMgfSBmcm9tIFwiVGVzdC9UeXBlc1wiO1xyXG5cclxuZXhwb3J0IGRlZmF1bHQgY2xhc3MgTWVyZ2VTdGFja3NUZXN0IGV4dGVuZHMgQWJzdHJhY3RUZXN0IHtcclxuICAgIHB1YmxpYyByZWFkb25seSBuYW1lc3BhY2U6IFRlc3ROYW1lc3BhY2UgPSBcImludmVudG9yeVwiO1xyXG4gICAgcHVibGljIHJlYWRvbmx5IGlkZW50aWZpZXI6IHN0cmluZyA9IFwibWVyZ2Vfc3RhY2tzXCI7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgc3RydWN0dXJlOiBUZXN0U3RydWN0dXJlcyA9IFwiZ3Jhc3NcIjtcclxuICAgIHB1YmxpYyByZWFkb25seSBtYXhUaWNrczogbnVtYmVyID0gMiAqIFRpY2tzUGVyU2Vjb25kO1xyXG5cclxuICAgIHByb3RlY3RlZCBhc3luYyBydW4odGVzdDogVGVzdCk6IFByb21pc2U8dm9pZD4ge1xyXG4gICAgICAgIHN1cGVyLnJ1bih0ZXN0KTtcclxuXHJcbiAgICAgICAgY29uc3QgYWlwID0gdGhpcy5zcGF3bkFJUCh0ZXN0LCBuZXcgVjMoMSwgMiwgMSksIHsgcm9vdDogRW1wdHlSb3V0aW5lIH0pO1xyXG5cclxuICAgICAgICBhd2FpdCB0ZXN0LmlkbGUoMSk7XHJcblxyXG4gICAgICAgIC8vIEdpdmUgdGhlIEFJUCBtdWx0aXBsZSBwYXJ0aWFsIHN0YWNrcyBvZiB0aGUgc2FtZSBpdGVtXHJcbiAgICAgICAgY29uc3QgaW52ID0gVmlydHVhbEludmVudG9yeUNvbXBvbmVudC5nZXQoYWlwKTtcclxuICAgICAgICBpbnYuc2V0U2xvdCgwLCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0OmNvYmJsZXN0b25lXCIsIDEpKTtcclxuICAgICAgICBpbnYuc2V0U2xvdCgxLCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0OmNvYmJsZXN0b25lXCIsIDEpKTtcclxuICAgICAgICBpbnYuc2V0U2xvdCgyLCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0OmNvYmJsZXN0b25lXCIsIDEpKTtcclxuICAgICAgICBpbnYuc2V0U2xvdCgzLCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0Omlyb25faW5nb3RcIiwgNjMpKTtcclxuICAgICAgICBpbnYuc2V0U2xvdCg0LCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0Omlyb25faW5nb3RcIiwgNSkpO1xyXG4gICAgICAgIGludi5zZXRTbG90KDUsIG5ldyBJdGVtU3RhY2soXCJtaW5lY3JhZnQ6aXJvbl9pbmdvdFwiLCAxMCkpO1xyXG4gICAgICAgIGludi5zZXRTbG90KDYsIG5ldyBJdGVtU3RhY2soXCJtaW5lY3JhZnQ6Y29iYmxlc3RvbmVcIiwgNjQpKTtcclxuXHJcbiAgICAgICAgYXdhaXQgdGVzdC5pZGxlKDEgKiBUaWNrc1BlclNlY29uZCk7XHJcblxyXG4gICAgICAgIC8vIE1lcmdlIHN0YWNrc1xyXG4gICAgICAgIGludi5tZXJnZUFuZENvbXBhY3QoKTtcclxuXHJcbiAgICAgICAgLy8gQXNzZXJ0IG9ubHkgNCBvY2N1cGllZCBzbG90cyByZW1haW5cclxuICAgICAgICBjb25zdCBvY2N1cGllZFNsb3RzID0gaW52LnNsb3RzLmZpbHRlcigoc2xvdCkgPT4gc2xvdCAhPT0gdW5kZWZpbmVkKS5sZW5ndGg7XHJcbiAgICAgICAgdGVzdC5hc3NlcnQob2NjdXBpZWRTbG90cyA9PT0gNCwgYFNob3VsZCBoYXZlIDQgb2NjdXBpZWQgc2xvdHMgYnV0IGhhcyAke29jY3VwaWVkU2xvdHN9YCk7XHJcblxyXG4gICAgICAgIHRlc3Quc3VjY2VlZCgpO1xyXG4gICAgfVxyXG59XHJcbiJdLCJuYW1lcyI6WyJJdGVtU3RhY2siLCJUaWNrc1BlclNlY29uZCIsIkVtcHR5Um91dGluZSIsIlYzIiwiVmlydHVhbEludmVudG9yeUNvbXBvbmVudCIsIkFic3RyYWN0VGVzdCIsIk1lcmdlU3RhY2tzVGVzdCIsInJ1biIsInRlc3QiLCJhaXAiLCJzcGF3bkFJUCIsInJvb3QiLCJpZGxlIiwiaW52IiwiZ2V0Iiwic2V0U2xvdCIsIm1lcmdlQW5kQ29tcGFjdCIsIm9jY3VwaWVkU2xvdHMiLCJzbG90cyIsImZpbHRlciIsInNsb3QiLCJ1bmRlZmluZWQiLCJsZW5ndGgiLCJhc3NlcnQiLCJzdWNjZWVkIiwibmFtZXNwYWNlIiwiaWRlbnRpZmllciIsInN0cnVjdHVyZSIsIm1heFRpY2tzIl0sIm1hcHBpbmdzIjoiQUFBQSxTQUFTQSxTQUFTLEVBQUVDLGNBQWMsUUFBUSxvQkFBb0I7QUFFOUQsU0FBU0MsWUFBWSxRQUFRLGlDQUFpQztBQUM5RCxPQUFPQyxRQUFRLHFCQUFxQjtBQUNwQyxPQUFPQywrQkFBK0Isc0NBQXNDO0FBQzVFLE9BQU9DLGtCQUFrQixvQkFBb0I7QUFHOUIsTUFBTUMsd0JBQXdCRDtJQU16QyxNQUFnQkUsSUFBSUMsSUFBVSxFQUFpQjtRQUMzQyxLQUFLLENBQUNELElBQUlDO1FBRVYsTUFBTUMsTUFBTSxJQUFJLENBQUNDLFFBQVEsQ0FBQ0YsTUFBTSxJQUFJTCxHQUFHLEdBQUcsR0FBRyxJQUFJO1lBQUVRLE1BQU1UO1FBQWE7UUFFdEUsTUFBTU0sS0FBS0ksSUFBSSxDQUFDO1FBRWhCLHdEQUF3RDtRQUN4RCxNQUFNQyxNQUFNVCwwQkFBMEJVLEdBQUcsQ0FBQ0w7UUFDMUNJLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUseUJBQXlCO1FBQ3REYSxJQUFJRSxPQUFPLENBQUMsR0FBRyxJQUFJZixVQUFVLHlCQUF5QjtRQUN0RGEsSUFBSUUsT0FBTyxDQUFDLEdBQUcsSUFBSWYsVUFBVSx5QkFBeUI7UUFDdERhLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUsd0JBQXdCO1FBQ3JEYSxJQUFJRSxPQUFPLENBQUMsR0FBRyxJQUFJZixVQUFVLHdCQUF3QjtRQUNyRGEsSUFBSUUsT0FBTyxDQUFDLEdBQUcsSUFBSWYsVUFBVSx3QkFBd0I7UUFDckRhLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUseUJBQXlCO1FBRXRELE1BQU1RLEtBQUtJLElBQUksQ0FBQyxJQUFJWDtRQUVwQixlQUFlO1FBQ2ZZLElBQUlHLGVBQWU7UUFFbkIsc0NBQXNDO1FBQ3RDLE1BQU1DLGdCQUFnQkosSUFBSUssS0FBSyxDQUFDQyxNQUFNLENBQUMsQ0FBQ0MsT0FBU0EsU0FBU0MsV0FBV0MsTUFBTTtRQUMzRWQsS0FBS2UsTUFBTSxDQUFDTixrQkFBa0IsR0FBRyxDQUFDLHFDQUFxQyxFQUFFQSxjQUFjLENBQUM7UUFFeEZULEtBQUtnQixPQUFPO0lBQ2hCOzs7YUFoQ2dCQyxZQUEyQjthQUMzQkMsYUFBcUI7YUFDckJDLFlBQTRCO2FBQzVCQyxXQUFtQixJQUFJM0I7O0FBOEIzQztBQWxDQSxTQUFxQkssNkJBa0NwQiJ9

@@ -315,7 +315,7 @@ export class SurvivalDirector {
         if (diamonds >= 2 && !has(ID_DIAMOND_SWORD) && !has(id("netherite_sword"))) {
             this.ensure(ID_DIAMOND_SWORD, 1, tick); return;
         }
-        if (b.settings.camp && !Object.keys(stock).some((k) => k.endsWith("_bed"))) {
+        if (b.settings.camp && !Object.keys(stock).some((k) => k.endsWith("_bed") || k === "minecraft:bed")) {
             const bed = bedTarget(stock);
             if (bed) { this.ensure(bed, 1, tick); return; }
         }

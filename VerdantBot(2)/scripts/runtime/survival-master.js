@@ -1,7 +1,9 @@
 
 import { CARDINAL, COMPASS, DOWN, UP, add, center, distance, floor } from "../core/math.js";
-import { assessFallDepth, composeCapabilities, detectScenario, multiRiskPriority, shouldRecalculateAdaptive } from "../core/survival.js";
+import { assessFallDepth, assessFoodReserves, composeCapabilities, detectScenario, multiRiskPriority, shouldRecalculateAdaptive } from "../core/survival.js";
 import { Direction, world } from "@minecraft/server";
+import { bedTarget } from "../core/recipes.js";
+import { toolTier } from "../core/world.js";
 import { findBoat } from "./world.js";
 /**
  * Survival Master - world-class handler for all 80 bedrock.dev scenarios.
@@ -45,17 +47,20 @@ export class SurvivalMaster {
 
         // FIX: compose capabilities - mix of two situations should not fall through
         try {
+            // These fields must carry real values: every one of them was undefined
+            // before, so composeCapabilities could never report anything.
+            const foodReserves = assessFoodReserves(context.counts, { hunger: context.hunger, health: context.hp });
             const caps = composeCapabilities({
-                health: context.health,
+                health: context.hp,
                 hunger: context.hunger,
-                threatCount: context.hostileCount,
-                inWater: context.inWater,
-                belowHazard: context.belowHazard,
+                threatCount: context.threats.length,
+                inWater: context.location === "water",
+                belowHazard: !!this.terrain.dangerous(add(context.p, DOWN)),
                 gapSize: context.gapSize,
                 verticalDiff: context.verticalDiff,
-                foodCount: context.foodCount,
+                foodCount: foodReserves.foodCount ?? 0,
                 targetBlock: context.targetBlock,
-                bombNear: context.bombNear,
+                bombNear: context.threats.some((t) => t.typeId === "minecraft:creeper" && distance(t.location, this.sim.location) <= 8),
                 needCover: context.needCover
             });
             if (caps.length > 1) {
@@ -68,7 +73,8 @@ export class SurvivalMaster {
 
         // Adaptive planning: recalculate on discovery
         try {
-            const discovery = { type: context.scenarioType || "unknown", count: context.hostileCount, pos: context.pos };
+            // scenarioType/hostileCount/pos do not exist on the context.
+            const discovery = { type: context.nearLava ? "lava_pool" : context.threats.length >= 3 ? "hostile_group" : "unknown", count: context.threats.length, pos: context.p };
             const recalc = shouldRecalculateAdaptive(discovery, { route: this.currentScenario?.name }, { phase: context.phase, foodLow: context.hunger <= 6 });
             if (recalc.should) {
                 if (recalc.reason !== this._lastRecalc) this.bot.record(`Adaptive recalc: ${recalc.reason} priority ${recalc.priority}`);
@@ -80,7 +86,9 @@ export class SurvivalMaster {
         if (!detected.length) return false;
 
         const top = detected[0];
-        if (top.priority < 80 && !top.critical) return false;
+        // 70, not 80: five real multi-risk scenarios sit at priority 70/75 and
+        // their handlers were unreachable behind the old bar.
+        if (top.priority < 70 && !top.critical) return false;
 
         this.currentScenario = top;
         this.bot.reason = `Survival-Master: Scenario ${top.id} ${top.name} (priority ${top.priority}) - ${top.actions[0]}`;
@@ -937,7 +945,8 @@ export class SurvivalMaster {
             this.bot.reason = "Resource 42: wool no wood for bed - searching wood";
             return true;
         }
-        try { this.bot.obtain("minecraft:white_bed", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        const bed = bedTarget(ctx.counts);
+        if (bed) { try { this.bot.obtain(bed, 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); } }
         return false;
     }
 
@@ -1257,14 +1266,12 @@ export class SurvivalMaster {
     // ===== MULTI-RISK 61-80 =====
     handleMultiRisk(id, scenario, ctx, tick) {
         const risk = multiRiskPriority(ctx);
-        if (risk.level === "critical") {
-            // Immediate survival, no unnecessary combat
-            return this.handleCriticalMultiRisk(id, ctx, tick);
-        }
-        if (risk.level === "high") {
-            return this.handleHighMultiRisk(id, ctx, tick);
-        }
-        return false;
+        // Critical/high get the survival pass first (cover, retreat, eat).
+        // Other bands used to return false here, which made every medium/low
+        // scenario handler unreachable even when detection matched.
+        if (risk.level === "critical" && this.handleCriticalMultiRisk(id, ctx, tick)) return true;
+        if (risk.level === "high" && this.handleHighMultiRisk(id, ctx, tick)) return true;
+        return this.handleSpecificMultiRisk(id, ctx, tick);
     }
 
     handleCriticalMultiRisk(id, ctx, tick) {
@@ -1290,7 +1297,10 @@ export class SurvivalMaster {
             }
         }
 
-        // Specific multi-risk
+        return false;
+    }
+
+    handleSpecificMultiRisk(id, ctx, tick) {
         switch (id) {
             case 61: // 4 HP + 3 skeletons + zombie + sunset
                 return this.handleSunset3SkeletonsZombie(ctx, tick);
@@ -1490,8 +1500,10 @@ export class SurvivalMaster {
     }
 
     isWeaponWeak() {
-        const slot = this.bag.find(s => s.typeId === "minecraft:wooden_sword");
-        return slot >= 0 && this.bag.find(s => s.typeId.includes("iron_sword") || s.typeId.includes("stone_sword")) < 0;
+        // Weak = best blade is wooden/gold or nothing; stone or better means no
+        // weapon disadvantage (the old check ignored axes and stone-tier above).
+        const slot = this.bag.weapon();
+        return slot < 0 || toolTier(this.bag.get(slot)?.typeId ?? "") < 2;
     }
 
     findClimbRoute(p, radius) {

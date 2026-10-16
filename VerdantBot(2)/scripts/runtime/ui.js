@@ -121,7 +121,11 @@ export class UI {
             }
             // Line 11: Equipment
             const hasWeapon = b.equipment?.hasWeapon() ? "Yes" : "No";
-            lines.push({ name: `§7Weapon:${hasWeapon} Armor:${b.equipment?.report ? "Y" : "?"}`, score: 5 });
+            // report is a method (equipment.js) and throws without an equippable
+            // component, so read the data under a guard.
+            let armor = "?";
+            try { armor = Object.values(b.equipment?.report?.() ?? {}).some((v) => v) ? "Y" : "N"; } catch { armor = "?"; }
+            lines.push({ name: `§7Weapon:${hasWeapon} Armor:${armor}`, score: 5 });
             // Line 12: Structures
             const topStruct = b.structures?.getTopPriority?.();
             if (topStruct) {

@@ -1,0 +1,934 @@
+{
+	"format_version": "1.17",
+	"minecraft:npc_dialogue": {
+		"scenes": [
+			{
+				"scene_tag": "gm1_sky:onboarding_book:home",
+				"npc_name": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.bkpgidm.0"
+						}
+					]
+				},
+				"text": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.0"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.2"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.3"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.4"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.5"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.6"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.bl01346.7"
+						}
+					]
+				},
+				"on_open_commands": [
+					"/scriptevent gm1_sky:set_book_icon gm1_sky:onboarding_book logo",
+					"/scriptevent gm1_sky:register_book_open gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue open gm1_sky:onboarding_book:home",
+					"/tp @s ~ ~ ~ facing @initiator"
+				],
+				"on_close_commands": [
+					"/scriptevent gm1_sky:register_book_close gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue close gm1_sky:onboarding_book:home"
+				],
+				"buttons": [
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.d1g2o0p.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:introduction"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.d1g2o10.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:ai_players"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.d1g2o11.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:homes"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.d1g2o12.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:help"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.d1g2o13.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:credits"
+						]
+					}
+				]
+			},
+			{
+				"scene_tag": "gm1_sky:onboarding_book:introduction",
+				"npc_name": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.cb77aff.0"
+						}
+					]
+				},
+				"text": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.cb7hl5p.0"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.cb7hl5p.2"
+						}
+					]
+				},
+				"on_open_commands": [
+					"/scriptevent gm1_sky:set_book_icon gm1_sky:onboarding_book ai_players",
+					"/scriptevent gm1_sky:register_book_open gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue open gm1_sky:onboarding_book:introduction",
+					"/tp @s ~ ~ ~ facing @initiator"
+				],
+				"on_close_commands": [
+					"/scriptevent gm1_sky:register_book_close gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue close gm1_sky:onboarding_book:introduction"
+				],
+				"buttons": [
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4nh7ld0.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:introduction"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4nh7ld1.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:ai_players"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4nh7ld2.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:homes"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4nh7ld3.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:help"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4nh7ld4.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:credits"
+						]
+					}
+				]
+			},
+			{
+				"scene_tag": "gm1_sky:onboarding_book:ai_players",
+				"npc_name": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.4i35f1m.0"
+						}
+					]
+				},
+				"text": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.4i3fpi6.0"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.4i3fpi6.2"
+						}
+					]
+				},
+				"on_open_commands": [
+					"/scriptevent gm1_sky:set_book_icon gm1_sky:onboarding_book ai_behaviour",
+					"/scriptevent gm1_sky:register_book_open gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue open gm1_sky:onboarding_book:ai_players",
+					"/tp @s ~ ~ ~ facing @initiator"
+				],
+				"on_close_commands": [
+					"/scriptevent gm1_sky:register_book_close gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue close gm1_sky:onboarding_book:ai_players"
+				],
+				"buttons": [
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.662ooe1.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:introduction"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.662ooe2.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:ai_players"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.662ooe3.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:homes"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.662ooe4.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:help"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.662ooe5.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:credits"
+						]
+					}
+				]
+			},
+			{
+				"scene_tag": "gm1_sky:onboarding_book:homes",
+				"npc_name": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.aj5j78b.0"
+						}
+					]
+				},
+				"text": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.aj63hol.0"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.aj63hol.2"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.aj63hol.4"
+						}
+					]
+				},
+				"on_open_commands": [
+					"/scriptevent gm1_sky:set_book_icon gm1_sky:onboarding_book ai_homes",
+					"/scriptevent gm1_sky:register_book_open gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue open gm1_sky:onboarding_book:homes",
+					"/tp @s ~ ~ ~ facing @initiator"
+				],
+				"on_close_commands": [
+					"/scriptevent gm1_sky:register_book_close gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue close gm1_sky:onboarding_book:homes"
+				],
+				"buttons": [
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4m1pcog.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:introduction"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4m1pcoh.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:ai_players"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4m1pcoi.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:homes"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4m1pcoj.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:help"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.4m1pcok.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:credits"
+						]
+					}
+				]
+			},
+			{
+				"scene_tag": "gm1_sky:onboarding_book:help",
+				"npc_name": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.93nbho2.0"
+						}
+					]
+				},
+				"text": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.0"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.1"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.2"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.3"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.4"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.5"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.6"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.8"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.10"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.93nm2ec.12"
+						}
+					]
+				},
+				"on_open_commands": [
+					"/scriptevent gm1_sky:set_book_icon gm1_sky:onboarding_book ai_tricks",
+					"/scriptevent gm1_sky:register_book_open gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue open gm1_sky:onboarding_book:help",
+					"/tp @s ~ ~ ~ facing @initiator"
+				],
+				"on_close_commands": [
+					"/scriptevent gm1_sky:register_book_close gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue close gm1_sky:onboarding_book:help"
+				],
+				"buttons": [
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.7i78fc3.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:introduction"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.7i78fc4.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:ai_players"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.7i78fc5.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:homes"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.7i78fc6.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:help"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.7i78fc7.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:credits"
+						]
+					}
+				]
+			},
+			{
+				"scene_tag": "gm1_sky:onboarding_book:credits",
+				"npc_name": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.1d40nm1.0"
+						}
+					]
+				},
+				"text": {
+					"rawtext": [
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.0"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.2"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.3"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.4"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.6"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.7"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.8"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.10"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.11"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.12"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.13"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.15"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.16"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.17"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.19"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.20"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.21"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.22"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.24"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.25"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.26"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.27"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.28"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.30"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.31"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.32"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.34"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.35"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.36"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.37"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.38"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.39"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.41"
+						},
+						{
+							"text": "\n"
+						},
+						{
+							"translate": "oaklogue.onboarding-book.1d4b8cb.42"
+						}
+					]
+				},
+				"on_open_commands": [
+					"/scriptevent gm1_sky:set_book_icon gm1_sky:onboarding_book logo",
+					"/scriptevent gm1_sky:register_book_open gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue open gm1_sky:onboarding_book:credits",
+					"/tp @s ~ ~ ~ facing @initiator"
+				],
+				"on_close_commands": [
+					"/scriptevent gm1_sky:register_book_close gm1_sky:onboarding_book",
+					"/scriptevent gm1:oaklogue close gm1_sky:onboarding_book:credits"
+				],
+				"buttons": [
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.3m5n4k2.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:introduction"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.3m5n4k3.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:ai_players"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.3m5n4k4.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:homes"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.3m5n4k5.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:help"
+						]
+					},
+					{
+						"name": {
+							"rawtext": [
+								{
+									"translate": "oaklogue.onboarding-book.3m5n4k6.0"
+								}
+							]
+						},
+						"commands": [
+							"/playsound next_page @initiator",
+							"/dialogue open @s @initiator gm1_sky:onboarding_book:credits"
+						]
+					}
+				]
+			}
+		]
+	}
+}

@@ -1,0 +1,14 @@
+import V3 from "Helpers/Vectors/V3";
+import AbstractPathfindingTest from "./AbstractPathfindingTest";
+class DigPathfindingTest extends AbstractPathfindingTest {
+    constructor(...args){
+        super(...args);
+        this.identifier = "dig";
+        this.entityLocation = new V3(13, 13, 7);
+        this.primaryLocation = new V3(5, 2, 7);
+        this.isCoreTest = true;
+    }
+}
+export { DigPathfindingTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkRpZ1BhdGhmaW5kaW5nVGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgVjMgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9WM1wiO1xyXG5pbXBvcnQgQWJzdHJhY3RQYXRoZmluZGluZ1Rlc3QgZnJvbSBcIi4vQWJzdHJhY3RQYXRoZmluZGluZ1Rlc3RcIjtcclxuXHJcbmV4cG9ydCBkZWZhdWx0IGNsYXNzIERpZ1BhdGhmaW5kaW5nVGVzdCBleHRlbmRzIEFic3RyYWN0UGF0aGZpbmRpbmdUZXN0IHtcclxuICAgIHB1YmxpYyByZWFkb25seSBpZGVudGlmaWVyID0gXCJkaWdcIjtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBlbnRpdHlMb2NhdGlvbjogVjMgPSBuZXcgVjMoMTMsIDEzLCA3KTtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBwcmltYXJ5TG9jYXRpb246IFYzID0gbmV3IFYzKDUsIDIsIDcpO1xyXG4gICAgcHJvdGVjdGVkIHJlYWRvbmx5IGlzQ29yZVRlc3Q6IGJvb2xlYW4gPSB0cnVlO1xyXG59XHJcbiJdLCJuYW1lcyI6WyJWMyIsIkFic3RyYWN0UGF0aGZpbmRpbmdUZXN0IiwiRGlnUGF0aGZpbmRpbmdUZXN0IiwiaWRlbnRpZmllciIsImVudGl0eUxvY2F0aW9uIiwicHJpbWFyeUxvY2F0aW9uIiwiaXNDb3JlVGVzdCJdLCJtYXBwaW5ncyI6IkFBQUEsT0FBT0EsUUFBUSxxQkFBcUI7QUFDcEMsT0FBT0MsNkJBQTZCLDRCQUE0QjtBQUVqRCxNQUFNQywyQkFBMkJEOzs7YUFDNUJFLGFBQWE7YUFDVkMsaUJBQXFCLElBQUlKLEdBQUcsSUFBSSxJQUFJO2FBQ3BDSyxrQkFBc0IsSUFBSUwsR0FBRyxHQUFHLEdBQUc7YUFDbkNNLGFBQXNCOztBQUM3QztBQUxBLFNBQXFCSixnQ0FLcEIifQ==

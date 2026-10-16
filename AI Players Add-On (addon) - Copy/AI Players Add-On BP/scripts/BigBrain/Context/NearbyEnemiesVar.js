@@ -1,0 +1,26 @@
+import { TicksPerSecond } from "@minecraft/server";
+import EnemyData from "Data/EnemyData";
+import EntityContextVar from "StateSkeleton/EntityContextVar";
+import { LocationVar } from "./LocationVar";
+export class NearbyEnemiesVar extends EntityContextVar {
+    computeValue() {
+        const location = this.context.getValue(LocationVar);
+        const queryOptions = {
+            location: location,
+            maxDistance: EnemyData.EnemySearchRadius,
+            tags: [
+                EnemyData.EnemyTag
+            ],
+            name: ""
+        };
+        return EntityUtil.getEntities(queryOptions, location.dimension);
+    }
+    constructor(...args){
+        super(...args);
+        this.invalidationDuration = 1 * TicksPerSecond;
+        this.isLazy = true;
+    }
+}
+NearbyEnemiesVar.identifier = "nearby_enemies";
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIk5lYXJieUVuZW1pZXNWYXIudHMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHsgRW50aXR5LCBFbnRpdHlRdWVyeU9wdGlvbnMsIFRpY2tzUGVyU2Vjb25kIH0gZnJvbSBcIkBtaW5lY3JhZnQvc2VydmVyXCI7XHJcbmltcG9ydCBFbmVteURhdGEgZnJvbSBcIkRhdGEvRW5lbXlEYXRhXCI7XHJcbmltcG9ydCBFbnRpdHlDb250ZXh0VmFyIGZyb20gXCJTdGF0ZVNrZWxldG9uL0VudGl0eUNvbnRleHRWYXJcIjtcclxuaW1wb3J0IHsgTG9jYXRpb25WYXIgfSBmcm9tIFwiLi9Mb2NhdGlvblZhclwiO1xyXG5cclxuZXhwb3J0IGNsYXNzIE5lYXJieUVuZW1pZXNWYXIgZXh0ZW5kcyBFbnRpdHlDb250ZXh0VmFyPEVudGl0eVtdPiB7XHJcbiAgICBwdWJsaWMgc3RhdGljIHJlYWRvbmx5IGlkZW50aWZpZXIgPSBcIm5lYXJieV9lbmVtaWVzXCI7XHJcblxyXG4gICAgcHJvdGVjdGVkIHJlYWRvbmx5IGludmFsaWRhdGlvbkR1cmF0aW9uID0gMSAqIFRpY2tzUGVyU2Vjb25kO1xyXG4gICAgcHJvdGVjdGVkIHJlYWRvbmx5IGlzTGF6eSA9IHRydWU7XHJcblxyXG4gICAgcHJvdGVjdGVkIGNvbXB1dGVWYWx1ZSgpOiBFbnRpdHlbXSB7XHJcbiAgICAgICAgY29uc3QgbG9jYXRpb24gPSB0aGlzLmNvbnRleHQuZ2V0VmFsdWUoTG9jYXRpb25WYXIpO1xyXG4gICAgICAgIGNvbnN0IHF1ZXJ5T3B0aW9uczogRW50aXR5UXVlcnlPcHRpb25zID0ge1xyXG4gICAgICAgICAgICBsb2NhdGlvbjogbG9jYXRpb24sXHJcbiAgICAgICAgICAgIG1heERpc3RhbmNlOiBFbmVteURhdGEuRW5lbXlTZWFyY2hSYWRpdXMsXHJcbiAgICAgICAgICAgIHRhZ3M6IFtFbmVteURhdGEuRW5lbXlUYWddLFxyXG4gICAgICAgICAgICBuYW1lOiBcIlwiLFxyXG4gICAgICAgIH07XHJcblxyXG4gICAgICAgIHJldHVybiBFbnRpdHlVdGlsLmdldEVudGl0aWVzKHF1ZXJ5T3B0aW9ucywgbG9jYXRpb24uZGltZW5zaW9uKTtcclxuICAgIH1cclxufVxyXG4iXSwibmFtZXMiOlsiVGlja3NQZXJTZWNvbmQiLCJFbmVteURhdGEiLCJFbnRpdHlDb250ZXh0VmFyIiwiTG9jYXRpb25WYXIiLCJOZWFyYnlFbmVtaWVzVmFyIiwiY29tcHV0ZVZhbHVlIiwibG9jYXRpb24iLCJjb250ZXh0IiwiZ2V0VmFsdWUiLCJxdWVyeU9wdGlvbnMiLCJtYXhEaXN0YW5jZSIsIkVuZW15U2VhcmNoUmFkaXVzIiwidGFncyIsIkVuZW15VGFnIiwibmFtZSIsIkVudGl0eVV0aWwiLCJnZXRFbnRpdGllcyIsImRpbWVuc2lvbiIsImludmFsaWRhdGlvbkR1cmF0aW9uIiwiaXNMYXp5IiwiaWRlbnRpZmllciJdLCJtYXBwaW5ncyI6IkFBQUEsU0FBcUNBLGNBQWMsUUFBUSxvQkFBb0I7QUFDL0UsT0FBT0MsZUFBZSxpQkFBaUI7QUFDdkMsT0FBT0Msc0JBQXNCLGlDQUFpQztBQUM5RCxTQUFTQyxXQUFXLFFBQVEsZ0JBQWdCO0FBRTVDLE9BQU8sTUFBTUMseUJBQXlCRjtJQU14QkcsZUFBeUI7UUFDL0IsTUFBTUMsV0FBVyxJQUFJLENBQUNDLE9BQU8sQ0FBQ0MsUUFBUSxDQUFDTDtRQUN2QyxNQUFNTSxlQUFtQztZQUNyQ0gsVUFBVUE7WUFDVkksYUFBYVQsVUFBVVUsaUJBQWlCO1lBQ3hDQyxNQUFNO2dCQUFDWCxVQUFVWSxRQUFRO2FBQUM7WUFDMUJDLE1BQU07UUFDVjtRQUVBLE9BQU9DLFdBQVdDLFdBQVcsQ0FBQ1AsY0FBY0gsU0FBU1csU0FBUztJQUNsRTs7O2FBYm1CQyx1QkFBdUIsSUFBSWxCO2FBQzNCbUIsU0FBUzs7QUFhaEM7QUFqQmFmLGlCQUNjZ0IsYUFBYSJ9

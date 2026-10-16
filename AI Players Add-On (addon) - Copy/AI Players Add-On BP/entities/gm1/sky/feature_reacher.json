@@ -1,0 +1,382 @@
+{
+	"minecraft:entity": {
+		"description": {
+			"properties": {
+				"gm1_sky:feature": {
+					"values": [
+						"coal",
+						"copper",
+						"iron",
+						"diamond",
+						"stone",
+						"redstone",
+						"lapis",
+						"emerald",
+						"gold",
+						"null"
+					],
+					"type": "enum",
+					"default": "null"
+				}
+			},
+			"identifier": "gm1_sky:feature_reacher",
+			"is_summonable": true
+		},
+		"component_groups": {
+			"gm1_sky:feature.coal": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:coal_ore",
+						"minecraft:deepslate_coal_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.copper": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:copper_ore",
+						"minecraft:deepslate_copper_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.iron": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:iron_ore",
+						"minecraft:deepslate_iron_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.diamond": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:diamond_ore",
+						"minecraft:deepslate_diamond_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.stone": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:stone",
+						"minecraft:deepslate"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.redstone": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:redstone_ore",
+						"minecraft:deepslate_redstone_ore",
+						"minecraft:lit_redstone_ore",
+						"minecraft:lit_deepslate_redstone_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.lapis": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:lapis_ore",
+						"minecraft:deepslate_lapis_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.emerald": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:emerald_ore",
+						"minecraft:deepslate_emerald_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:feature.gold": {
+				"minecraft:behavior.move_to_block": {
+					"priority": 0,
+					"tick_interval": 1,
+					"start_chance": 1,
+					"search_height": 32,
+					"search_range": 32,
+					"goal_radius": 1,
+					"target_selection_method": "nearest",
+					"stay_duration": 100,
+					"target_blocks": [
+						"minecraft:gold_ore",
+						"minecraft:deepslate_gold_ore"
+					],
+					"on_reach": {
+						"event": "gm1_sky:on_reach"
+					}
+				}
+			},
+			"gm1_sky:initialized": {
+				"minecraft:environment_sensor": {
+					"triggers": [
+						{
+							"event": "gm1_sky:despawn",
+							"filters": {
+								"test": "is_moving",
+								"operator": "not"
+							}
+						}
+					]
+				},
+				"minecraft:timer": {
+					"time": 10,
+					"looping": false,
+					"time_down_event": {
+						"event": "gm1_sky:despawn"
+					}
+				}
+			},
+			"gm1_sky:despawn": {
+				"minecraft:instant_despawn": {}
+			}
+		},
+		"events": {
+			"gm1_sky:feature.coal": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.coal"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "coal"
+				}
+			},
+			"gm1_sky:feature.copper": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.copper"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "copper"
+				}
+			},
+			"gm1_sky:feature.iron": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.iron"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "iron"
+				}
+			},
+			"gm1_sky:feature.diamond": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.diamond"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "diamond"
+				}
+			},
+			"gm1_sky:feature.stone": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.stone"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "stone"
+				}
+			},
+			"gm1_sky:feature.redstone": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.redstone"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "redstone"
+				}
+			},
+			"gm1_sky:feature.lapis": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.lapis"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "lapis"
+				}
+			},
+			"gm1_sky:feature.emerald": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.emerald"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "emerald"
+				}
+			},
+			"gm1_sky:feature.gold": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:feature.gold"
+					]
+				},
+				"set_property": {
+					"gm1_sky:feature": "gold"
+				}
+			},
+			"gm1_sky:on_reach": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:despawn"
+					]
+				}
+			},
+			"gm1_sky:despawn": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:despawn"
+					]
+				}
+			},
+			"gm1_sky:on_init": {
+				"add": {
+					"component_groups": [
+						"gm1_sky:initialized"
+					]
+				}
+			}
+		},
+		"components": {
+			"minecraft:damage_sensor": {
+				"triggers": [
+					{
+						"cause": "all",
+						"deals_damage": "no"
+					}
+				]
+			},
+			"minecraft:collision_box": {
+				"width": 0,
+				"height": 0
+			},
+			"minecraft:transient": {},
+			"minecraft:physics": {
+				"has_collision": false,
+				"has_gravity": false
+			},
+			"minecraft:movement": {},
+			"minecraft:flying_speed": {
+				"value": 1
+			},
+			"minecraft:movement.hover": {
+				"max_turn": 360
+			},
+			"minecraft:navigation.hover": {
+				"can_path_over_water": true,
+				"avoid_damage_blocks": true,
+				"can_path_from_air": true,
+				"avoid_water": true
+			},
+			"minecraft:can_fly": {},
+			"minecraft:follow_range": {
+				"value": 64,
+				"max": 64
+			},
+			"minecraft:timer": {
+				"time": 0.1,
+				"looping": false,
+				"time_down_event": {
+					"event": "gm1_sky:on_init"
+				}
+			}
+		}
+	},
+	"format_version": "1.26.0"
+}

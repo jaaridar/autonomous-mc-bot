@@ -1,0 +1,13 @@
+import V3 from "Helpers/Vectors/V3";
+import AbstractWaterTest from "./AbstractWaterTest";
+class UnderWaterTest extends AbstractWaterTest {
+    constructor(...args){
+        super(...args);
+        this.identifier = "under";
+        this.entityLocation = new V3(13, 2, 7);
+        this.primaryLocation = new V3(1, 14, 7);
+    }
+}
+export { UnderWaterTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIlVuZGVyV2F0ZXJUZXN0LnRzIl0sInNvdXJjZXNDb250ZW50IjpbImltcG9ydCBWMyBmcm9tIFwiSGVscGVycy9WZWN0b3JzL1YzXCI7XHJcbmltcG9ydCBBYnN0cmFjdFdhdGVyVGVzdCBmcm9tIFwiLi9BYnN0cmFjdFdhdGVyVGVzdFwiO1xyXG5cclxuZXhwb3J0IGRlZmF1bHQgY2xhc3MgVW5kZXJXYXRlclRlc3QgZXh0ZW5kcyBBYnN0cmFjdFdhdGVyVGVzdCB7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgaWRlbnRpZmllciA9IFwidW5kZXJcIjtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBlbnRpdHlMb2NhdGlvbjogVjMgPSBuZXcgVjMoMTMsIDIsIDcpO1xyXG4gICAgcHJvdGVjdGVkIHJlYWRvbmx5IHByaW1hcnlMb2NhdGlvbjogVjMgPSBuZXcgVjMoMSwgMTQsIDcpO1xyXG59XHJcbiJdLCJuYW1lcyI6WyJWMyIsIkFic3RyYWN0V2F0ZXJUZXN0IiwiVW5kZXJXYXRlclRlc3QiLCJpZGVudGlmaWVyIiwiZW50aXR5TG9jYXRpb24iLCJwcmltYXJ5TG9jYXRpb24iXSwibWFwcGluZ3MiOiJBQUFBLE9BQU9BLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLHVCQUF1QixzQkFBc0I7QUFFckMsTUFBTUMsdUJBQXVCRDs7O2FBQ3hCRSxhQUFhO2FBQ1ZDLGlCQUFxQixJQUFJSixHQUFHLElBQUksR0FBRzthQUNuQ0ssa0JBQXNCLElBQUlMLEdBQUcsR0FBRyxJQUFJOztBQUMzRDtBQUpBLFNBQXFCRSw0QkFJcEIifQ==

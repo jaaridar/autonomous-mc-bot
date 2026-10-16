@@ -1,0 +1,25 @@
+import { ItemStack } from "@minecraft/server";
+import VirtualInventoryComponent from "Inventory/VirtualInventoryComponent";
+import V3 from "Helpers/Vectors/V3";
+import AbstractCraftingTest from "./AbstractCraftingTest";
+class CraftPickaxeWithFullInventoryTest extends AbstractCraftingTest {
+    setupInventory(aip) {
+        const inv = VirtualInventoryComponent.get(aip);
+        // Fill all inventory slots with seeds to simulate a full inventory
+        for(let i = 0; i < 27; i++){
+            inv.setSlot(i, new ItemStack("minecraft:wheat_seeds", 64));
+        }
+        // Place oak logs in slot 0 for crafting materials
+        inv.setSlot(0, new ItemStack("minecraft:oak_log", 3));
+    }
+    constructor(...args){
+        super(...args);
+        this.identifier = "craft_pickaxe_with_full_inventory";
+        this.itemToCraft = "minecraft:wooden_pickaxe";
+        this.amountToCraft = 1;
+        this.spawnLocation = new V3(1, 2, 1);
+    }
+}
+export { CraftPickaxeWithFullInventoryTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkNyYWZ0UGlja2F4ZVdpdGhGdWxsSW52ZW50b3J5VGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgeyBFbnRpdHksIEl0ZW1TdGFjayB9IGZyb20gXCJAbWluZWNyYWZ0L3NlcnZlclwiO1xyXG5pbXBvcnQgVmlydHVhbEludmVudG9yeUNvbXBvbmVudCBmcm9tIFwiSW52ZW50b3J5L1ZpcnR1YWxJbnZlbnRvcnlDb21wb25lbnRcIjtcclxuaW1wb3J0IFYzIGZyb20gXCJIZWxwZXJzL1ZlY3RvcnMvVjNcIjtcclxuaW1wb3J0IEFic3RyYWN0Q3JhZnRpbmdUZXN0IGZyb20gXCIuL0Fic3RyYWN0Q3JhZnRpbmdUZXN0XCI7XHJcblxyXG5leHBvcnQgZGVmYXVsdCBjbGFzcyBDcmFmdFBpY2theGVXaXRoRnVsbEludmVudG9yeVRlc3QgZXh0ZW5kcyBBYnN0cmFjdENyYWZ0aW5nVGVzdCB7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgaWRlbnRpZmllcjogc3RyaW5nID0gXCJjcmFmdF9waWNrYXhlX3dpdGhfZnVsbF9pbnZlbnRvcnlcIjtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBpdGVtVG9DcmFmdDogc3RyaW5nID0gXCJtaW5lY3JhZnQ6d29vZGVuX3BpY2theGVcIjtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBhbW91bnRUb0NyYWZ0OiBudW1iZXIgPSAxO1xyXG4gICAgcHJvdGVjdGVkIHJlYWRvbmx5IHNwYXduTG9jYXRpb246IFYzID0gbmV3IFYzKDEsIDIsIDEpO1xyXG5cclxuICAgIHByb3RlY3RlZCBzZXR1cEludmVudG9yeShhaXA6IEVudGl0eSk6IHZvaWQge1xyXG4gICAgICAgIGNvbnN0IGludiA9IFZpcnR1YWxJbnZlbnRvcnlDb21wb25lbnQuZ2V0KGFpcCk7XHJcbiAgICAgICAgLy8gRmlsbCBhbGwgaW52ZW50b3J5IHNsb3RzIHdpdGggc2VlZHMgdG8gc2ltdWxhdGUgYSBmdWxsIGludmVudG9yeVxyXG4gICAgICAgIGZvciAobGV0IGkgPSAwOyBpIDwgMjc7IGkrKykge1xyXG4gICAgICAgICAgICBpbnYuc2V0U2xvdChpLCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0OndoZWF0X3NlZWRzXCIsIDY0KSk7XHJcbiAgICAgICAgfVxyXG4gICAgICAgIC8vIFBsYWNlIG9hayBsb2dzIGluIHNsb3QgMCBmb3IgY3JhZnRpbmcgbWF0ZXJpYWxzXHJcbiAgICAgICAgaW52LnNldFNsb3QoMCwgbmV3IEl0ZW1TdGFjayhcIm1pbmVjcmFmdDpvYWtfbG9nXCIsIDMpKTtcclxuICAgIH1cclxufVxyXG4iXSwibmFtZXMiOlsiSXRlbVN0YWNrIiwiVmlydHVhbEludmVudG9yeUNvbXBvbmVudCIsIlYzIiwiQWJzdHJhY3RDcmFmdGluZ1Rlc3QiLCJDcmFmdFBpY2theGVXaXRoRnVsbEludmVudG9yeVRlc3QiLCJzZXR1cEludmVudG9yeSIsImFpcCIsImludiIsImdldCIsImkiLCJzZXRTbG90IiwiaWRlbnRpZmllciIsIml0ZW1Ub0NyYWZ0IiwiYW1vdW50VG9DcmFmdCIsInNwYXduTG9jYXRpb24iXSwibWFwcGluZ3MiOiJBQUFBLFNBQWlCQSxTQUFTLFFBQVEsb0JBQW9CO0FBQ3RELE9BQU9DLCtCQUErQixzQ0FBc0M7QUFDNUUsT0FBT0MsUUFBUSxxQkFBcUI7QUFDcEMsT0FBT0MsMEJBQTBCLHlCQUF5QjtBQUUzQyxNQUFNQywwQ0FBMENEO0lBTWpERSxlQUFlQyxHQUFXLEVBQVE7UUFDeEMsTUFBTUMsTUFBTU4sMEJBQTBCTyxHQUFHLENBQUNGO1FBQzFDLG1FQUFtRTtRQUNuRSxJQUFLLElBQUlHLElBQUksR0FBR0EsSUFBSSxJQUFJQSxJQUFLO1lBQ3pCRixJQUFJRyxPQUFPLENBQUNELEdBQUcsSUFBSVQsVUFBVSx5QkFBeUI7UUFDMUQ7UUFDQSxrREFBa0Q7UUFDbERPLElBQUlHLE9BQU8sQ0FBQyxHQUFHLElBQUlWLFVBQVUscUJBQXFCO0lBQ3REOzs7YUFiZ0JXLGFBQXFCO2FBQ2xCQyxjQUFzQjthQUN0QkMsZ0JBQXdCO2FBQ3hCQyxnQkFBb0IsSUFBSVosR0FBRyxHQUFHLEdBQUc7O0FBV3hEO0FBZkEsU0FBcUJFLCtDQWVwQiJ9

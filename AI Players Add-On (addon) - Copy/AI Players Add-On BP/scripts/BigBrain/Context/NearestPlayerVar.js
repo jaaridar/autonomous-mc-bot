@@ -1,0 +1,28 @@
+import { GameMode, TicksPerSecond } from "@minecraft/server";
+import V3 from "Helpers/Vectors/V3";
+import EntityContextVar from "StateSkeleton/EntityContextVar";
+import { LocationVar } from "./LocationVar";
+export class NearestPlayerVar extends EntityContextVar {
+    computeValue() {
+        const players = this.entity.dimension.getPlayers({
+            closest: 1,
+            location: this.entity.location
+        });
+        const player = players[0];
+        if (!player) return null;
+        if (player.getGameMode() !== GameMode.Survival) return null;
+        const distance = this.context.getValue(LocationVar).distance(V3.fromEntity(player, overworld));
+        return {
+            entity: player,
+            distance
+        };
+    }
+    constructor(...args){
+        super(...args);
+        this.invalidationDuration = 1 * TicksPerSecond;
+        this.isLazy = true;
+    }
+}
+NearestPlayerVar.identifier = "nearest_player";
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIk5lYXJlc3RQbGF5ZXJWYXIudHMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHsgR2FtZU1vZGUsIFBsYXllciwgVGlja3NQZXJTZWNvbmQgfSBmcm9tIFwiQG1pbmVjcmFmdC9zZXJ2ZXJcIjtcclxuaW1wb3J0IFYzIGZyb20gXCJIZWxwZXJzL1ZlY3RvcnMvVjNcIjtcclxuaW1wb3J0IEVudGl0eUNvbnRleHRWYXIgZnJvbSBcIlN0YXRlU2tlbGV0b24vRW50aXR5Q29udGV4dFZhclwiO1xyXG5pbXBvcnQgeyBMb2NhdGlvblZhciB9IGZyb20gXCIuL0xvY2F0aW9uVmFyXCI7XHJcblxyXG5leHBvcnQgaW50ZXJmYWNlIE5lYXJlc3RQbGF5ZXJDb250ZXh0IHtcclxuICAgIGVudGl0eTogUGxheWVyO1xyXG4gICAgZGlzdGFuY2U6IG51bWJlcjtcclxufVxyXG5cclxuZXhwb3J0IGNsYXNzIE5lYXJlc3RQbGF5ZXJWYXIgZXh0ZW5kcyBFbnRpdHlDb250ZXh0VmFyPE5lYXJlc3RQbGF5ZXJDb250ZXh0IHwgbnVsbD4ge1xyXG4gICAgcHVibGljIHN0YXRpYyByZWFkb25seSBpZGVudGlmaWVyID0gXCJuZWFyZXN0X3BsYXllclwiO1xyXG5cclxuICAgIHByb3RlY3RlZCByZWFkb25seSBpbnZhbGlkYXRpb25EdXJhdGlvbiA9IDEgKiBUaWNrc1BlclNlY29uZDtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBpc0xhenkgPSB0cnVlO1xyXG5cclxuICAgIHByb3RlY3RlZCBjb21wdXRlVmFsdWUoKTogTmVhcmVzdFBsYXllckNvbnRleHQgfCBudWxsIHtcclxuICAgICAgICBjb25zdCBwbGF5ZXJzID0gdGhpcy5lbnRpdHkuZGltZW5zaW9uLmdldFBsYXllcnMoe1xyXG4gICAgICAgICAgICBjbG9zZXN0OiAxLFxyXG4gICAgICAgICAgICBsb2NhdGlvbjogdGhpcy5lbnRpdHkubG9jYXRpb24sXHJcbiAgICAgICAgfSk7XHJcblxyXG4gICAgICAgIGNvbnN0IHBsYXllciA9IHBsYXllcnNbMF07XHJcbiAgICAgICAgaWYgKCFwbGF5ZXIpIHJldHVybiBudWxsO1xyXG5cclxuICAgICAgICBpZiAocGxheWVyLmdldEdhbWVNb2RlKCkgIT09IEdhbWVNb2RlLlN1cnZpdmFsKSByZXR1cm4gbnVsbDtcclxuXHJcbiAgICAgICAgY29uc3QgZGlzdGFuY2UgPSB0aGlzLmNvbnRleHQuZ2V0VmFsdWUoTG9jYXRpb25WYXIpLmRpc3RhbmNlKFYzLmZyb21FbnRpdHkocGxheWVyLCBvdmVyd29ybGQpKTtcclxuICAgICAgICByZXR1cm4geyBlbnRpdHk6IHBsYXllciwgZGlzdGFuY2UgfTtcclxuICAgIH1cclxufVxyXG4iXSwibmFtZXMiOlsiR2FtZU1vZGUiLCJUaWNrc1BlclNlY29uZCIsIlYzIiwiRW50aXR5Q29udGV4dFZhciIsIkxvY2F0aW9uVmFyIiwiTmVhcmVzdFBsYXllclZhciIsImNvbXB1dGVWYWx1ZSIsInBsYXllcnMiLCJlbnRpdHkiLCJkaW1lbnNpb24iLCJnZXRQbGF5ZXJzIiwiY2xvc2VzdCIsImxvY2F0aW9uIiwicGxheWVyIiwiZ2V0R2FtZU1vZGUiLCJTdXJ2aXZhbCIsImRpc3RhbmNlIiwiY29udGV4dCIsImdldFZhbHVlIiwiZnJvbUVudGl0eSIsIm92ZXJ3b3JsZCIsImludmFsaWRhdGlvbkR1cmF0aW9uIiwiaXNMYXp5IiwiaWRlbnRpZmllciJdLCJtYXBwaW5ncyI6IkFBQUEsU0FBU0EsUUFBUSxFQUFVQyxjQUFjLFFBQVEsb0JBQW9CO0FBQ3JFLE9BQU9DLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLHNCQUFzQixpQ0FBaUM7QUFDOUQsU0FBU0MsV0FBVyxRQUFRLGdCQUFnQjtBQU81QyxPQUFPLE1BQU1DLHlCQUF5QkY7SUFNeEJHLGVBQTRDO1FBQ2xELE1BQU1DLFVBQVUsSUFBSSxDQUFDQyxNQUFNLENBQUNDLFNBQVMsQ0FBQ0MsVUFBVSxDQUFDO1lBQzdDQyxTQUFTO1lBQ1RDLFVBQVUsSUFBSSxDQUFDSixNQUFNLENBQUNJLFFBQVE7UUFDbEM7UUFFQSxNQUFNQyxTQUFTTixPQUFPLENBQUMsRUFBRTtRQUN6QixJQUFJLENBQUNNLFFBQVEsT0FBTztRQUVwQixJQUFJQSxPQUFPQyxXQUFXLE9BQU9kLFNBQVNlLFFBQVEsRUFBRSxPQUFPO1FBRXZELE1BQU1DLFdBQVcsSUFBSSxDQUFDQyxPQUFPLENBQUNDLFFBQVEsQ0FBQ2QsYUFBYVksUUFBUSxDQUFDZCxHQUFHaUIsVUFBVSxDQUFDTixRQUFRTztRQUNuRixPQUFPO1lBQUVaLFFBQVFLO1lBQVFHO1FBQVM7SUFDdEM7OzthQWhCbUJLLHVCQUF1QixJQUFJcEI7YUFDM0JxQixTQUFTOztBQWdCaEM7QUFwQmFqQixpQkFDY2tCLGFBQWEifQ==

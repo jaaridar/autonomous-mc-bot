@@ -1,0 +1,19 @@
+import V3 from "Helpers/Vectors/V3";
+import Volume from "Helpers/Vectors/Volume";
+import AbstractWaterTest from "./AbstractWaterTest";
+class FlowingWaterTest extends AbstractWaterTest {
+    async run(test) {
+        super.run(test);
+        this.fill(test, new Volume(new V3(1, 14, 1), new V3(1, 14, 13)), "minecraft:flowing_water");
+    }
+    constructor(...args){
+        super(...args);
+        this.identifier = "flowing";
+        this.entityLocation = new V3(13, 14, 7);
+        this.primaryLocation = new V3(1, 14, 7);
+        this.isCoreTest = true;
+    }
+}
+export { FlowingWaterTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkZsb3dpbmdXYXRlclRlc3QudHMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHsgVGVzdCB9IGZyb20gXCJAbWluZWNyYWZ0L3NlcnZlci1nYW1ldGVzdFwiO1xyXG5pbXBvcnQgVjMgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9WM1wiO1xyXG5pbXBvcnQgVm9sdW1lIGZyb20gXCJIZWxwZXJzL1ZlY3RvcnMvVm9sdW1lXCI7XHJcbmltcG9ydCBBYnN0cmFjdFdhdGVyVGVzdCBmcm9tIFwiLi9BYnN0cmFjdFdhdGVyVGVzdFwiO1xyXG5cclxuZXhwb3J0IGRlZmF1bHQgY2xhc3MgRmxvd2luZ1dhdGVyVGVzdCBleHRlbmRzIEFic3RyYWN0V2F0ZXJUZXN0IHtcclxuICAgIHB1YmxpYyByZWFkb25seSBpZGVudGlmaWVyID0gXCJmbG93aW5nXCI7XHJcbiAgICBwcm90ZWN0ZWQgcmVhZG9ubHkgZW50aXR5TG9jYXRpb246IFYzID0gbmV3IFYzKDEzLCAxNCwgNyk7XHJcbiAgICBwcm90ZWN0ZWQgcmVhZG9ubHkgcHJpbWFyeUxvY2F0aW9uOiBWMyA9IG5ldyBWMygxLCAxNCwgNyk7XHJcbiAgICBwcm90ZWN0ZWQgcmVhZG9ubHkgaXNDb3JlVGVzdDogYm9vbGVhbiA9IHRydWU7XHJcblxyXG4gICAgcHVibGljIGFzeW5jIHJ1bih0ZXN0OiBUZXN0KTogUHJvbWlzZTx2b2lkPiB7XHJcbiAgICAgICAgc3VwZXIucnVuKHRlc3QpO1xyXG5cclxuICAgICAgICB0aGlzLmZpbGwodGVzdCwgbmV3IFZvbHVtZShuZXcgVjMoMSwgMTQsIDEpLCBuZXcgVjMoMSwgMTQsIDEzKSksIFwibWluZWNyYWZ0OmZsb3dpbmdfd2F0ZXJcIik7XHJcbiAgICB9XHJcbn1cclxuIl0sIm5hbWVzIjpbIlYzIiwiVm9sdW1lIiwiQWJzdHJhY3RXYXRlclRlc3QiLCJGbG93aW5nV2F0ZXJUZXN0IiwicnVuIiwidGVzdCIsImZpbGwiLCJpZGVudGlmaWVyIiwiZW50aXR5TG9jYXRpb24iLCJwcmltYXJ5TG9jYXRpb24iLCJpc0NvcmVUZXN0Il0sIm1hcHBpbmdzIjoiQUFDQSxPQUFPQSxRQUFRLHFCQUFxQjtBQUNwQyxPQUFPQyxZQUFZLHlCQUF5QjtBQUM1QyxPQUFPQyx1QkFBdUIsc0JBQXNCO0FBRXJDLE1BQU1DLHlCQUF5QkQ7SUFNMUMsTUFBYUUsSUFBSUMsSUFBVSxFQUFpQjtRQUN4QyxLQUFLLENBQUNELElBQUlDO1FBRVYsSUFBSSxDQUFDQyxJQUFJLENBQUNELE1BQU0sSUFBSUosT0FBTyxJQUFJRCxHQUFHLEdBQUcsSUFBSSxJQUFJLElBQUlBLEdBQUcsR0FBRyxJQUFJLE1BQU07SUFDckU7OzthQVRnQk8sYUFBYTthQUNWQyxpQkFBcUIsSUFBSVIsR0FBRyxJQUFJLElBQUk7YUFDcENTLGtCQUFzQixJQUFJVCxHQUFHLEdBQUcsSUFBSTthQUNwQ1UsYUFBc0I7O0FBTzdDO0FBWEEsU0FBcUJQLDhCQVdwQiJ9

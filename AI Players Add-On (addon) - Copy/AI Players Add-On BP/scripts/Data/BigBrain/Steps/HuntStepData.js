@@ -1,0 +1,6 @@
+class HuntStepData {
+}
+HuntStepData.Priority = 0;
+export { HuntStepData as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkh1bnRTdGVwRGF0YS50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJleHBvcnQgZGVmYXVsdCBjbGFzcyBIdW50U3RlcERhdGEge1xyXG4gICAgcHVibGljIHN0YXRpYyByZWFkb25seSBQcmlvcml0eSA9IDA7XHJcbn1cclxuIl0sIm5hbWVzIjpbIkh1bnRTdGVwRGF0YSIsIlByaW9yaXR5Il0sIm1hcHBpbmdzIjoiQUFBZSxNQUFNQTtBQUVyQjtBQUZxQkEsYUFDTUMsV0FBVztBQUR0QyxTQUFxQkQsMEJBRXBCIn0=

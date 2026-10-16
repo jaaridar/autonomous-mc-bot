@@ -477,7 +477,10 @@ export class NetherDirector {
             this.ignitionAttempts++;
 
             if (ok) {
-                const verification = verifyPortalAction("ignite_portal", "ignited", counts);
+                // Verify against the world: useItemInSlot returning true only
+                // means the item was used, not that a portal appeared.
+                const lit = this.sim.dimension.getBlock(interior)?.typeId === "minecraft:portal";
+                const verification = verifyPortalAction("ignite_portal", lit ? "ignited" : "failed", counts);
                 if (verification.success) {
                     this.bot.reason = `Nether: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved`;
                     // Try to enter
@@ -487,8 +490,17 @@ export class NetherDirector {
             }
 
             if (this.ignitionAttempts > 5) {
-                this.bot.reason = "Nether: ignition failed after 5 attempts, checking frame";
+                // Real recovery instead of a no-op counter reset: clear a blocked
+                // frame interior, otherwise stop retrying so the route escalates.
                 this.ignitionAttempts = 0;
+                const blocker = this.sim.dimension.getBlock(interior);
+                if (blocker && blocker.typeId !== "minecraft:air" && blocker.typeId !== "minecraft:portal") {
+                    this.bot.reason = `Nether: frame interior blocked by ${blocker.typeId} - clearing`;
+                    this.bot.breakThrough(interior);
+                    return true;
+                }
+                this.bot.reason = "Nether: ignition failed 5x with clear frame - escalating portal route";
+                return false;
             }
 
             return true;

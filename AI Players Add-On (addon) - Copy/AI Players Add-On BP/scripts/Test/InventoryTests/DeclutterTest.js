@@ -1,0 +1,45 @@
+import { ItemStack, TicksPerSecond } from "@minecraft/server";
+import { DeclutterRoutine } from "BigBrain/Routines/DeclutterRoutine";
+import V3 from "Helpers/Vectors/V3";
+import VirtualInventoryComponent from "Inventory/VirtualInventoryComponent";
+import AbstractTest from "Test/AbstractTest";
+class DeclutterTest extends AbstractTest {
+    async run(test) {
+        super.run(test);
+        const aip = this.spawnAIP(test, new V3(1, 2, 1), {
+            root: DeclutterRoutine
+        });
+        await test.idle(1);
+        const inv = VirtualInventoryComponent.get(aip);
+        // Items to KEEP
+        inv.setSlot(0, new ItemStack("minecraft:diamond_sword")); // Best sword
+        inv.setSlot(1, new ItemStack("minecraft:cobblestone", 32)); // Pathable block (value 4)
+        inv.setSlot(2, new ItemStack("minecraft:bread", 8)); // Food (value 1 but in FoodPriority)
+        // Items to THROW
+        inv.setSlot(3, new ItemStack("minecraft:stone_sword")); // Worse gear than diamond sword
+        inv.setSlot(4, new ItemStack("minecraft:wheat_seeds", 4)); // Value 1, not pathable, not food
+        inv.setSlot(5, new ItemStack("minecraft:bone", 2)); // Value 1, not pathable, not food
+        const bigBrain = aip.getMobComponent("BigBrainComponent");
+        bigBrain.root.enter();
+        await bigBrain.root.waitForSignal("onComplete");
+        // Assert useless items were thrown
+        test.assert(!inv.hasItemType("minecraft:stone_sword"), "Stone sword should have been thrown (worse gear)");
+        test.assert(!inv.hasItemType("minecraft:wheat_seeds"), "Wheat seeds should have been thrown (useless)");
+        test.assert(!inv.hasItemType("minecraft:bone"), "Bone should have been thrown (useless)");
+        // Assert useful items were kept
+        test.assert(inv.hasItemType("minecraft:diamond_sword"), "Diamond sword should be kept (best gear)");
+        test.assert(inv.hasItemType("minecraft:cobblestone"), "Cobblestone should be kept (pathable block)");
+        test.assert(inv.hasItemType("minecraft:bread"), "Bread should be kept (food)");
+        test.succeed();
+    }
+    constructor(...args){
+        super(...args);
+        this.namespace = "inventory";
+        this.identifier = "declutter";
+        this.structure = "grass";
+        this.maxTicks = 30 * TicksPerSecond;
+    }
+}
+export { DeclutterTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkRlY2x1dHRlclRlc3QudHMiXSwic291cmNlc0NvbnRlbnQiOlsiaW1wb3J0IHsgSXRlbVN0YWNrLCBUaWNrc1BlclNlY29uZCB9IGZyb20gXCJAbWluZWNyYWZ0L3NlcnZlclwiO1xyXG5pbXBvcnQgeyBUZXN0IH0gZnJvbSBcIkBtaW5lY3JhZnQvc2VydmVyLWdhbWV0ZXN0XCI7XHJcbmltcG9ydCB7IERlY2x1dHRlclJvdXRpbmUgfSBmcm9tIFwiQmlnQnJhaW4vUm91dGluZXMvRGVjbHV0dGVyUm91dGluZVwiO1xyXG5pbXBvcnQgVjMgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9WM1wiO1xyXG5pbXBvcnQgVmlydHVhbEludmVudG9yeUNvbXBvbmVudCBmcm9tIFwiSW52ZW50b3J5L1ZpcnR1YWxJbnZlbnRvcnlDb21wb25lbnRcIjtcclxuaW1wb3J0IEFic3RyYWN0VGVzdCBmcm9tIFwiVGVzdC9BYnN0cmFjdFRlc3RcIjtcclxuaW1wb3J0IHsgVGVzdE5hbWVzcGFjZSwgVGVzdFN0cnVjdHVyZXMgfSBmcm9tIFwiVGVzdC9UeXBlc1wiO1xyXG5cclxuZXhwb3J0IGRlZmF1bHQgY2xhc3MgRGVjbHV0dGVyVGVzdCBleHRlbmRzIEFic3RyYWN0VGVzdCB7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgbmFtZXNwYWNlOiBUZXN0TmFtZXNwYWNlID0gXCJpbnZlbnRvcnlcIjtcclxuICAgIHB1YmxpYyByZWFkb25seSBpZGVudGlmaWVyOiBzdHJpbmcgPSBcImRlY2x1dHRlclwiO1xyXG4gICAgcHVibGljIHJlYWRvbmx5IHN0cnVjdHVyZTogVGVzdFN0cnVjdHVyZXMgPSBcImdyYXNzXCI7XHJcbiAgICBwcm90ZWN0ZWQgb3ZlcnJpZGUgcmVhZG9ubHkgbWF4VGlja3M6IG51bWJlciA9IDMwICogVGlja3NQZXJTZWNvbmQ7XHJcblxyXG4gICAgcHJvdGVjdGVkIGFzeW5jIHJ1bih0ZXN0OiBUZXN0KTogUHJvbWlzZTx2b2lkPiB7XHJcbiAgICAgICAgc3VwZXIucnVuKHRlc3QpO1xyXG5cclxuICAgICAgICBjb25zdCBhaXAgPSB0aGlzLnNwYXduQUlQKHRlc3QsIG5ldyBWMygxLCAyLCAxKSwgeyByb290OiBEZWNsdXR0ZXJSb3V0aW5lIH0pO1xyXG4gICAgICAgIGF3YWl0IHRlc3QuaWRsZSgxKTtcclxuXHJcbiAgICAgICAgY29uc3QgaW52ID0gVmlydHVhbEludmVudG9yeUNvbXBvbmVudC5nZXQoYWlwKTtcclxuXHJcbiAgICAgICAgLy8gSXRlbXMgdG8gS0VFUFxyXG4gICAgICAgIGludi5zZXRTbG90KDAsIG5ldyBJdGVtU3RhY2soXCJtaW5lY3JhZnQ6ZGlhbW9uZF9zd29yZFwiKSk7IC8vIEJlc3Qgc3dvcmRcclxuICAgICAgICBpbnYuc2V0U2xvdCgxLCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0OmNvYmJsZXN0b25lXCIsIDMyKSk7IC8vIFBhdGhhYmxlIGJsb2NrICh2YWx1ZSA0KVxyXG4gICAgICAgIGludi5zZXRTbG90KDIsIG5ldyBJdGVtU3RhY2soXCJtaW5lY3JhZnQ6YnJlYWRcIiwgOCkpOyAvLyBGb29kICh2YWx1ZSAxIGJ1dCBpbiBGb29kUHJpb3JpdHkpXHJcblxyXG4gICAgICAgIC8vIEl0ZW1zIHRvIFRIUk9XXHJcbiAgICAgICAgaW52LnNldFNsb3QoMywgbmV3IEl0ZW1TdGFjayhcIm1pbmVjcmFmdDpzdG9uZV9zd29yZFwiKSk7IC8vIFdvcnNlIGdlYXIgdGhhbiBkaWFtb25kIHN3b3JkXHJcbiAgICAgICAgaW52LnNldFNsb3QoNCwgbmV3IEl0ZW1TdGFjayhcIm1pbmVjcmFmdDp3aGVhdF9zZWVkc1wiLCA0KSk7IC8vIFZhbHVlIDEsIG5vdCBwYXRoYWJsZSwgbm90IGZvb2RcclxuICAgICAgICBpbnYuc2V0U2xvdCg1LCBuZXcgSXRlbVN0YWNrKFwibWluZWNyYWZ0OmJvbmVcIiwgMikpOyAvLyBWYWx1ZSAxLCBub3QgcGF0aGFibGUsIG5vdCBmb29kXHJcblxyXG4gICAgICAgIGNvbnN0IGJpZ0JyYWluID0gYWlwLmdldE1vYkNvbXBvbmVudChcIkJpZ0JyYWluQ29tcG9uZW50XCIpITtcclxuICAgICAgICBiaWdCcmFpbi5yb290LmVudGVyKCk7XHJcbiAgICAgICAgYXdhaXQgYmlnQnJhaW4ucm9vdC53YWl0Rm9yU2lnbmFsKFwib25Db21wbGV0ZVwiKTtcclxuXHJcbiAgICAgICAgLy8gQXNzZXJ0IHVzZWxlc3MgaXRlbXMgd2VyZSB0aHJvd25cclxuICAgICAgICB0ZXN0LmFzc2VydCghaW52Lmhhc0l0ZW1UeXBlKFwibWluZWNyYWZ0OnN0b25lX3N3b3JkXCIpLCBcIlN0b25lIHN3b3JkIHNob3VsZCBoYXZlIGJlZW4gdGhyb3duICh3b3JzZSBnZWFyKVwiKTtcclxuICAgICAgICB0ZXN0LmFzc2VydCghaW52Lmhhc0l0ZW1UeXBlKFwibWluZWNyYWZ0OndoZWF0X3NlZWRzXCIpLCBcIldoZWF0IHNlZWRzIHNob3VsZCBoYXZlIGJlZW4gdGhyb3duICh1c2VsZXNzKVwiKTtcclxuICAgICAgICB0ZXN0LmFzc2VydCghaW52Lmhhc0l0ZW1UeXBlKFwibWluZWNyYWZ0OmJvbmVcIiksIFwiQm9uZSBzaG91bGQgaGF2ZSBiZWVuIHRocm93biAodXNlbGVzcylcIik7XHJcblxyXG4gICAgICAgIC8vIEFzc2VydCB1c2VmdWwgaXRlbXMgd2VyZSBrZXB0XHJcbiAgICAgICAgdGVzdC5hc3NlcnQoaW52Lmhhc0l0ZW1UeXBlKFwibWluZWNyYWZ0OmRpYW1vbmRfc3dvcmRcIiksIFwiRGlhbW9uZCBzd29yZCBzaG91bGQgYmUga2VwdCAoYmVzdCBnZWFyKVwiKTtcclxuICAgICAgICB0ZXN0LmFzc2VydChpbnYuaGFzSXRlbVR5cGUoXCJtaW5lY3JhZnQ6Y29iYmxlc3RvbmVcIiksIFwiQ29iYmxlc3RvbmUgc2hvdWxkIGJlIGtlcHQgKHBhdGhhYmxlIGJsb2NrKVwiKTtcclxuICAgICAgICB0ZXN0LmFzc2VydChpbnYuaGFzSXRlbVR5cGUoXCJtaW5lY3JhZnQ6YnJlYWRcIiksIFwiQnJlYWQgc2hvdWxkIGJlIGtlcHQgKGZvb2QpXCIpO1xyXG5cclxuICAgICAgICB0ZXN0LnN1Y2NlZWQoKTtcclxuICAgIH1cclxufVxyXG4iXSwibmFtZXMiOlsiSXRlbVN0YWNrIiwiVGlja3NQZXJTZWNvbmQiLCJEZWNsdXR0ZXJSb3V0aW5lIiwiVjMiLCJWaXJ0dWFsSW52ZW50b3J5Q29tcG9uZW50IiwiQWJzdHJhY3RUZXN0IiwiRGVjbHV0dGVyVGVzdCIsInJ1biIsInRlc3QiLCJhaXAiLCJzcGF3bkFJUCIsInJvb3QiLCJpZGxlIiwiaW52IiwiZ2V0Iiwic2V0U2xvdCIsImJpZ0JyYWluIiwiZ2V0TW9iQ29tcG9uZW50IiwiZW50ZXIiLCJ3YWl0Rm9yU2lnbmFsIiwiYXNzZXJ0IiwiaGFzSXRlbVR5cGUiLCJzdWNjZWVkIiwibmFtZXNwYWNlIiwiaWRlbnRpZmllciIsInN0cnVjdHVyZSIsIm1heFRpY2tzIl0sIm1hcHBpbmdzIjoiQUFBQSxTQUFTQSxTQUFTLEVBQUVDLGNBQWMsUUFBUSxvQkFBb0I7QUFFOUQsU0FBU0MsZ0JBQWdCLFFBQVEscUNBQXFDO0FBQ3RFLE9BQU9DLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLCtCQUErQixzQ0FBc0M7QUFDNUUsT0FBT0Msa0JBQWtCLG9CQUFvQjtBQUc5QixNQUFNQyxzQkFBc0JEO0lBTXZDLE1BQWdCRSxJQUFJQyxJQUFVLEVBQWlCO1FBQzNDLEtBQUssQ0FBQ0QsSUFBSUM7UUFFVixNQUFNQyxNQUFNLElBQUksQ0FBQ0MsUUFBUSxDQUFDRixNQUFNLElBQUlMLEdBQUcsR0FBRyxHQUFHLElBQUk7WUFBRVEsTUFBTVQ7UUFBaUI7UUFDMUUsTUFBTU0sS0FBS0ksSUFBSSxDQUFDO1FBRWhCLE1BQU1DLE1BQU1ULDBCQUEwQlUsR0FBRyxDQUFDTDtRQUUxQyxnQkFBZ0I7UUFDaEJJLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUsNkJBQTZCLGFBQWE7UUFDdkVhLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUseUJBQXlCLE1BQU0sMkJBQTJCO1FBQ3ZGYSxJQUFJRSxPQUFPLENBQUMsR0FBRyxJQUFJZixVQUFVLG1CQUFtQixLQUFLLHFDQUFxQztRQUUxRixpQkFBaUI7UUFDakJhLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUsMkJBQTJCLGdDQUFnQztRQUN4RmEsSUFBSUUsT0FBTyxDQUFDLEdBQUcsSUFBSWYsVUFBVSx5QkFBeUIsS0FBSyxrQ0FBa0M7UUFDN0ZhLElBQUlFLE9BQU8sQ0FBQyxHQUFHLElBQUlmLFVBQVUsa0JBQWtCLEtBQUssa0NBQWtDO1FBRXRGLE1BQU1nQixXQUFXUCxJQUFJUSxlQUFlLENBQUM7UUFDckNELFNBQVNMLElBQUksQ0FBQ08sS0FBSztRQUNuQixNQUFNRixTQUFTTCxJQUFJLENBQUNRLGFBQWEsQ0FBQztRQUVsQyxtQ0FBbUM7UUFDbkNYLEtBQUtZLE1BQU0sQ0FBQyxDQUFDUCxJQUFJUSxXQUFXLENBQUMsMEJBQTBCO1FBQ3ZEYixLQUFLWSxNQUFNLENBQUMsQ0FBQ1AsSUFBSVEsV0FBVyxDQUFDLDBCQUEwQjtRQUN2RGIsS0FBS1ksTUFBTSxDQUFDLENBQUNQLElBQUlRLFdBQVcsQ0FBQyxtQkFBbUI7UUFFaEQsZ0NBQWdDO1FBQ2hDYixLQUFLWSxNQUFNLENBQUNQLElBQUlRLFdBQVcsQ0FBQyw0QkFBNEI7UUFDeERiLEtBQUtZLE1BQU0sQ0FBQ1AsSUFBSVEsV0FBVyxDQUFDLDBCQUEwQjtRQUN0RGIsS0FBS1ksTUFBTSxDQUFDUCxJQUFJUSxXQUFXLENBQUMsb0JBQW9CO1FBRWhEYixLQUFLYyxPQUFPO0lBQ2hCOzs7YUF0Q2dCQyxZQUEyQjthQUMzQkMsYUFBcUI7YUFDckJDLFlBQTRCO2FBQ2hCQyxXQUFtQixLQUFLekI7O0FBb0N4RDtBQXhDQSxTQUFxQkssMkJBd0NwQiJ9

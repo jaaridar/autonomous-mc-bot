@@ -49,10 +49,14 @@ export const WOOLS = [
 export function isAnyLog(typeId) {
     if (!typeId) return false;
     const t = String(typeId);
-    // Direct suffix check - ultra fast path
-    if (t.endsWith("_log") || t.endsWith("_stem") || t.endsWith("_wood") || t.endsWith("_hyphae") || t.includes("bamboo")) return true;
-    // Fallback to WOODS list
-    return WOODS.some((w) => t === id(w + "_log") || t === id(w + "_stem") || t === id(w + "_wood") || t === id(w + "_hyphae") || t === id(w + "_planks") || t === id("stripped_" + w + "_log"));
+    // Direct suffix check - ultra fast path. Bamboo counts as a log source only
+    // as the plant or the solid block, never bamboo_planks/_mosaic/_raft.
+    if (t.endsWith("_log") || t.endsWith("_stem") || t.endsWith("_wood") || t.endsWith("_hyphae")) return true;
+    if (t === id("bamboo") || t === id("bamboo_block")) return true;
+    // Fallback to WOODS list. Planks are deliberately excluded: "#logs" quotas
+    // must count real logs, not planks (nextStep guards the same way, and
+    // obtain("#logs") used to report success while holding zero logs).
+    return WOODS.some((w) => t === id(w + "_log") || t === id(w + "_stem") || t === id(w + "_wood") || t === id(w + "_hyphae") || t === id("stripped_" + w + "_log"));
 }
 export function matches(type, wanted) {
     if (wanted === "#carbon") return [id("coal"), id("charcoal")].includes(type);
@@ -89,10 +93,12 @@ export function gatherBatch(target) {
     if (isAnyLog(target)) return GATHER_BATCH["#logs"];
     return GATHER_BATCH[target] ?? 0;
 }
-/** The bed colour the bot can actually make, if 3 wool of one colour are held. */
+/** The bed the bot can actually make, if 3 wool of one colour are held. */
 export function bedTarget(stock) {
+    // Bedrock has ONE bed id ("minecraft:bed"); colour lives in block data.
+    // Per-colour ids (white_bed etc.) exist only in Java and can never be crafted.
     const c = WOOLS.find((w) => (stock[id(w + "_wool")] ?? 0) >= 3);
-    return c ? id(c + "_bed") : undefined;
+    return c ? id("bed") : undefined;
 }
 /**
  * Raw materials that must be mined, and the pickaxe tier each one needs.
@@ -127,7 +133,7 @@ export const RECIPES = [
     recipe("furnace", 1, { "#cobble": 8 }, true),
     recipe("torch", 4, { "#carbon": 1, stick: 1 }),
     recipe("oak_boat", 1, { "#planks": 5 }),
-    ...WOOLS.map((w) => recipe(w + "_bed", 1, { [w + "_wool"]: 3, "#planks": 3 }, true)),
+    recipe("bed", 1, { "#wool": 3, "#planks": 3 }, true), // one Bedrock id; bedTarget enforces 3 wool of one colour
     recipe("iron_pickaxe", 1, { iron_ingot: 3, stick: 2 }, true),
     recipe("iron_axe", 1, { iron_ingot: 3, stick: 2 }, true),
     recipe("iron_sword", 1, { iron_ingot: 2, stick: 1 }, true),

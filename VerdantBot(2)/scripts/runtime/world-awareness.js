@@ -259,7 +259,7 @@ export class WorldAwareness {
                 this.importantSpots.set(k, { type: kind, pos: { ...pos }, tick, score, retain: score >= 80 });
             }
             // Also try to use persistent memory for known kinds
-            if (["chest","crafting_table","furnace","bed","portal"].includes(spotKind)) {
+            if (["chest","crafting_table","furnace","bed","portal","village"].includes(spotKind)) {
                 try { this.memory.notice(spotKind, pos, this.sim.dimension.id, tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }

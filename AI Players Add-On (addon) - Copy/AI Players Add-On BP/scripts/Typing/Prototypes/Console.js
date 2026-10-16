@@ -1,0 +1,11 @@
+console.json = function(...args) {
+    const output = [];
+    for (const a of args){
+        if (typeof a === "object") output.push(JSON.stringify(a));
+        else output.push(String(a));
+    }
+    console.log(output.join(", "));
+};
+export { };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkNvbnNvbGUudHMiXSwic291cmNlc0NvbnRlbnQiOlsiZGVjbGFyZSBnbG9iYWwge1xyXG4gICAgaW50ZXJmYWNlIENvbnNvbGUge1xyXG4gICAgICAgIGpzb24oLi4uYXJnczogdW5rbm93bltdKTogdm9pZDtcclxuICAgIH1cclxufVxyXG5cclxuY29uc29sZS5qc29uID0gZnVuY3Rpb24gKC4uLmFyZ3M6IHVua25vd25bXSkge1xyXG4gICAgY29uc3Qgb3V0cHV0OiBzdHJpbmdbXSA9IFtdO1xyXG4gICAgZm9yIChjb25zdCBhIG9mIGFyZ3MpIHtcclxuICAgICAgICBpZiAodHlwZW9mIGEgPT09IFwib2JqZWN0XCIpIG91dHB1dC5wdXNoKEpTT04uc3RyaW5naWZ5KGEpKTtcclxuICAgICAgICBlbHNlIG91dHB1dC5wdXNoKFN0cmluZyhhKSk7XHJcbiAgICB9XHJcbiAgICBjb25zb2xlLmxvZyhvdXRwdXQuam9pbihcIiwgXCIpKTtcclxufTtcclxuXHJcbmV4cG9ydCB7fTtcclxuIl0sIm5hbWVzIjpbImNvbnNvbGUiLCJqc29uIiwiYXJncyIsIm91dHB1dCIsImEiLCJwdXNoIiwiSlNPTiIsInN0cmluZ2lmeSIsIlN0cmluZyIsImxvZyIsImpvaW4iXSwibWFwcGluZ3MiOiJBQU1BQSxRQUFRQyxJQUFJLEdBQUcsU0FBVSxHQUFHQyxJQUFlO0lBQ3ZDLE1BQU1DLFNBQW1CLEVBQUU7SUFDM0IsS0FBSyxNQUFNQyxLQUFLRixLQUFNO1FBQ2xCLElBQUksT0FBT0UsTUFBTSxVQUFVRCxPQUFPRSxJQUFJLENBQUNDLEtBQUtDLFNBQVMsQ0FBQ0g7YUFDakRELE9BQU9FLElBQUksQ0FBQ0csT0FBT0o7SUFDNUI7SUFDQUosUUFBUVMsR0FBRyxDQUFDTixPQUFPTyxJQUFJLENBQUM7QUFDNUI7QUFFQSxXQUFVIn0=

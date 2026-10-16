@@ -1,0 +1,25 @@
+import { EntityComponentTypes, TicksPerSecond } from "@minecraft/server";
+import V3 from "Helpers/Vectors/V3";
+import AbstractHealthTest from "./AbstractHealthTest";
+class FallDamageTest extends AbstractHealthTest {
+    async run(test) {
+        super.run(test);
+        // Should be a fatal fall for a normal player.
+        const aip = this.spawnAIP(test, new V3(1, 26, 1));
+        await test.idle(5 * TicksPerSecond);
+        test.succeedWhen(()=>{
+            test.assert(aip.isValid, "Expected AIP to survive the fall");
+            const health = aip.getComponent(EntityComponentTypes.Health);
+            test.assert(health.currentValue > 0, "Expected AIP to still have health after the fall");
+        });
+    }
+    constructor(...args){
+        super(...args);
+        this.identifier = "fall_damage";
+        this.structure = "bedrock_box";
+        this.maxTicks = 10 * TicksPerSecond;
+    }
+}
+export { FallDamageTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkZhbGxEYW1hZ2VUZXN0LnRzIl0sInNvdXJjZXNDb250ZW50IjpbImltcG9ydCB7IEVudGl0eUNvbXBvbmVudFR5cGVzLCBUaWNrc1BlclNlY29uZCB9IGZyb20gXCJAbWluZWNyYWZ0L3NlcnZlclwiO1xyXG5pbXBvcnQgeyBUZXN0IH0gZnJvbSBcIkBtaW5lY3JhZnQvc2VydmVyLWdhbWV0ZXN0XCI7XHJcbmltcG9ydCBWMyBmcm9tIFwiSGVscGVycy9WZWN0b3JzL1YzXCI7XHJcbmltcG9ydCB7IFRlc3RTdHJ1Y3R1cmVzIH0gZnJvbSBcIlRlc3QvVHlwZXNcIjtcclxuaW1wb3J0IEFic3RyYWN0SGVhbHRoVGVzdCBmcm9tIFwiLi9BYnN0cmFjdEhlYWx0aFRlc3RcIjtcclxuXHJcbmV4cG9ydCBkZWZhdWx0IGNsYXNzIEZhbGxEYW1hZ2VUZXN0IGV4dGVuZHMgQWJzdHJhY3RIZWFsdGhUZXN0IHtcclxuICAgIHB1YmxpYyByZWFkb25seSBpZGVudGlmaWVyOiBzdHJpbmcgPSBcImZhbGxfZGFtYWdlXCI7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgc3RydWN0dXJlOiBUZXN0U3RydWN0dXJlcyA9IFwiYmVkcm9ja19ib3hcIjtcclxuICAgIHB1YmxpYyByZWFkb25seSBtYXhUaWNrczogbnVtYmVyID0gMTAgKiBUaWNrc1BlclNlY29uZDtcclxuXHJcbiAgICBwcm90ZWN0ZWQgYXN5bmMgcnVuKHRlc3Q6IFRlc3QpOiBQcm9taXNlPHZvaWQ+IHtcclxuICAgICAgICBzdXBlci5ydW4odGVzdCk7XHJcblxyXG4gICAgICAgIC8vIFNob3VsZCBiZSBhIGZhdGFsIGZhbGwgZm9yIGEgbm9ybWFsIHBsYXllci5cclxuICAgICAgICBjb25zdCBhaXAgPSB0aGlzLnNwYXduQUlQKHRlc3QsIG5ldyBWMygxLCAyNiwgMSkpO1xyXG5cclxuICAgICAgICBhd2FpdCB0ZXN0LmlkbGUoNSAqIFRpY2tzUGVyU2Vjb25kKTtcclxuXHJcbiAgICAgICAgdGVzdC5zdWNjZWVkV2hlbigoKSA9PiB7XHJcbiAgICAgICAgICAgIHRlc3QuYXNzZXJ0KGFpcC5pc1ZhbGlkLCBcIkV4cGVjdGVkIEFJUCB0byBzdXJ2aXZlIHRoZSBmYWxsXCIpO1xyXG5cclxuICAgICAgICAgICAgY29uc3QgaGVhbHRoID0gYWlwLmdldENvbXBvbmVudChFbnRpdHlDb21wb25lbnRUeXBlcy5IZWFsdGgpITtcclxuICAgICAgICAgICAgdGVzdC5hc3NlcnQoaGVhbHRoLmN1cnJlbnRWYWx1ZSA+IDAsIFwiRXhwZWN0ZWQgQUlQIHRvIHN0aWxsIGhhdmUgaGVhbHRoIGFmdGVyIHRoZSBmYWxsXCIpO1xyXG4gICAgICAgIH0pO1xyXG4gICAgfVxyXG59XHJcbiJdLCJuYW1lcyI6WyJFbnRpdHlDb21wb25lbnRUeXBlcyIsIlRpY2tzUGVyU2Vjb25kIiwiVjMiLCJBYnN0cmFjdEhlYWx0aFRlc3QiLCJGYWxsRGFtYWdlVGVzdCIsInJ1biIsInRlc3QiLCJhaXAiLCJzcGF3bkFJUCIsImlkbGUiLCJzdWNjZWVkV2hlbiIsImFzc2VydCIsImlzVmFsaWQiLCJoZWFsdGgiLCJnZXRDb21wb25lbnQiLCJIZWFsdGgiLCJjdXJyZW50VmFsdWUiLCJpZGVudGlmaWVyIiwic3RydWN0dXJlIiwibWF4VGlja3MiXSwibWFwcGluZ3MiOiJBQUFBLFNBQVNBLG9CQUFvQixFQUFFQyxjQUFjLFFBQVEsb0JBQW9CO0FBRXpFLE9BQU9DLFFBQVEscUJBQXFCO0FBRXBDLE9BQU9DLHdCQUF3Qix1QkFBdUI7QUFFdkMsTUFBTUMsdUJBQXVCRDtJQUt4QyxNQUFnQkUsSUFBSUMsSUFBVSxFQUFpQjtRQUMzQyxLQUFLLENBQUNELElBQUlDO1FBRVYsOENBQThDO1FBQzlDLE1BQU1DLE1BQU0sSUFBSSxDQUFDQyxRQUFRLENBQUNGLE1BQU0sSUFBSUosR0FBRyxHQUFHLElBQUk7UUFFOUMsTUFBTUksS0FBS0csSUFBSSxDQUFDLElBQUlSO1FBRXBCSyxLQUFLSSxXQUFXLENBQUM7WUFDYkosS0FBS0ssTUFBTSxDQUFDSixJQUFJSyxPQUFPLEVBQUU7WUFFekIsTUFBTUMsU0FBU04sSUFBSU8sWUFBWSxDQUFDZCxxQkFBcUJlLE1BQU07WUFDM0RULEtBQUtLLE1BQU0sQ0FBQ0UsT0FBT0csWUFBWSxHQUFHLEdBQUc7UUFDekM7SUFDSjs7O2FBbEJnQkMsYUFBcUI7YUFDckJDLFlBQTRCO2FBQzVCQyxXQUFtQixLQUFLbEI7O0FBaUI1QztBQXBCQSxTQUFxQkcsNEJBb0JwQiJ9

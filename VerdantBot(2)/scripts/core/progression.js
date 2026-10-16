@@ -116,15 +116,17 @@ export class GoalNode {
         // Check items
         if (this.requires.items) {
             for (const req of this.requires.items) {
-                const have = inventory[req.id] ?? 0;
-                // Check alternatives (any log)
+                // Pseudo-tags (#planks, #logs, #wool, ...) resolve through amountOf
+                // so a "#planks" requirement is not silently read as a 0-count id.
+                const have = String(req.id).startsWith("#") ? amountOf(inventory, req.id) : inventory[req.id] ?? 0;
+                // Check alternatives (any log, or a better tool for a tool goal)
                 if (req.alternatives && isAnyWoodRequest(req.id)) {
                     const anyHave = Object.entries(inventory)
                         .filter(([k]) => isAnyLog(k) || req.alternatives.includes(k))
                         .reduce((a, [, v]) => a + v, 0);
                     if (anyHave < req.count) return false;
                 } else {
-                    if (have < req.count) return false;
+                    if (have < req.count && !(req.alternatives ?? []).some((a) => (inventory[a] ?? 0) >= req.count)) return false;
                 }
             }
         }
@@ -474,7 +476,7 @@ export function decomposeIronTools() {
                 hierarchy: HIERARCHY.GOAL,
                 tags: [TAGS.ESSENTIAL, TAGS.COMBAT],
                 display: "Craft shield - defense vs skeleton swarm",
-                requires: { items: [{ id: "minecraft:iron_ingot", count: 6 }, { id: "#planks", count: 1 }] },
+                requires: { items: [{ id: "#planks", count: 6 }, { id: "minecraft:iron_ingot", count: 1 }] },
                 priority: 85,
                 children: [
                     new GoalNode({ id: "craft_shield", hierarchy: HIERARCHY.ACTION, tags: [TAGS.CRAFTING], display: "Craft shield" })

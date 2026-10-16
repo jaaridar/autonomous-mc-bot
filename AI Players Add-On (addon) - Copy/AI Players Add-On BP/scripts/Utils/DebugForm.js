@@ -1,0 +1,17 @@
+import { ActionFormData } from "@minecraft/server-ui";
+class _DebugForm {
+    /**
+     * Displays a simple debug form with a title and content to the specified players.
+     * @param title - The title of the form.
+     * @param content - The content/body of the form.
+     * @param players - The players to whom the form will be shown.
+     */ static debugForm(title, content, players) {
+        const form = new ActionFormData().title(title).body(content).button("Close");
+        for (const player of players){
+            form.show(player);
+        }
+    }
+}
+globalThis.DebugForm = _DebugForm;
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkRlYnVnRm9ybS50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgeyBQbGF5ZXIgfSBmcm9tIFwiQG1pbmVjcmFmdC9zZXJ2ZXJcIjtcclxuaW1wb3J0IHsgQWN0aW9uRm9ybURhdGEgfSBmcm9tIFwiQG1pbmVjcmFmdC9zZXJ2ZXItdWlcIjtcclxuXHJcbmNsYXNzIF9EZWJ1Z0Zvcm0ge1xyXG4gICAgLyoqXHJcbiAgICAgKiBEaXNwbGF5cyBhIHNpbXBsZSBkZWJ1ZyBmb3JtIHdpdGggYSB0aXRsZSBhbmQgY29udGVudCB0byB0aGUgc3BlY2lmaWVkIHBsYXllcnMuXHJcbiAgICAgKiBAcGFyYW0gdGl0bGUgLSBUaGUgdGl0bGUgb2YgdGhlIGZvcm0uXHJcbiAgICAgKiBAcGFyYW0gY29udGVudCAtIFRoZSBjb250ZW50L2JvZHkgb2YgdGhlIGZvcm0uXHJcbiAgICAgKiBAcGFyYW0gcGxheWVycyAtIFRoZSBwbGF5ZXJzIHRvIHdob20gdGhlIGZvcm0gd2lsbCBiZSBzaG93bi5cclxuICAgICAqL1xyXG4gICAgcHVibGljIHN0YXRpYyBkZWJ1Z0Zvcm0odGl0bGU6IHN0cmluZywgY29udGVudDogc3RyaW5nLCBwbGF5ZXJzOiBQbGF5ZXJbXSkge1xyXG4gICAgICAgIGNvbnN0IGZvcm0gPSBuZXcgQWN0aW9uRm9ybURhdGEoKS50aXRsZSh0aXRsZSkuYm9keShjb250ZW50KS5idXR0b24oXCJDbG9zZVwiKTtcclxuICAgICAgICBmb3IgKGNvbnN0IHBsYXllciBvZiBwbGF5ZXJzKSB7XHJcbiAgICAgICAgICAgIGZvcm0uc2hvdyhwbGF5ZXIpO1xyXG4gICAgICAgIH1cclxuICAgIH1cclxufVxyXG5cclxuZGVjbGFyZSBnbG9iYWwge1xyXG4gICAgLy8gZXNsaW50LWRpc2FibGUtbmV4dC1saW5lIG5vLXZhclxyXG4gICAgdmFyIERlYnVnRm9ybTogT21pdDx0eXBlb2YgX0RlYnVnRm9ybSwgXCJwcm90b3R5cGVcIj47XHJcbn1cclxuZ2xvYmFsVGhpcy5EZWJ1Z0Zvcm0gPSBfRGVidWdGb3JtO1xyXG4iXSwibmFtZXMiOlsiQWN0aW9uRm9ybURhdGEiLCJfRGVidWdGb3JtIiwiZGVidWdGb3JtIiwidGl0bGUiLCJjb250ZW50IiwicGxheWVycyIsImZvcm0iLCJib2R5IiwiYnV0dG9uIiwicGxheWVyIiwic2hvdyIsImdsb2JhbFRoaXMiLCJEZWJ1Z0Zvcm0iXSwibWFwcGluZ3MiOiJBQUNBLFNBQVNBLGNBQWMsUUFBUSx1QkFBdUI7QUFFdEQsTUFBTUM7SUFDRjs7Ozs7S0FLQyxHQUNELE9BQWNDLFVBQVVDLEtBQWEsRUFBRUMsT0FBZSxFQUFFQyxPQUFpQixFQUFFO1FBQ3ZFLE1BQU1DLE9BQU8sSUFBSU4saUJBQWlCRyxLQUFLLENBQUNBLE9BQU9JLElBQUksQ0FBQ0gsU0FBU0ksTUFBTSxDQUFDO1FBQ3BFLEtBQUssTUFBTUMsVUFBVUosUUFBUztZQUMxQkMsS0FBS0ksSUFBSSxDQUFDRDtRQUNkO0lBQ0o7QUFDSjtBQU1BRSxXQUFXQyxTQUFTLEdBQUdYIn0=

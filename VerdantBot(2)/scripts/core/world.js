@@ -16,7 +16,7 @@ export const PASSABLE_RE = /(short_grass|tallgrass|tall_grass|fern|large_fern|de
 // Blocks that can be stood on (solid support) - slabs, stairs, chests etc count.
 
 // Falling blocks that can bury the bot
-export const FALLING_RE = /^(minecraft:(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|anvil|dragon_egg|concrete_powder|pointed_dripstone))$/;
+export const FALLING_RE = /^(minecraft:(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|(chipped_|damaged_)?anvil|dragon_egg|.*_concrete_powder|pointed_dripstone))$/;
 
 // Liquids
 export const LIQUID_RE = /(water|flowing_water|lava|flowing_lava)/;
@@ -244,6 +244,7 @@ export const HAZARDS = new Set([
     "campfire",
     "soul_campfire",
     "wither_rose",
+    "lava_cauldron",
 ].map((s) => "minecraft:" + s));
 export const FOOD = new Set([
     "bread",
@@ -343,8 +344,8 @@ for (const [block, drops] of [
     ["warped_stem", "warped_stem"],
     ["crimson_hyphae", "crimson_stem"],
     ["warped_hyphae", "warped_stem"],
-    ["bamboo_block", "bamboo"],
-    ["bamboo_mosaic", "bamboo"],
+    ["bamboo_block", "bamboo_block"],
+    ["bamboo_mosaic", "bamboo_mosaic"],
 ]) {
     MINE["minecraft:" + block] = {
         drops: "minecraft:" + drops,
@@ -355,6 +356,8 @@ for (const [block, drops] of [
 // Speedrun/nether essentials: any-wood pseudo block, gravel (flint source for ignition), obsidian (portal frame)
 MINE["#logs"] = { drops: "#logs", tool: "axe", tier: 0 };
 MINE["minecraft:gravel"] = { drops: "minecraft:gravel", tool: "shovel", tier: 0 };
+MINE["minecraft:dirt"] = { drops: "minecraft:dirt", tool: "shovel", tier: 0 };
+MINE["minecraft:crying_obsidian"] = { drops: "minecraft:crying_obsidian", tool: "pickaxe", tier: 4 };
 MINE["minecraft:obsidian"] = { drops: "minecraft:obsidian", tool: "pickaxe", tier: 4 };
 for (const [block, drops, tier] of [
     ["stone", "cobblestone", 1],

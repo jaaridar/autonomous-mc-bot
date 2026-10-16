@@ -450,17 +450,18 @@ export class SpeedrunDirector {
             const ok = b.sim.useItemInSlot(selected);
             this.ignitionTries++;
             if (ok) {
-                b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved, verify success`;
-                try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-                // Verify entry
-                const verify = verifyPortalAction("ignite_portal", "ignited", counts);
+                // Verify against the world: "the item was used" is not evidence.
+                const lit = b.sim.dimension.getBlock(interior)?.typeId === "minecraft:portal";
+                const verify = verifyPortalAction("ignite_portal", lit ? "ignited" : "failed", counts);
                 if (verify.success) {
+                    b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved`;
+                    try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                     b.record("NETHER ENTRY SUCCESS - primary objective achieved");
                 }
                 return true;
             }
             if (this.ignitionTries > 5) {
-                b.reason = "Speedrun: ignition failed after 5 attempts, checking frame";
+                b.reason = "Speedrun: ignition failed after 5 attempts - retrying";
                 this.ignitionTries = 0;
             }
             return true;
@@ -799,7 +800,10 @@ export class SpeedrunDirector {
 
             try {
                 const lavaPool = b.awareness?.getLavaPool() ?? b.structures?.getPortalOpportunity();
-                const pos = lavaPool?.pos ?? lavaPool?.pos;
+                // Awareness returns a raw cell {x,y,z,tick}; the structure detector
+                // returns { pos, ... }. Accept both shapes (the ?? pair was a no-op
+                // duplicate, so this whole obsidian-making branch never ran).
+                const pos = lavaPool?.pos ?? (lavaPool && typeof lavaPool.x === "number" ? { x: lavaPool.x, y: lavaPool.y, z: lavaPool.z } : undefined);
                 if (pos) {
                     if (distance(pos, b.sim.location) > 10) {
                         b.reason = `Speedrun: lava pool at ${pos.x},${pos.y},${pos.z} - going for obsidian portal, account depth accessibility surrounding terrain water availability hostile mobs escape routes`;

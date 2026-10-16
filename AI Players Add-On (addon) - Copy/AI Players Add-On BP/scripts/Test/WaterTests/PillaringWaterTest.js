@@ -1,0 +1,18 @@
+import V3 from "Helpers/Vectors/V3";
+import Volume from "Helpers/Vectors/Volume";
+import AbstractWaterTest from "./AbstractWaterTest";
+class PillaringWaterTest extends AbstractWaterTest {
+    async run(test) {
+        super.run(test);
+        this.fill(test, new Volume(new V3(1, 13, 1), new V3(13, 13, 13)), "minecraft:glass");
+    }
+    constructor(...args){
+        super(...args);
+        this.identifier = "pillaring";
+        this.entityLocation = new V3(13, 2, 7);
+        this.primaryLocation = new V3(7, 14, 7);
+    }
+}
+export { PillaringWaterTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIlBpbGxhcmluZ1dhdGVyVGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgeyBUZXN0IH0gZnJvbSBcIkBtaW5lY3JhZnQvc2VydmVyLWdhbWV0ZXN0XCI7XHJcbmltcG9ydCBWMyBmcm9tIFwiSGVscGVycy9WZWN0b3JzL1YzXCI7XHJcbmltcG9ydCBWb2x1bWUgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9Wb2x1bWVcIjtcclxuaW1wb3J0IEFic3RyYWN0V2F0ZXJUZXN0IGZyb20gXCIuL0Fic3RyYWN0V2F0ZXJUZXN0XCI7XHJcblxyXG5leHBvcnQgZGVmYXVsdCBjbGFzcyBQaWxsYXJpbmdXYXRlclRlc3QgZXh0ZW5kcyBBYnN0cmFjdFdhdGVyVGVzdCB7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgaWRlbnRpZmllciA9IFwicGlsbGFyaW5nXCI7XHJcbiAgICBwcm90ZWN0ZWQgcmVhZG9ubHkgZW50aXR5TG9jYXRpb246IFYzID0gbmV3IFYzKDEzLCAyLCA3KTtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBwcmltYXJ5TG9jYXRpb246IFYzID0gbmV3IFYzKDcsIDE0LCA3KTtcclxuXHJcbiAgICBwdWJsaWMgYXN5bmMgcnVuKHRlc3Q6IFRlc3QpOiBQcm9taXNlPHZvaWQ+IHtcclxuICAgICAgICBzdXBlci5ydW4odGVzdCk7XHJcblxyXG4gICAgICAgIHRoaXMuZmlsbCh0ZXN0LCBuZXcgVm9sdW1lKG5ldyBWMygxLCAxMywgMSksIG5ldyBWMygxMywgMTMsIDEzKSksIFwibWluZWNyYWZ0OmdsYXNzXCIpO1xyXG4gICAgfVxyXG59XHJcbiJdLCJuYW1lcyI6WyJWMyIsIlZvbHVtZSIsIkFic3RyYWN0V2F0ZXJUZXN0IiwiUGlsbGFyaW5nV2F0ZXJUZXN0IiwicnVuIiwidGVzdCIsImZpbGwiLCJpZGVudGlmaWVyIiwiZW50aXR5TG9jYXRpb24iLCJwcmltYXJ5TG9jYXRpb24iXSwibWFwcGluZ3MiOiJBQUNBLE9BQU9BLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLFlBQVkseUJBQXlCO0FBQzVDLE9BQU9DLHVCQUF1QixzQkFBc0I7QUFFckMsTUFBTUMsMkJBQTJCRDtJQUs1QyxNQUFhRSxJQUFJQyxJQUFVLEVBQWlCO1FBQ3hDLEtBQUssQ0FBQ0QsSUFBSUM7UUFFVixJQUFJLENBQUNDLElBQUksQ0FBQ0QsTUFBTSxJQUFJSixPQUFPLElBQUlELEdBQUcsR0FBRyxJQUFJLElBQUksSUFBSUEsR0FBRyxJQUFJLElBQUksTUFBTTtJQUN0RTs7O2FBUmdCTyxhQUFhO2FBQ1ZDLGlCQUFxQixJQUFJUixHQUFHLElBQUksR0FBRzthQUNuQ1Msa0JBQXNCLElBQUlULEdBQUcsR0FBRyxJQUFJOztBQU8zRDtBQVZBLFNBQXFCRyxnQ0FVcEIifQ==

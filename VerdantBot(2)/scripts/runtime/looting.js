@@ -36,6 +36,12 @@ export class Looting {
     scan(radius = 20, tick = 0) {
         if (tick - this.lastScan < 20) return [];
         this.lastScan = tick;
+        // Expired ignore entries otherwise linger for the whole session; prune
+        // at scan cadence once the map grows (bounded, trivial cost).
+        if (this.ignore.size > 256) {
+            for (const [k, until] of this.ignore)
+                if ((until ?? 0) <= tick) this.ignore.delete(k);
+        }
         const base = floor(this.sim.location);
         const found = [];
         // Near-field full coverage: the 600-check budget is consumed from one corner
@@ -169,7 +175,9 @@ export class Looting {
                 try {
                     const res = this.bag.withdraw(chest, (it) => it.typeId === item.typeId, 2);
                     moved += res.moved + res.merged;
-                    break;
+                    // Keep going: chooseLoot returns every stack worth taking, so
+                    // draining the first type must not abandon the rest (this used
+                    // to ignore the chest for 10 minutes after one successful grab).
                 } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if (moved > 0) {
@@ -207,6 +215,23 @@ export class Looting {
             return this.lootChest(c.pos, tick);
         }
         return false;
+    }
+
+    /**
+     * Arbiter probe: score > 30 when a chest worth looting exists right now.
+     * Mirrors tick()'s candidate test without acting, so the arbiter can rank
+     * the looting director against the others (it was never proposed before).
+     */
+    evaluate(tick) {
+        if (!this.bot.settings.loot) return 0;
+        if (this.currentChest) return this.terrain.block(this.currentChest) ? 60 : 0;
+        const free = this.bag.container.emptySlotsCount;
+        const topStruct = this.bot.structures?.getTopPriority();
+        if (free < 1 && (!topStruct || topStruct.priority < 90)) return 0;
+        for (const c of this.scan(20, tick)) {
+            if (this.evaluateChest(c.pos, tick)) return 60;
+        }
+        return 0;
     }
 
     findVillage(radius = 64) {

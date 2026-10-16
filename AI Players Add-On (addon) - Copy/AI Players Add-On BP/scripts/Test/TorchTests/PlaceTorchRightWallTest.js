@@ -1,0 +1,12 @@
+import V3 from "Helpers/Vectors/V3";
+import AbstractTorchTest from "./AbstractTorchTest";
+class PlaceTorchRightWallTest extends AbstractTorchTest {
+    constructor(...args){
+        super(...args);
+        this.identifier = "place_torch_right_wall";
+        this.entityLocation = new V3(1, 2, 2);
+    }
+}
+export { PlaceTorchRightWallTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIlBsYWNlVG9yY2hSaWdodFdhbGxUZXN0LnRzIl0sInNvdXJjZXNDb250ZW50IjpbImltcG9ydCBWMyBmcm9tIFwiSGVscGVycy9WZWN0b3JzL1YzXCI7XHJcbmltcG9ydCBBYnN0cmFjdFRvcmNoVGVzdCBmcm9tIFwiLi9BYnN0cmFjdFRvcmNoVGVzdFwiO1xyXG5cclxuZXhwb3J0IGRlZmF1bHQgY2xhc3MgUGxhY2VUb3JjaFJpZ2h0V2FsbFRlc3QgZXh0ZW5kcyBBYnN0cmFjdFRvcmNoVGVzdCB7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgaWRlbnRpZmllcjogc3RyaW5nID0gXCJwbGFjZV90b3JjaF9yaWdodF93YWxsXCI7XHJcbiAgICBwcm90ZWN0ZWQgb3ZlcnJpZGUgcmVhZG9ubHkgZW50aXR5TG9jYXRpb246IFYzID0gbmV3IFYzKDEsIDIsIDIpO1xyXG59XHJcbiJdLCJuYW1lcyI6WyJWMyIsIkFic3RyYWN0VG9yY2hUZXN0IiwiUGxhY2VUb3JjaFJpZ2h0V2FsbFRlc3QiLCJpZGVudGlmaWVyIiwiZW50aXR5TG9jYXRpb24iXSwibWFwcGluZ3MiOiJBQUFBLE9BQU9BLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLHVCQUF1QixzQkFBc0I7QUFFckMsTUFBTUMsZ0NBQWdDRDs7O2FBQ2pDRSxhQUFxQjthQUNUQyxpQkFBcUIsSUFBSUosR0FBRyxHQUFHLEdBQUc7O0FBQ2xFO0FBSEEsU0FBcUJFLHFDQUdwQiJ9

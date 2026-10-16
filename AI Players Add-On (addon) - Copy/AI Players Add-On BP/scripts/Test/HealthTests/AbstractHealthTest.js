@@ -1,0 +1,10 @@
+import AbstractTest from "Test/AbstractTest";
+class AbstractHealthTest extends AbstractTest {
+    constructor(...args){
+        super(...args);
+        this.namespace = "health";
+    }
+}
+export { AbstractHealthTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkFic3RyYWN0SGVhbHRoVGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgQWJzdHJhY3RUZXN0IGZyb20gXCJUZXN0L0Fic3RyYWN0VGVzdFwiO1xyXG5pbXBvcnQgeyBUZXN0TmFtZXNwYWNlIH0gZnJvbSBcIlRlc3QvVHlwZXNcIjtcclxuXHJcbmV4cG9ydCBkZWZhdWx0IGFic3RyYWN0IGNsYXNzIEFic3RyYWN0SGVhbHRoVGVzdCBleHRlbmRzIEFic3RyYWN0VGVzdCB7XHJcbiAgICBwdWJsaWMgcmVhZG9ubHkgbmFtZXNwYWNlOiBUZXN0TmFtZXNwYWNlID0gXCJoZWFsdGhcIjtcclxufVxyXG4iXSwibmFtZXMiOlsiQWJzdHJhY3RUZXN0IiwiQWJzdHJhY3RIZWFsdGhUZXN0IiwibmFtZXNwYWNlIl0sIm1hcHBpbmdzIjoiQUFBQSxPQUFPQSxrQkFBa0Isb0JBQW9CO0FBRzlCLE1BQWVDLDJCQUEyQkQ7OzthQUNyQ0UsWUFBMkI7O0FBQy9DO0FBRkEsU0FBOEJELGdDQUU3QiJ9

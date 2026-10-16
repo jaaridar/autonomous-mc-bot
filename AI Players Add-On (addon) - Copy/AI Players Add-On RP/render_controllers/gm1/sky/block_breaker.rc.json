@@ -1,0 +1,1 @@
+{"format_version":"1.10.0","render_controllers":{"controller.render.gm1_sky.block_breaker":{"geometry":"Geometry.default","materials":[{"*":"Material.default"}],"uv_anim":{"offset":[0,"math.floor((query.life_time * 20 / query.property('gm1_sky:break_duration')) * 10) / 10"],"scale":[1,"1/10"]},"textures":["Texture.default"]}}}

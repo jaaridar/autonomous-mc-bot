@@ -1,0 +1,3 @@
+export default "prod";
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIkVudi50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJleHBvcnQgdHlwZSBFbnYgPSBcImRldlwiIHwgXCJ0ZXN0XCIgfCBcInByb2RcIjtcbmV4cG9ydCBkZWZhdWx0IFwicHJvZFwiIGFzIEVudjtcbiJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFDQSxlQUFlLE9BQWMifQ==

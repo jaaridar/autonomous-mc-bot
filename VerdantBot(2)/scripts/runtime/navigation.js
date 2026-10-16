@@ -166,6 +166,8 @@ export class Navigator {
                 if (distance(goal, d.goal) > 0.6 && !this.straightClear(loc, goal)) { this.direct = undefined; return undefined; }
                 d.goal = { ...goal };
                 d.issued = tick;
+                const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+                if (hunger > 6 && hd > 1.2) { try { this.sim.isSprinting = true; } catch { /* ignore */ } }
                 try { this.sim.moveToLocation(this.host.relative(goal), { speed: this.fast || this.urgent ? 1 : 0.65, faceTarget: true }); }
                 catch { this.direct = undefined; return undefined; }
             }
@@ -181,7 +183,9 @@ export class Navigator {
         this.segmentStart = tick;
         this.lastProgress = tick;
         this.direct = { goal: { ...goal }, since: tick, issued: tick, lastMove: tick, best: hd };
-        try { this.sim.isSprinting = false; } catch { /* ignore */ }
+        const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+        if (hunger > 6 && hd > 1.2) { try { this.sim.isSprinting = true; } catch { /* ignore */ } }
+        else { try { this.sim.isSprinting = false; } catch { /* ignore */ } }
         try { this.sim.moveToLocation(this.host.relative(goal), { speed: this.fast || this.urgent ? 1 : 0.65, faceTarget: true }); }
         catch { this.direct = undefined; return undefined; }
         return "running";

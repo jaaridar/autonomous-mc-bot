@@ -1,0 +1,14 @@
+import V3 from "Helpers/Vectors/V3";
+import AbstractPathfindingTest from "./AbstractPathfindingTest";
+class StaircasePathfindingTest extends AbstractPathfindingTest {
+    constructor(...args){
+        super(...args);
+        this.identifier = "staircase";
+        this.entityLocation = new V3(11, 13, 2);
+        this.primaryLocation = new V3(11, 8, 6);
+        this.isCoreTest = true;
+    }
+}
+export { StaircasePathfindingTest as default };
+
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIlN0YWlyY2FzZVBhdGhmaW5kaW5nVGVzdC50cyJdLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgVjMgZnJvbSBcIkhlbHBlcnMvVmVjdG9ycy9WM1wiO1xyXG5pbXBvcnQgQWJzdHJhY3RQYXRoZmluZGluZ1Rlc3QgZnJvbSBcIi4vQWJzdHJhY3RQYXRoZmluZGluZ1Rlc3RcIjtcclxuXHJcbmV4cG9ydCBkZWZhdWx0IGNsYXNzIFN0YWlyY2FzZVBhdGhmaW5kaW5nVGVzdCBleHRlbmRzIEFic3RyYWN0UGF0aGZpbmRpbmdUZXN0IHtcclxuICAgIHB1YmxpYyByZWFkb25seSBpZGVudGlmaWVyID0gXCJzdGFpcmNhc2VcIjtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBlbnRpdHlMb2NhdGlvbjogVjMgPSBuZXcgVjMoMTEsIDEzLCAyKTtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBwcmltYXJ5TG9jYXRpb246IFYzID0gbmV3IFYzKDExLCA4LCA2KTtcclxuICAgIHByb3RlY3RlZCByZWFkb25seSBpc0NvcmVUZXN0OiBib29sZWFuID0gdHJ1ZTtcclxufVxyXG4iXSwibmFtZXMiOlsiVjMiLCJBYnN0cmFjdFBhdGhmaW5kaW5nVGVzdCIsIlN0YWlyY2FzZVBhdGhmaW5kaW5nVGVzdCIsImlkZW50aWZpZXIiLCJlbnRpdHlMb2NhdGlvbiIsInByaW1hcnlMb2NhdGlvbiIsImlzQ29yZVRlc3QiXSwibWFwcGluZ3MiOiJBQUFBLE9BQU9BLFFBQVEscUJBQXFCO0FBQ3BDLE9BQU9DLDZCQUE2Qiw0QkFBNEI7QUFFakQsTUFBTUMsaUNBQWlDRDs7O2FBQ2xDRSxhQUFhO2FBQ1ZDLGlCQUFxQixJQUFJSixHQUFHLElBQUksSUFBSTthQUNwQ0ssa0JBQXNCLElBQUlMLEdBQUcsSUFBSSxHQUFHO2FBQ3BDTSxhQUFzQjs7QUFDN0M7QUFMQSxTQUFxQkosc0NBS3BCIn0=

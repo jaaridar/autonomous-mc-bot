@@ -398,7 +398,13 @@ export function evaluateBucketPriority(inventory, context) {
     const hasRawIron = (inventory["minecraft:raw_iron"] ?? 0) >= 3;
 
     if (hasWaterBucket) {
-        return { priority: 0, reason: "already have water bucket, milestone achieved", milestone: true };
+        // Post-water director stages. runtime/nether.js consumes `next` for the
+        // strings below; nothing produced them before, so the obsidian and
+        // portal-building segment of the bucket director was dead code.
+        const obsidian = inventory["minecraft:obsidian"] ?? 0;
+        if (obsidian >= 10) return { priority: 0, reason: "water bucket and 10+ obsidian, build the portal", milestone: true, next: "build_portal" };
+        if (context.hasLavaPool) return { priority: 0, reason: "water bucket, lava pool known - make obsidian", milestone: true, next: "make_obsidian" };
+        return { priority: 0, reason: "water bucket, no lava pool known - explore for lava", milestone: true, next: "find_lava_pool" };
     }
     if (hasBucket) {
         return { priority: 80, reason: "have bucket, need water for obsidian and clutch", milestone: true, next: "get_water" };
@@ -600,7 +606,12 @@ export function chooseFastestViableMethod(options, context) {
         if (evalCave) methods.push({ ...evalCave, route: "cave_lava", method: "cave_bucket" });
     }
     if (options.ruinedPortal) {
-        methods.push({ ...portalPlan, score: options.ruinedPortal.score ?? 70, route: "ruined_portal" });
+        // portalPlan was an undeclared identifier, so this branch threw a
+        // ReferenceError whenever a ruined portal was known. Use the real
+        // evaluator and skip portals whose feasibility is low.
+        const plan = evaluateRuinedPortal(options.ruinedPortal, context);
+        if (plan && plan.feasibility !== "low")
+            methods.push({ ...plan, method: "repair_ruined_portal", route: "ruined_portal", score: options.ruinedPortal.score ?? plan.score });
     }
 
     if (!methods.length) return { method: "explore", reason: "no lava pool or ruined portal yet, explore" };

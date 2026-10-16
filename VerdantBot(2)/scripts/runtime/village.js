@@ -1,6 +1,7 @@
 // One module now: runtime/village.js + runtime/golem.js (see docs/ARCHITECTURE.md).
 import { CARDINAL, DOWN, add, center, distance, floor } from "../core/math.js";
 import { GOLEM_STATS, chooseBestGolemStrategy, evaluateGolemFight, evaluateVillage, evaluateVillageVsNetherRoute, shouldCraftBedIndependently, shouldDisengageDuringFight } from "../core/village.js";
+import { bedTarget } from "../core/recipes.js";
 import { timeOfDay, weaponTierLoose } from "./world.js";
 
 // ---------------------------------------------------------------- village.js
@@ -71,7 +72,8 @@ export class VillageDirector {
                     }
                 }
                 if ((context.woolCount ?? 0) >= 3 && (context.woodCount ?? 0) >= 3) {
-                    try { this.bot.obtain("minecraft:white_bed", 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                    const bed = bedTarget(this.bag.counts());
+                    if (bed) { try { this.bot.obtain(bed, 1, tick); return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); } }
                 }
             }
             return false;
@@ -134,7 +136,7 @@ export class VillageDirector {
         const hasStone = (counts["minecraft:cobblestone"] ?? 0) >= 8;
         const hasFood = Object.keys(counts).some(k => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot"));
         const foodAmount = Object.entries(counts).filter(([k]) => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot")).reduce((sum, [,v]) => sum + v, 0);
-        const hasBed = Object.keys(counts).some(k => k.endsWith("_bed"));
+        const hasBed = Object.keys(counts).some(k => k.endsWith("_bed") || k === "minecraft:bed");
         const hasWool = Object.keys(counts).some(k => k.includes("_wool"));
         const woolCount = Object.entries(counts).filter(([k]) => k.includes("_wool")).reduce((sum, [,v]) => sum + v, 0);
         const woodCount = Object.entries(counts).filter(([k])=>k.endsWith("_log")||k.endsWith("_planks")||k.includes("_stem")).reduce((a,[,v])=>a+v,0);
@@ -186,10 +188,11 @@ export class VillageDirector {
             for (const f of (this.bot.structures?.found ?? [])) {
                 if (f.name === "village" && f.pos) candidates.push(f.pos);
             }
-            if (this.memory?.knownSpots) {
-                for (const s of (this.memory.knownSpots("village") ?? [])) {
-                    candidates.push(s);
-                }
+            // memory.knownSpots never existed; ofKind is the real persistent-memory
+            // reader and village spots are persisted now.
+            for (const s of (this.memory?.ofKind?.("village", this.sim.dimension.id) ?? [])) {
+                const pos = s?.pos ?? s;
+                if (pos && Number.isFinite(pos.x)) candidates.push(pos);
             }
             if (candidates.length) {
                 candidates.sort((a, b) => distance(a, this.sim.location) - distance(b, this.sim.location));
@@ -385,7 +388,7 @@ export class VillageDirector {
                     this.bot.reason = `Village: heading to bed at ${bedPos.x},${bedPos.y},${bedPos.z} to sleep`;
                     return true;
                 }
-            } else if (!Object.keys(this.bag.counts()).some(k => k.endsWith("_bed")) && this.bot.settings.camp) {
+            } else if (!Object.keys(this.bag.counts()).some(k => k.endsWith("_bed") || k === "minecraft:bed") && this.bot.settings.camp) {
                 // Daytime and no bed carried: take one for portable night camping
                 if (distBed <= 4) {
                     this.bot.reason = `Village: claiming bed at ${bedPos.x},${bedPos.y},${bedPos.z} for night shelter`;
@@ -418,7 +421,7 @@ export class VillageDirector {
 
     findBedNearby(villagePos, radius = 24) {
         if (!this.terrain?.scanOres) return null;
-        const found = this.terrain.scanOres(villagePos, Math.min(radius, 20), (t) => t.includes("_bed"), 200);
+        const found = this.terrain.scanOres(villagePos, Math.min(radius, 20), (t) => t === "minecraft:bed" || t.endsWith("_bed"), 200);
         return found.length > 0 ? found[0] : null;
     }
 
@@ -523,9 +526,11 @@ export class GolemDirector {
         // Reassess health positioning continuously
         if (tick - this.lastHealthCheck > 20) {
             this.lastHealthCheck = tick;
+            let golemHp;
+            try { golemHp = golem.getComponent("minecraft:health")?.currentValue; } catch {}
             const disengageCheck = shouldDisengageDuringFight({
                 health: context.health,
-                golemHealth: golem.health,
+                golemHealth: golemHp,
                 distanceToGolem: distance(golem.location, this.sim.location),
                 hasBlocks: context.hasBlocks,
                 otherHostileCount: context.otherHostileCount,
@@ -663,7 +668,9 @@ export class GolemDirector {
             if (dist <= 4) {
                 this.sim.lookAtEntity(golem);
                 try { this.sim.attackEntity(golem); this.hits++; this.lastHit = tick; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-                this.bot.reason = `Golem: attacking from elevated position ${p.y - this.pillarPos.y} high, hits ${this.hits}, golem health ${golem.health ?? "unknown"}, avoid fall damage`;
+                let golemHp;
+                try { golemHp = golem.getComponent("minecraft:health")?.currentValue; } catch {}
+                this.bot.reason = `Golem: attacking from elevated position ${p.y - this.pillarPos.y} high, hits ${this.hits}, golem health ${golemHp ?? "unknown"}, avoid fall damage`;
 
                 // Avoid fall damage: sneak
                 this.sim.isSneaking = true;
@@ -892,12 +899,14 @@ export class GolemDirector {
     hasSaferFasterRoute(counts) {
         // If have iron from other sources or village chest, golem not mandatory
         const hasIron = (counts["minecraft:iron_ingot"] ?? 0) >= 3;
-        const hasVillageChestIron = this.bot.structures?.found?.some(f => f.name === "village" && f.hasChest);
-        const hasCaveIron = !!this.bot.awareness?.getNearest("iron_ore");
+        // found entries never carried hasChest - use the loot list. getNearest
+        // spots carry pos, not `distance`.
+        const hasVillageChestIron = this.bot.structures?.found?.some(f => f.name === "village" && (f.loot ?? []).includes("chest"));
+        const nearIron = this.bot.awareness?.getNearest("iron_ore");
 
         if (hasIron) return true;
         if (hasVillageChestIron) return true;
-        if (hasCaveIron && this.bot.awareness.getNearest("iron_ore").distance < 24) return true;
+        if (nearIron?.pos && distance(nearIron.pos, this.sim.location) < 24) return true;
 
         return false;
     }

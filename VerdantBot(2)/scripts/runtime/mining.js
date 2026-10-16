@@ -1,5 +1,5 @@
 // One module now: runtime/mining.js + runtime/deepminer.js (see docs/ARCHITECTURE.md).
-import { DOWN, UP, add, center, distance, floor, horizontal, key } from "../core/math.js";
+import { CARDINAL, DOWN, UP, add, center, distance, floor, horizontal, key } from "../core/math.js";
 import { MINE, bestYFor, branchPattern, bulkLevel, clusterVeins, isBulk, isUnbreakable, optimalSpacing, oreLevel } from "../core/world.js";
 
 // ---------------------------------------------------------------- mining.js
@@ -53,7 +53,9 @@ export class Miner {
         const b = this.bot;
         if (b.terrain.solid(target)) return true;
         if (b.builder && b.builder.countBlocks() > 0) {
-            const anchor = add(fromPos, DOWN);
+            // The stair floor cell sits 2 Manhattan from the block under the bot's
+            // feet, so that anchor is always "not_adjacent" - search a real support.
+            const anchor = b.builder.findSupportFor?.(target)?.pos ?? add(fromPos, DOWN);
             const res = b.builder.placeAt(target, anchor, { autoAnchor: true, sneak: true, allowHazard: true });
             if (res === "placed") {
                 this.reason = `Bridging at ${target.x},${target.y},${target.z} - miner`;
@@ -396,7 +398,7 @@ export class Miner {
         if (this.maybeCollect(tick) === "busy") return "working";
         if (this.moving) {
             if (this.refilled()) return "working";
-            return this.settle() === "arrived" ? "stepped" : "working";
+            return this.settle(tick) === "arrived" ? "stepped" : "working";
         }
         if (this.dug >= STEP_LIMIT) {
             this.wantsOut = true;
@@ -552,7 +554,9 @@ export class DeepMiner {
         const b = this.bot;
         if (b.terrain.solid(target)) return true;
         if (b.builder && b.builder.countBlocks() > 0) {
-            const anchor = add(fromPos, DOWN);
+            // Same adjacency fix as the stair miner: search a support adjacent to
+            // the gap cell instead of trusting the anchor under the bot's feet.
+            const anchor = b.builder.findSupportFor?.(target)?.pos ?? add(fromPos, DOWN);
             const res = b.builder.placeAt(target, anchor, { autoAnchor: true, sneak: true, allowHazard: true });
             if (res === "placed") {
                 this.reason = `Bridging at ${target.x},${target.y},${target.z} - deep miner`;
