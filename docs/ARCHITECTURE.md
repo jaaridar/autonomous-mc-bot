@@ -132,7 +132,7 @@ here rather than in `scripts/`:
    refactor: it removes advertised behaviour, so it is parked here.
 2. **Verification & recovery layer** — one place that verifies bucket, water,
    obsidian, portal, ignition and entry instead of assuming success.
-3. **Reads behind the driver** — 482 read-only `sim.*` uses remain outside
+3. **Reads behind the driver** — 469 read-only `sim.*` uses remain outside
    `scripts/sim` (position, flags, components). They are safe but scattered;
    routing them through the per-tick snapshot removes native reads per tick.
 4. **World model / blackboard** — single source of truth for lava pools,

@@ -391,11 +391,6 @@ export class Avatar {
         return this.guard("attackEntity", () => this.sim.attackEntity(entity) === true, false);
     }
 
-    /** Swing at whatever the head is aimed at (the engine raycasts). */
-    swing() {
-        return this.guard("attack", () => this.sim.attack() === true, false);
-    }
-
     setSneaking(on) {
         return this.guard("isSneaking", () => {
             this.sim.isSneaking = on === true;
