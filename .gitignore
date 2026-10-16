@@ -1,0 +1,7 @@
+tools/load/
+tools/parse-out/
+opencode.json
+*.log
+.DS_Store
+Thumbs.db
+node_modules/
