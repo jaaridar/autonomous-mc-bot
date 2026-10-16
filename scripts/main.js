@@ -5,6 +5,7 @@ import { Host } from "./runtime/host.js";
 import { Bag } from "./runtime/inventory.js";
 import { Memory } from "./runtime/memory.js";
 import { setTimeSource } from "./runtime/world.js";
+import { beginSession, describe as describeLoad, disposeAll, on, pump, status as lifecycleStatus } from "./runtime/lifecycle.js";
 import { EntityComponentTypes, EquipmentSlot, Player, system, world } from "@minecraft/server";
 setTimeSource(world);
 /** Chat command parsing helpers (were core/commands.js). */
@@ -30,6 +31,11 @@ function coordinates(a) {
     return p;
 }
 
+// Load bookkeeping first: `/reload` runs this file again in a fresh context, and
+// the operator needs to be able to tell "load #7" from "load #1".
+const loadId = beginSession({
+    onReload: (n) => console.warn(`[Verdant] reload detected (load #${n}); subscriptions re-registered, simulated players re-adopted on the next !bot spawn`),
+});
 const host = new Host();
 const memory = new Memory();
 let bot;
@@ -123,7 +129,7 @@ function spawnBot(p) {
     if (remembered.death)
         say(p, "A death point is remembered; it is fetched automatically after the next death, or use !bot recover now.");
 }
-const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun/autosurvival on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.2.8 refactor + speedrun-fix + ultra-efficient survival-master 80 scenarios: A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1, arbitrary bridging diagonal/horizontal/up, amazing parkour.";
+const HELP = "!bot init confirm | spawn | engine skills/legacy | skill list/run/stop/why/status | reload | | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun/autosurvival on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.2.8 refactor + speedrun-fix + ultra-efficient survival-master 80 scenarios: A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1, arbitrary bridging diagonal/horizontal/up, amazing parkour.";
 function say(p, msg) {
     p.sendMessage("§a[Verdant] §r" + msg);
 }
@@ -177,6 +183,72 @@ function command(p, text) {
         if (cmd === "help") {
             say(p, HELP);
             return;
+        }
+        if (cmd === "reload" || cmd === "dev") {
+            say(p, `Load ${describeLoad()}. Backups: memory ${memory.summary().spotsTotal ?? 0} spot(s).`);
+            return;
+        }
+        if (cmd === "engine") {
+            const engine = a[0];
+            if (engine !== "skills" && engine !== "legacy")
+                throw Error("Use: !bot engine skills | legacy");
+            const b0 = requireBot(p);
+            b0.settings.engine = engine;
+            if (engine === "skills")
+                b0.ensureSkills();
+            b0.save();
+            say(p, engine === "skills"
+                ? `Skill scheduler driving the bot (${b0.skillStatus()?.count ?? 0} skills). !bot skill list; !bot skill why to see the decision.`
+                : "Legacy brain driving the bot. Skills still run one at a time with !bot skill run <id>.");
+            return;
+        }
+        if (cmd === "skill") {
+            const sub = a[0] ?? "list";
+            if (sub === "list") {
+                const b0 = bot?.skills;
+                if (!b0)
+                    throw Error("No bot yet: !bot spawn first.");
+                const registry = b0.registry;
+                const groups = registry.categories().map((c) => `${c.category}(${c.count})`).join(" ");
+                say(p, `${registry.size} skills: ${groups}. !bot skill list <filter> | !bot skill run <id> | !bot skill why`);
+                return;
+            }
+            const b = requireBot(p);
+            b.ensureSkills();
+            if (sub === "run") {
+                if (!a[1])
+                    throw Error("Use: !bot skill run <category>.<name>");
+                say(p, b.runSkill(a[1]));
+                return;
+            }
+            if (sub === "stop") {
+                b.stopSkills("owner stop");
+                say(p, "Skill stopped.");
+                return;
+            }
+            if (sub === "why") {
+                const why = b.skillExplain();
+                const active = why.active ? `${why.active.id} (${why.active.status}) ${why.active.message}` : "nothing running";
+                const top = why.candidates.slice(0, 5).map((c) => `${c.id}:${c.score}`).join(" ");
+                say(p, `Active: ${active} | intent: ${why.intent ? `${why.intent.kind} - ${why.intent.reason}` : "?"} | next: ${top || "none"}`);
+                if (why.failures.length)
+                    say(p, `Recent failures: ${why.failures.map((f) => `${f.id}x${f.failures}`).join(", ")}`);
+                return;
+            }
+            if (sub === "status" || sub === "list-all") {
+                const st = b.skillStatus();
+                const active = st.active ? `${st.active.id} ${st.active.status} ${st.active.message}` : "idle";
+                say(p, `${st.count} skills, engine=${b.settings.engine}, active=${active}, decisions=${st.decisions}`);
+                if (st.stats.length)
+                    say(p, `Runs: ${st.stats.slice(0, 6).map((x) => `${x.id}:${x.runs}/${x.done}ok`).join(" ")}`);
+                return;
+            }
+            if (a[1] || sub.length > 2) {
+                const found = b.skills.registry.search(a.slice(1).join(" ") || sub).map((x) => x.id);
+                say(p, found.length ? found.join(", ") : `no skill matches '${a.slice(1).join(" ") || sub}'`);
+                return;
+            }
+            throw Error("Use: !bot skill list [filter] | run <id> | stop | why | status");
         }
         if (cmd === "host") {
             say(p, JSON.stringify(host.status()));
@@ -438,8 +510,12 @@ function command(p, text) {
                     b.settings.speedrun = value;
                 else if (a[0] === "autosurvival")
                     b.settings.autoSurvival = value;
+                else if (a[0] === "skills")
+                    b.settings.skills = value;
+                else if (a[0] === "pvp")
+                    b.settings.pvp = value;
                 else
-                    throw Error("Settings: crafting, parkour, defend, fast, hunting, armor, bridge, boat, loot, deep, camp, pickup, speedrun, autosurvival.");
+                    throw Error("Settings: crafting, parkour, defend, fast, hunting, armor, bridge, boat, loot, deep, camp, pickup, speedrun, autosurvival, skills, pvp.");
                 b.stop("Configuration changed; choose or resume a task.");
                 say(p, JSON.stringify(b.settings));
                 break;
@@ -477,7 +553,7 @@ function command(p, text) {
 // in 2.13.0-beta). Feature-detect it so the pack can never fail to load on a
 // future module: /scriptevent verdant:cmd is the always-available fallback.
 try {
-    world.beforeEvents.chatSend?.subscribe((e) => {
+    on("chatSend", world.beforeEvents.chatSend, (e) => {
         if (e.message === "!bot" || e.message.startsWith("!bot ")) {
             e.cancel = true;
             const p = e.sender, text = e.message.slice(4);
@@ -488,7 +564,7 @@ try {
 catch (e) {
     console.warn("[Verdant] Chat command input unavailable on this Minecraft version: " + e);
 }
-system.afterEvents.scriptEventReceive.subscribe((e) => {
+on("scriptEvent", system.afterEvents.scriptEventReceive, (e) => {
     if (e.id !== "verdant:cmd")
         return;
     const p = e.sourceEntity;
@@ -497,7 +573,7 @@ system.afterEvents.scriptEventReceive.subscribe((e) => {
         command(p, e.message);
 });
 try {
-    world.afterEvents.entityHurt?.subscribe((e) => {
+    on("entityHurt", world.afterEvents.entityHurt, (e) => {
         if (bot?.sim.isValid)
             bot.onHurt(e);
     });
@@ -505,7 +581,7 @@ try {
 catch (e) {
     console.warn("[Verdant] entityHurt unavailable on this Minecraft version: " + e);
 }
-world.afterEvents.entityDie.subscribe((e) => {
+on("entityDie", world.afterEvents.entityDie, (e) => {
     if (bot && e.deadEntity.id === bot.sim.id && bot.state !== "dead") {
         // Snapshot the site first: the brain is frozen until it respawns.
         bot.recordDeath();
@@ -518,13 +594,18 @@ world.afterEvents.entityDie.subscribe((e) => {
         console.warn("[Verdant] Bot died; auto-respawn pipeline started, death point remembered.");
     }
 });
-world.afterEvents.playerLeave.subscribe((e) => {
+on("playerLeave", world.afterEvents.playerLeave, (e) => {
     limits.delete(e.playerName);
     if (bot?.ownerName === e.playerName && bot.sim.isValid)
         bot.pause("Owner disconnected.");
 });
-system.runInterval(() => bot?.tick(), 1);
-world.afterEvents.worldLoad.subscribe(() => {
+// One pump for the whole pack, registered through the lifecycle manager so a
+// reload can never leave two brains ticking the same bot.
+pump("bot", () => {
+    if (bot?.sim?.isValid)
+        bot.tick();
+});
+on("worldLoad", world.afterEvents.worldLoad, () => {
     console.warn("[Verdant 1.2.8] Survival-Master 80 scenarios world-class: A Falls 1-15, B Night mobs 16-30, C Resource 31-45, D Shelter 46-60, E Multi 61-80 critical. Handles ravine flee zombie low HP unknown depth, mountain ledge sunset fall damage darkness, cave tree no torches, water underwater cave oxygen, lava pool immediate hazard, skeleton above cover climb, creeper hole explosion, broken pickaxe, narrow ledge lava balance, deep cave hostile, drowned chase, spider tree, lose surface orientation, empty hunger, too deep pillar, 3 skeletons zombie sunset LOS, 4 zombies building shelter defensive, creeper 2 skeletons block home explosion cover alternate, spider roof skeleton outside multiple angles, 2 creepers narrow entrance simultaneous, zombie blocks exit skeleton above, witch low health potion retreat, mob enters small shelter doorway control, zombie then skeleton joins reassess, creeper destroys entrance terrain changed, skeleton knocks cliff knockback recovery, spider zombie pursue cave chokepoint, hostile group wooden sword disadvantage, attacked while eating cancel/complete, village night zombies secure, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1 never bare-hand, arbitrary bridging diagonal/horizontal/up, amazing parkour, death recovery, upskilling main goal.");
     world.sendMessage("§a[Verdant] v1.2.8 refactor + speedrun-fix + ultra-efficient survival-master 80 scenarios - !bot spawn to begin. Handles all falls, night mobs, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, quick tool #1. If !bot chat input ever goes unanswered, use /scriptevent verdant:cmd spawn instead.");
 });

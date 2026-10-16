@@ -25,6 +25,8 @@ import { GolemDirector, VillageDirector } from "./village.js";
 import { StructureDetector, WorldAwareness } from "./world-awareness.js";
 import { BlockScan, Terrain, findBoat, isBoatEntity } from "./world.js";
 import { Direction, EntityComponentTypes, system, world } from "@minecraft/server";
+import { SkillRunner } from "./skill-runtime.js";
+import { Rng, mix } from "../core/rng.js";
 // New advanced modules
 
 /** Blocks the observer sweep records for the persistent memory. */
@@ -85,7 +87,16 @@ export class Bot {
             loot: true,
             speedrun: false,
             autoSurvival: false,
+            // Skill system (scripts/skills). "legacy" keeps the original tick
+            // loop as the brain; "skills" hands the tick to the skill scheduler.
+            // `!bot engine skills|legacy` switches, and the choice persists.
+            engine: "legacy",
+            skills: false,
+            pvp: false,
         };
+        /** Extra state for the skill runtime (built lazily on first use). */
+        this.skills = undefined;
+        this.skillRequest = null;
         Object.assign(this.settings, sanitizePrefs(memory?.prefs()) ?? {});
         this.mode = "idle";
         this.paused = true;
@@ -825,6 +836,14 @@ export class Bot {
             }
         } catch (_e) { this.fault(_e); }
         try { 
+            if (this.usingSkills()) {
+                // The skill scheduler owns the tick; the legacy brain stays
+                // available for an instant fallback via `!bot engine legacy`.
+                this.tickSkills(tick);
+                this.errors = 0;
+                this.lastErrorTick = 0;
+                return;
+            }
             this.think(tick); 
             this.errors = 0; 
             this.lastErrorTick = 0;
@@ -1631,7 +1650,7 @@ export class Bot {
                     }
                 }
                 if (candidates.length) {
-                    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+                    const chosen = this.seededRng().pick(candidates);
                     this._idleLeg = { goal: center(chosen), since: tick };
                     this.reason = `Patrolling near ${anchor.x},${anchor.y},${anchor.z}`;
                     return;
@@ -3159,4 +3178,78 @@ export class Bot {
             world.setDynamicProperty("verdant:journal", JSON.stringify(this.status()));
         } catch (_e) { this.fault(_e); }
     }
+
+    /**
+     * One seeded stream for legacy-brain choices. Determinism matters even here:
+     * a patrol that differs on every reload cannot be debugged. Seeded from the
+     * session seed and this bot's owner, so a reload repeats the same walk.
+     */
+    seededRng() {
+        if (!this.rng)
+            this.rng = new Rng(mix(this.host?.seed ?? 0, this.ownerName ?? "verdant"));
+        return this.rng;
+    }
+
+    // ------------------------------------------------------------- skill system
+
+    /**
+     * True when the skill scheduler should drive this tick: either the operator
+     * selected it (`!bot engine skills`), or a single skill is running (started
+     * with `!bot skill run`, which works in legacy mode too and hands control
+     * back the moment the skill finishes).
+     */
+    usingSkills() {
+        if (typeof this.sim?.moveToLocation !== "function")
+            return false;
+        if (this.settings.engine === "skills")
+            return true;
+        return !!(this.skills && (this.skills.scheduler.active || this.skills.scheduler.forced));
+    }
+    /** Build the skill runtime on first use: a bot that never uses it pays nothing. */
+    ensureSkills() {
+        if (this.skills)
+            return this.skills;
+        try {
+            this.skills = new SkillRunner(this);
+        }
+        catch (e) {
+            this.record(`skill runtime unavailable: ${e?.message ?? e}`);
+            this.skills = null;
+        }
+        return this.skills;
+    }
+    tickSkills(tick) {
+        const runner = this.ensureSkills();
+        if (!runner)
+            return;
+        const result = runner.tick();
+        if (result?.status === "failed" && result.reason)
+            this.reason = `skill failed: ${result.reason}`;
+        if (this.skillRequest) {
+            const done = this.skillRequest;
+            this.skillRequest = null;
+            if (result?.status && result.status !== "running")
+                this.tell(`skill ${done.id ?? ""}: ${result.message ?? result.reason ?? result.status}`);
+        }
+    }
+    skillStatus() {
+        return this.ensureSkills()?.status() ?? null;
+    }
+    skillExplain() {
+        return this.ensureSkills()?.explain() ?? null;
+    }
+    /** Run one named skill (owner command). Returns a short report string. */
+    runSkill(id) {
+        this.skillRequest = { id };
+        const runner = this.ensureSkills();
+        if (!runner)
+            return "skill runtime unavailable";
+        const started = runner.run(id);
+        return started.ok ? `started ${started.skill}` : `cannot start '${id}': ${started.reason}`;
+    }
+    stopSkills(reason = "owner stop") {
+        return this.ensureSkills()?.stop(reason) ?? null;
+    }
 }
+
+export { Bot as default };

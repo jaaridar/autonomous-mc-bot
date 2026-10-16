@@ -93,6 +93,9 @@ const BOOL_PREFS = [
     "loot",
     "speedrun",
     "autoSurvival",
+    // skill-system preferences (skills/index.js catalog)
+    "skills",
+    "pvp",
 ];
 /** Whitelisted, type-checked operator preferences; unknown keys are dropped. */
 export function sanitizePrefs(raw) {
@@ -104,6 +107,8 @@ export function sanitizePrefs(raw) {
             out[k] = raw[k];
     if (Number.isInteger(raw.range) && raw.range >= 32 && raw.range <= 4096)
         out.range = raw.range;
+    if (raw.engine === "skills" || raw.engine === "legacy")
+        out.engine = raw.engine;
     return Object.keys(out).length ? out : undefined;
 }
 /** Validate an arbitrary parsed document into a usable store. Never throws. */

@@ -23,8 +23,20 @@
 // never assigned).
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+/** Every .js/.mjs file under `dir`, recursively (shared by the layer gates). */
+function walk(dir, out = []) {
+    for (const entry of readdirSync(dir)) {
+        const p = join(dir, entry);
+        if (statSync(p).isDirectory())
+            walk(p, out);
+        else if (p.endsWith(".js") || p.endsWith(".mjs"))
+            out.push(p);
+    }
+    return out;
+}
 
 function undefGate(root) {
     const BUILTINS = new Set([
@@ -368,8 +380,118 @@ function importsGate(root) {
 }
 
 
-const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate };
-const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts" };
+
+/**
+ * layers: core/ and skills/ must stay engine-free, and skills must not reach into
+ * runtime/. This is the rule that keeps the pure half testable offline and lets
+ * the whole bot run headless in Node - the fastest possible dev cycle.
+ */
+function layersGate(root) {
+    const ENGINE = /^\s*import[^;]*from\s+["']@minecraft\//m;
+    const dirs = [join(root, "core"), join(root, "skills")];
+    let bad = 0;
+    let files = 0;
+    for (const dir of dirs) {
+        if (!existsSync(dir))
+            continue;
+        for (const file of walk(dir)) {
+            files++;
+            const text = readFileSync(file, "utf8");
+            if (ENGINE.test(text)) {
+                bad++;
+                console.error(`LAYER FAIL: ${relative(root, file)} imports @minecraft/* (core and skills must be engine-free; act through the skill context)`);
+            }
+            if (file.includes(`${sep}skills${sep}`) && /from\s+["'][^"']*runtime\//.test(text)) {
+                bad++;
+                console.error(`LAYER FAIL: ${relative(root, file)} imports from runtime/ (skills must only depend on core/)`);
+            }
+        }
+    }
+    console.log(`${files} core/skill file(s) checked, ${bad} layer violation(s)`);
+    return bad ? 1 : 0;
+}
+
+/**
+ * reload: everything that registers itself with the engine must go through
+ * runtime/lifecycle.js, so `/reload` cannot leave a second brain ticking or a
+ * duplicated chat handler behind.
+ */
+function reloadGate(root) {
+    const ALLOWED = [`${sep}runtime${sep}lifecycle.js`];
+    let bad = 0;
+    let files = 0;
+    for (const file of walk(root)) {
+        files++;
+        const text = readFileSync(file, "utf8")
+            .replace(/\/\/[^\n]*/g, "")
+            .replace(/\/\*[\s\S]*?\*\//g, "");
+        const rel = relative(root, file);
+        if (!ALLOWED.some((a) => file.endsWith(a))) {
+            if (/\.subscribe\s*\(/.test(text)) {
+                bad++;
+                console.error(`RELOAD FAIL: ${rel} subscribes directly; use on(...) from runtime/lifecycle.js`);
+            }
+            if (/system\.runInterval\s*\(/.test(text)) {
+                bad++;
+                console.error(`RELOAD FAIL: ${rel} starts a repeating timer directly; use pump(...) from runtime/lifecycle.js`);
+            }
+        }
+        if (/Math\.random\s*\(/.test(text)) {
+            bad++;
+            console.error(`RELOAD FAIL: ${rel} uses Math.random(); behaviour must be reproducible (core/rng.js)`);
+        }
+        if (/Date\.now\s*\(/.test(text)) {
+            bad++;
+            console.error(`RELOAD FAIL: ${rel} uses Date.now(); use the tick counter so a replay matches`);
+        }
+    }
+    console.log(`${files} file(s) checked, ${bad} reload/determinism violation(s)`);
+    return bad ? 1 : 0;
+}
+
+/**
+ * skills: build the catalog offline (no engine) and validate every definition.
+ * A malformed skill should fail here, not mid-duel.
+ */
+async function skillsGate() {
+    const entry = pathToFileURL(join(root0, "skills", "index.js")).href;
+    let registry;
+    try {
+        ({ buildRegistry } = await import(entry));
+        registry = buildRegistry();
+    }
+    catch (e) {
+        console.error("SKILL FAIL: catalog did not build: " + (e?.message ?? e));
+        return 1;
+    }
+    let bad = 0;
+    const problems = registry.validate();
+    for (const problem of problems) {
+        bad++;
+        console.error("SKILL FAIL: " + problem);
+    }
+    const ids = new Set();
+    for (const skill of registry.all()) {
+        if (ids.has(skill.id)) {
+            bad++;
+            console.error(`SKILL FAIL: duplicate id ${skill.id}`);
+        }
+        ids.add(skill.id);
+        if (skill.id.split(".")[0] !== skill.category) {
+            bad++;
+            console.error(`SKILL FAIL: ${skill.id} is in category '${skill.category}'`);
+        }
+        if (!skill.tags.length) {
+            bad++;
+            console.error(`SKILL FAIL: ${skill.id} has no tags (needed for !bot skill list <filter>)`);
+        }
+    }
+    console.log(`${registry.size} skill(s) across ${registry.categories().length} categor(ies), ${bad} problem(s)`);
+    return bad ? 1 : 0;
+}
+
+const MODES = { parse: parseGate, link: linkGate, undef: undefGate, imports: importsGate, layers: layersGate, reload: reloadGate, skills: skillsGate };
+const DEFAULT_ROOT = { parse: "scripts", link: "tools/load/scripts", undef: "scripts", imports: "scripts", layers: "scripts", reload: "scripts", skills: "scripts" };
 
 const mode = process.argv[2];
 if (!MODES[mode]) {
@@ -377,4 +499,6 @@ if (!MODES[mode]) {
     process.exit(2);
 }
 const root = process.argv[3] ?? DEFAULT_ROOT[mode];
+const root0 = "scripts";
+let buildRegistry;
 process.exit(await MODES[mode](root));

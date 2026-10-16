@@ -2,7 +2,7 @@
 import { bridgingPlan, getBlockInfo } from "../core/knowledge.js";
 import { DOWN, add, center, floor } from "../core/math.js";
 import { diggable, isFalling, isHazard, isLiquid, isPassable, isSolid, isUnbreakable } from "../core/world.js";
-import { Direction } from "@minecraft/server";
+import { Direction, system } from "@minecraft/server";
 
 // ---------------------------------------------------------------- builder.js
 
@@ -149,7 +149,7 @@ export class Builder {
             // Inventory and the target cell changed: drop the per-tick caches.
             this.bag.invalidate?.();
             if (ok) this.terrain.invalidate?.(target);
-            this.lastPlace = Date.now();
+            this.lastPlace = system.currentTick;
             this.placeAttempts = 0;
             this.lastTarget = { ...target };
             return ok ? "placed" : "rejected";
