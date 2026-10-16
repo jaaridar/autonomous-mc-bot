@@ -287,7 +287,7 @@ export class SurvivalMaster {
             }
             // Ascend
             const surface = { x: ctx.p.x, y: ctx.p.y + 8, z: ctx.p.z };
-            this.bot.sim.moveToLocation(this.bot.host.relative(center(surface)));
+            this.bot.avatar.hop(center(surface));
             return true;
         }
         return false;

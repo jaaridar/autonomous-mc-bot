@@ -31,28 +31,11 @@ function coordinates(a) {
 const host = new Host();
 const memory = new Memory();
 let bot;
-let pendingSpawn;
 const limits = new Map();
-/** Spawn requested before the host finished starting; fired by Host.onReady. */
-host.onReady = () => {
-    const p = pendingSpawn;
-    pendingSpawn = undefined;
-    if (!p?.isValid)
-        return;
-    if (bot?.sim.isValid)
-        return; // a bot is already live (e.g. taken over while the host booted)
-    try {
-        spawnBot(p);
-    }
-    catch (e) {
-        p.sendMessage("§c[Verdant] Auto-spawn failed: " + e.message);
-        console.warn("[Verdant] Auto-spawn failed: " + e);
-    }
-};
 /**
- * Shared spawn path: used by !bot spawn and by the automatic spawn that runs
- * when a first-time host finishes starting. The bot starts working on its own
- * (starter kit, then auto survival), so spawn is the only command needed.
+ * Spawn path for !bot spawn. The bot starts working on its own (starter kit,
+ * then auto survival), so spawn is the only command needed - there is no host
+ * to bring up first, the engine spawns the player directly.
  */
 function spawnBot(p) {
     if (bot?.sim.isValid)
@@ -114,7 +97,7 @@ function spawnBot(p) {
     if (remembered.death)
         say(p, "A death point is remembered; it is fetched automatically after the next death, or use !bot recover now.");
 }
-const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.2.7 speedrun-fix + ultra-efficient survival-master 80 scenarios: A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1, arbitrary bridging diagonal/horizontal/up, amazing parkour.";
+const HELP = "!bot spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. It bootstraps its own gear from real ingredients, then runs auto survival: wood -> stone -> iron, mining, smelting, crafting, exploring, village and chest loot, nether prep, night camping, death recovery, and a live HUD.";
 function say(p, msg) {
     p.sendMessage("§a[Verdant] §r" + msg);
 }
@@ -147,13 +130,7 @@ function command(p, text) {
             return;
         }
         if (cmd === "init") {
-            if (a[0] !== "confirm") {
-                const at = host.preview(p);
-                say(p, `Remote host plan: ${JSON.stringify(at)}. This creates/updates GameTest infrastructure and a ticking area far from you, not a player beacon. A first-time site may move upward to clear terrain. Back up the world; reserve a 12x12x8 area there. Use !bot init confirm to authorize placement.`);
-                return;
-            }
-            host.init(p);
-            say(p, "Loading remote host area; wait for ready message (up to about 23 seconds).");
+            say(p, "No initialization step any more: the engine spawns the simulated player directly, so !bot spawn is all that is needed. (An upgraded world's old remote host area is removed on the next spawn.)");
             return;
         }
         if (cmd === "spawn") {
@@ -166,27 +143,6 @@ function command(p, text) {
                         .getAllPlayers()
                         .some((q) => q.name === "Verdant" || q.hasTag("verdant.bot"))))
                 throw Error("A Verdant player already exists. Stop/recover it before spawning another.");
-            if (!host.status().running) {
-                // One-command setup: bring the host up (first run only) and
-                // spawn automatically as soon as it reports ready.
-                pendingSpawn = p;
-                if (!host.status().pending) {
-                    try {
-                        host.preview(p);
-                        host.init(p);
-                    }
-                    catch (e) {
-                        pendingSpawn = undefined;
-                        throw e;
-                    }
-                    say(p, orphan
-                        ? "Restarting the remote host (about 20 seconds); your existing Verdant player will be taken over as soon as it is ready."
-                        : "First spawn: the remote host is being initialized (one time, about 20 seconds). The bot will spawn next to you when it is ready; keep a safe standing spot.");
-                }
-                else
-                    say(p, "The host is already starting; the bot will spawn next to you when it is ready.");
-                return;
-            }
             spawnBot(p);
             return;
         }
@@ -416,6 +372,7 @@ function command(p, text) {
                     throw Error("Remove equipment before disconnecting.");
                 b.stop("Removed with empty inventory");
                 b.avatar.disconnect();
+                host.forget();
                 bot = undefined;
                 say(p, "Disconnected. The GameTest host remains until world exit.");
                 break;
@@ -467,6 +424,6 @@ world.afterEvents.playerLeave.subscribe((e) => {
 });
 system.runInterval(() => bot?.tick(), 1);
 world.afterEvents.worldLoad.subscribe(() => {
-    console.warn("[Verdant 1.2.7] Survival-Master 80 scenarios world-class: A Falls 1-15, B Night mobs 16-30, C Resource 31-45, D Shelter 46-60, E Multi 61-80 critical. Handles ravine flee zombie low HP unknown depth, mountain ledge sunset fall damage darkness, cave tree no torches, water underwater cave oxygen, lava pool immediate hazard, skeleton above cover climb, creeper hole explosion, broken pickaxe, narrow ledge lava balance, deep cave hostile, drowned chase, spider tree, lose surface orientation, empty hunger, too deep pillar, 3 skeletons zombie sunset LOS, 4 zombies building shelter defensive, creeper 2 skeletons block home explosion cover alternate, spider roof skeleton outside multiple angles, 2 creepers narrow entrance simultaneous, zombie blocks exit skeleton above, witch low health potion retreat, mob enters small shelter doorway control, zombie then skeleton joins reassess, creeper destroys entrance terrain changed, skeleton knocks cliff knockback recovery, spider zombie pursue cave chokepoint, hostile group wooden sword disadvantage, attacked while eating cancel/complete, village night zombies secure, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1 never bare-hand, arbitrary bridging diagonal/horizontal/up, amazing parkour, death recovery, upskilling main goal.");
+    console.warn("[Verdant] loaded. Type !bot spawn to bring the bot in, !bot help for commands.");
     world.sendMessage("§a[Verdant] v1.2.7 speedrun-fix + ultra-efficient survival-master 80 scenarios - !bot spawn to begin. Handles all falls, night mobs, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, quick tool #1.");
 });
