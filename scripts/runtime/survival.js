@@ -4,6 +4,7 @@ import { PREY, RAW_TO_COOKED, amountOf, bedTarget, fuelCount, id, matches } from
 import { adjustTacticForHostile, assessFoodReserves, prioritizeEscapeCoverSurvival, reassessAfterDamage, shouldAvoidCombat, shouldEatBeforeFight } from "../core/survival.js";
 import { FOOD, RAW_MEAT, RISKY_FOOD } from "../core/world.js";
 import { Furnace } from "./equipment.js";
+import { foodFacts } from "./inventory.js";
 import { Explorer } from "./scouting.js";
 // One module now: runtime/survival.js + runtime/foraging.js + runtime/food.js (see docs/ARCHITECTURE.md).
 
@@ -17,6 +18,7 @@ const PICKUP_RANGE   =   1.2; // blocks
 const BLOCKED_MAX    =    64; // max blocked-entity entries before expiry sweep
 
 const ID_FURNACE     = id("furnace");
+const ID_COAL        = id("coal");
 const ID_COBBLE      = id("cobblestone");
 const ID_RAW_IRON    = id("raw_iron");
 const ID_IRON_INGOT  = id("iron_ingot");
@@ -90,17 +92,54 @@ export class SurvivalDirector {
     }
 
     /**
+     * One tick of a smelt wait. poll() first - it approaches the furnace when
+     * needed and collects the finished output. While the job is still cooking
+     * the bot mines reachable coal/ore instead of staring at the block ("while
+     * it is deep it should mine the coal if it found any"). The sweep never
+     * travels: only cells inside arm's reach are dug, so it can never fight
+     * poll()'s own approach or strand a finished output.
+     */
+    smeltWait(b, tick) {
+        this.enter("smelting");
+        this.furnace.poll(tick);
+        if (!this.furnace.jobActive) return;
+        b.reason = this.smeltSweep(b, tick) ?? "Waiting for furnace output";
+    }
+
+    /** Reach-only dig at nearby coal (then iron/copper) during a smelt wait. */
+    smeltSweep(b, tick) {
+        const s = (this.sweep = this.sweep ?? { next: 0, skip: "" });
+        if (tick < s.next) return undefined;
+        const isCoal = (t) => t === "minecraft:coal_ore" || t === "minecraft:deepslate_coal_ore";
+        const isOre = (t) => isCoal(t) || t === "minecraft:iron_ore" || t === "minecraft:deepslate_iron_ore" ||
+            t === "minecraft:copper_ore" || t === "minecraft:deepslate_copper_ore";
+        const ore = b.terrain.scanOres(b.sim.location, 4, isCoal, 48)
+            .concat(b.terrain.scanOres(b.sim.location, 4, isOre, 48))
+            .find((c) => `${c.x},${c.y},${c.z}` !== s.skip);
+        if (!ore) { s.next = tick + 20; return undefined; }
+        const key = `${ore.x},${ore.y},${ore.z}`;
+        const type = b.terrain.block(ore)?.typeId;
+        const r = b.digCell({ x: ore.x, y: ore.y, z: ore.z }, tick);
+        if (r === "digging" || r === "open") {
+            s.skip = "";
+            s.next = tick + 6;
+            return `Furnace cooking - mining ${isCoal(type) ? "coal" : "ore"} at ${key} - advanced`;
+        }
+        s.skip = key;
+        s.next = tick + 10;
+        return undefined;
+    }
+
+    /**
      * Smelt `amount` of `inputWanted` in the nearest furnace.
      * Always returns false — callers must wait for furnace.jobActive to clear.
      */
     produce(inputWanted, amount, tick) {
         const b = this.bot;
 
-        // 1. Already smelting — just poll.
+        // 1. Already smelting - poll, and keep the trip productive.
         if (this.furnace.jobActive) {
-            this.enter("smelting");
-            b.reason = "Waiting for furnace output";
-            this.furnace.poll(tick);
+            this.smeltWait(b, tick);
             return false;
         }
 
@@ -140,6 +179,18 @@ export class SurvivalDirector {
             }
 
         if (fuelSlot < 0) {
+            // No fuel in the bag. Deep underground, walking off to chop logs
+            // for planks is backwards - there is coal under the pickaxe, and
+            // the live client was seen tree-scanning at Y=20 next to an active
+            // shaft. Mine the coal first; planks stay the above-ground /
+            // no-pickaxe fallback.
+            const pick = ["minecraft:stone_pickaxe", "minecraft:iron_pickaxe",
+                "minecraft:diamond_pickaxe", "minecraft:netherite_pickaxe"]
+                .some((p) => (b.bag.usableCounts()[p] ?? 0) > 0);
+            if (pick && floor(b.sim.location).y < 60) {
+                this.ensure(ID_COAL, 2, tick);
+                return false;
+            }
             this.ensure("#planks", amountOf(b.bag.counts(), "#planks") + 2, tick);
             return false;
         }
@@ -188,9 +239,7 @@ export class SurvivalDirector {
             return;
         }
         if (this.furnace.jobActive) {
-            this.enter("smelting");
-            b.reason = "Waiting for furnace output";
-            this.furnace.poll(tick);
+            this.smeltWait(b, tick);
             return;
         }
 
@@ -222,15 +271,24 @@ export class SurvivalDirector {
             }
         }
 
-        // ---- Village opportunity: loot stores, beds & food as soon as basic resources are acquired ----
+        // ---- Village raid: out as soon as the tools exist, forced at the 5-minute cap ----
         if (b.village && b.settings.loot) {
-            const hasBasic = ((usable["minecraft:wooden_pickaxe"] ?? 0) > 0 || (usable["minecraft:stone_pickaxe"] ?? 0) > 0 ||
-                              (stock["#logs"] ?? 0) > 0 || (stock["#planks"] ?? 0) > 0 ||
-                              (stock[ID_COBBLE] ?? 0) > 0);
-            const v = b.village.findNearestVillage(128);
+            const hasTool = (usable["minecraft:wooden_pickaxe"] ?? 0) > 0 || (usable["minecraft:stone_pickaxe"] ?? 0) > 0 ||
+                            (usable["minecraft:iron_pickaxe"] ?? 0) > 0 || (usable["minecraft:diamond_pickaxe"] ?? 0) > 0 ||
+                            (b.armed?.() ?? false);
+            const v = b.village.findNearestVillage(128, tick);
             const ironHave = stock[ID_IRON_INGOT] ?? 0;
-            if (v && hasBasic && (v.distance < 96 || ironHave < 5 || safeFood < 8)) {
+            // Village raid: the errand opens the moment the tools exist (a
+            // pick and/or a weapon), and the five-minute cap forces it even
+            // bare-handed - "deep mining can wait, after 5 minutes go at any
+            // how": golem, chests, food, bucket.
+            const overdue = b.village.overdue(tick);
+            const firstTrip = !b.village.visited && !b.village.firstTripGivenUp && (hasTool || overdue) && !!v;
+            if (v && (firstTrip || (hasTool && (v.distance < 96 || ironHave < 5 || safeFood < 8)))) {
                 this.enter("village-loot");
+                if (firstTrip) b.reason = overdue
+                    ? `Village raid overdue (5m): heading to ${v.pos.x},${v.pos.y},${v.pos.z} at any cost - golem, chests, food`
+                    : `Village raid: tools ready, looting the village at ${v.pos.x},${v.pos.y},${v.pos.z} before any deep mining`;
                 if (b.village.tick(tick)) return;
             }
         }
@@ -548,7 +606,7 @@ export class FoodDirector {
 
         // Single threatInfo call shared by all checks below.
         const threatInfo  = this.bot.terrain.threatInfo(this.sim, this.bot.owner());
-        const reserves    = assessFoodReserves(counts);
+        const reserves    = assessFoodReserves(counts, { facts: foodFacts(Object.keys(counts)) });
         const threatTypes = threatInfo.list.map((e) => e.typeId);
 
         if (threatInfo.nearest) {

@@ -1,6 +1,0 @@
-import ScriptingTest from "./ScriptingTest";
-export default [
-    ScriptingTest
-];
-
-//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbImluZGV4LnRzIl0sInNvdXJjZXNDb250ZW50IjpbImltcG9ydCBTY3JpcHRpbmdUZXN0IGZyb20gXCIuL1NjcmlwdGluZ1Rlc3RcIjtcclxuXHJcbmV4cG9ydCBkZWZhdWx0IFtTY3JpcHRpbmdUZXN0XTtcclxuIl0sIm5hbWVzIjpbIlNjcmlwdGluZ1Rlc3QiXSwibWFwcGluZ3MiOiJBQUFBLE9BQU9BLG1CQUFtQixrQkFBa0I7QUFFNUMsZUFBZTtJQUFDQTtDQUFjLENBQUMifQ==

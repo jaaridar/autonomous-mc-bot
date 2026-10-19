@@ -37,7 +37,7 @@ const steps = [
     { name: "layer gate (core/skills stay engine-free, runtime only adapts)", file: "gates.mjs", args: ["layers"] },
     { name: "reload gate (no bare event subscriptions, no leaked timers)", file: "gates.mjs", args: ["reload"] },
     { name: "skill gate (registry contract + catalog integrity)", file: "gates.mjs", args: ["skills"] },
-    { name: "unit tests (memory schema, capabilities, walkable guard, drop flush)", file: "tests.mjs" },
+    { name: "unit tests (memory schema, capabilities, walkable guard, drop flush, village locate ladder)", file: "tests.mjs" },
     { name: "skill tests (plans, scheduler determinism, harness smoke)", file: "skills.test.mjs" },
     { name: "perf/efficiency tests (native-call + A* budgets, equivalence vs v1.2.4)", file: "perf.test.mjs", skip: quick },
     { name: "no-undef gate catches its fixtures (expected to fail)", file: "gates.mjs", args: ["undef", "tools/selftest"], mustFail: true },

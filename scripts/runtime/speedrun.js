@@ -4,6 +4,7 @@ import { chooseNetherRoute, ensureIronForBothBucketAndFlintSteel, evaluateBucket
 import { PHASES, currentPhase } from "../core/progression.js";
 
 import { assessFoodReserves } from "../core/survival.js";
+import { foodFacts } from "./inventory.js";
 import { timeOfDay } from "./world.js";
 
 /**
@@ -645,7 +646,7 @@ export class SpeedrunDirector {
         }
         // Food check before dangerous
         try {
-            const reserves = assessFoodReserves(counts, { hunger: 20, health: 20 });
+            const reserves = assessFoodReserves(counts, { hunger: 20, health: 20, facts: foodFacts(Object.keys(counts)) });
             if (reserves.status === "low" && !b.village?.findNearestVillage?.(32)) {
                 b.reason = `Speedrun: food low ${reserves.totalHunger}, gather before iron - maintain sufficient for exploration sprinting combat emergency recovery`;
                 b.obtain("minecraft:bread", 3, tick);

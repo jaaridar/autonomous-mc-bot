@@ -48,6 +48,7 @@ export class Navigator {
         this.direct = undefined;      // { goal, since, issued, lastMove, best } short straight hop without A*
         this.noDirectUntil = 0;
         this.replans = 0;
+        this.lastHop = -99;           // sprint-hop (bunny hop) cadence
     }
 
     reset() {
@@ -143,6 +144,34 @@ export class Navigator {
     }
 
     /**
+     * Sprint-hop travel: on long, flat, clear runs the fastest way to move is
+     * to keep sprinting and bunny-hop (jump every time the feet touch down).
+     * Gated hard so it never becomes jump spam: solid flat ground only, engine
+     * fed (hunger > 6 - sprint and jumping burn energy), clear head room over
+     * both the current column and the destination cell, and one hop per 10
+     * ticks at most.
+     */
+    tryHop(w, tick) {
+        if (tick - this.lastHop < 10) return false;
+        try {
+            if (!this.sim.isOnGround || this.sim.isSneaking === true) return false;
+            const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+            if (hunger <= 6) return false;
+            const feet = floor(this.sim.location);
+            if (w.y !== feet.y) return false;                       // flat travel only
+            if (!this.terrain.solid(add(w, { x: 0, y: -1, z: 0 }))) return false;
+            for (const p of [add(feet, { x: 0, y: 2, z: 0 }), add(feet, { x: 0, y: 3, z: 0 }), add(w, { x: 0, y: 2, z: 0 })]) {
+                const b = this.terrain.block(p);
+                if (b && !b.isAir && (b.isLiquid || b.isSolid)) return false; // no ceiling/liquid over the arc
+            }
+            this.sim.isSprinting = true;
+            this.sim.jump();
+            this.lastHop = tick;
+            return true;
+        } catch { return false; }
+    }
+
+    /**
      * Straight-line walk for short, flat, clear hops. Returns undefined when
      * not applicable (caller falls back to A*), else "running"/"done".
      */
@@ -162,6 +191,7 @@ export class Navigator {
                 return undefined;
             }
             if (hd < 0.7 && Math.abs(dy) < 1.2) { this.reset(); return "done"; }
+            if (hd > 2.2) this.tryHop(floor(goal), tick);   // sprint-hop the open stretch
             if (distance(goal, d.goal) > 0.6 || tick - d.issued >= 20) {
                 if (distance(goal, d.goal) > 0.6 && !this.straightClear(loc, goal)) { this.direct = undefined; return undefined; }
                 d.goal = { ...goal };
@@ -293,20 +323,25 @@ export class Navigator {
             w = this.path[this.waypoint];
         }
 
+        // Fast travel: sprint-hop across flat walk stretches (bunny hopping).
+        if (w.kind === "walk") this.tryHop(w, tick);
+
         if (this.lastPosition && distance(this.sim.location, this.lastPosition) > 0.2) {
             this.lastProgress = tick;
             this.lastPosition = { ...this.sim.location };
         }
 
         // Check if waypoint still safe, or if we need bridge - entire body must be able to go.
-        // freshSafe() drops the cache and re-reads 3 cells natively, and it ran
-        // for the waypoint + every corridor cell on every tick. Every 4 ticks
-        // (or on a new waypoint) is plenty at walking speed.
+        // freshSafe() now drops cache+handles and is throttled to every 6 ticks
+        // (or on a new waypoint). The old 4-tick corridor scan also hit freshSafe()
+        // on every cell; corridor is now sampled every 8 ticks.
         let waypointSafe = true, corridorBad = false;
-        if (tick - this.lastFreshCheck >= 4 || this.lastIssued !== this.waypoint) {
+        if (tick - this.lastFreshCheck >= 6 || this.lastIssued !== this.waypoint) {
             this.lastFreshCheck = tick;
             waypointSafe = w.kind === "bridge" || this.terrain.freshSafe(w);
-            corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p !== w && !this.terrain.freshSafe(p));
+        }
+        if (tick % 8 === 0) {
+            corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p !== w && !this.terrain.safe(p));
         }
         if (tick - this.lastProgress > 50 || !waypointSafe || corridorBad) {
             // Try to find obstruction that blocks entire body

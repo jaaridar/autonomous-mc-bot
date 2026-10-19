@@ -1,7 +1,26 @@
 // One module now: runtime/world-awareness.js + runtime/structures.js (see docs/ARCHITECTURE.md).
 import { STRUCTURE_SIGS, bridgingPlan, detectStructure, parkourPlan, prioritizeGoal, retainScore, scoreSurrounding, shouldLootChest } from "../core/knowledge.js";
-import { add, distance, floor, key } from "../core/math.js";
+import { add, center, distance, floor, key } from "../core/math.js";
 import { RollingSweep } from "./world.js";
+
+// ---------------------------------------------------------------- look sweep
+/** Eye-level ray fan: 8 flat 45° sectors (E..NE) + 4 down-pitched floor probes. */
+const LOOK_FLAT = Array.from({ length: 8 }, (_, i) => { const a = (i * Math.PI) / 4; return { x: Math.cos(a), y: 0, z: Math.sin(a) }; });
+const LOOK_DOWN = [
+    { x: 0.35, y: -0.94, z: 0.35 }, { x: -0.35, y: -0.94, z: 0.35 },
+    { x: -0.35, y: -0.94, z: -0.35 }, { x: 0.35, y: -0.94, z: -0.35 },
+];
+const LOOK_DIRS = [...LOOK_FLAT, ...LOOK_DOWN];
+const LOOK_RANGE = 40;
+const SECTOR_NAMES = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"];
+/** Block families a 40-block sighting can act on, best first. */
+const LOOK_SIGHTS = [
+    [/hay_block|bell|composter|farmland|_bed$|smoker|blast_furnace|cartography_table|fletching_table|loom|stonecutter|beehive/, "village"],
+    [/chest|barrel|crafting_table|furnace/, "loot"],
+    [/diamond_ore/, "diamond"],
+    [/iron_ore/, "iron"],
+    [/_ore$/, "ore"],
+];
 
 // ---------------------------------------------------------------- world-awareness.js
 
@@ -46,6 +65,19 @@ export class WorldAwareness {
         // pass) feeds both this class and the StructureDetector.
         this.sweep = new RollingSweep(20, -6, 6, this.scanBudget, 24);
         this.acc = undefined;
+
+        // Look sweep (dimension ray fan): what the bot can SEE beyond the
+        // local block scans - open sightlines, far walls, ores, chests and
+        // village blocks up to 40 blocks away.
+        this.vision = new Map();        // blockKey -> { typeId, pos, dist, tick }
+        this.visionEntities = [];       // recent entity sightings in range
+        this.visionSpots = [];          // classified sightings { kind, x,y,z, tick }
+        this.lookDepth = LOOK_DIRS.map(() => 0);
+        this.lookType = LOOK_DIRS.map(() => undefined);
+        this.lookTick = LOOK_DIRS.map(() => -9999);
+        this.lookCursor = 0;
+        this.lookCadence = 4;           // rays per awareness tick
+        this._lookEntTick = -9999;
     }
 
     reset() {
@@ -59,6 +91,8 @@ export class WorldAwareness {
         this.diamondSpots = [];
         this.chestSpots = [];
         this.villageSpots = [];
+        this.visionSpots = [];
+        this.visionEntities = [];
         // Grid-bucket Maps for O(1) proximity dedup inside scan callback
         this._lavaGrid     = new Map();
         this._waterGrid    = new Map();
@@ -70,6 +104,7 @@ export class WorldAwareness {
     }
 
     tick(tick) {
+        this.lookStep(tick);                    // vision fan every awareness tick
         if (tick - this.lastScan < 30) return; // amortised sweep step every 1.5 sec
         this.lastScan = tick;
         this.scan(tick);
@@ -263,6 +298,170 @@ export class WorldAwareness {
                 try { this.memory.notice(spotKind, pos, this.sim.dimension.id, tick); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+    }
+
+    /**
+     * Look sweep: cast dimension rays (the script API getBlockFromRay "look"
+     * feature) through a fan of directions and map what is actually VISIBLE -
+     * open sightlines, far walls, ores, chests and village blocks far beyond
+     * the local cell scans. A full revolution (8 flat sectors + 4 floor
+     * probes) completes every 3 awareness ticks.
+     */
+    lookStep(tick) {
+        const dim = this.sim.dimension;
+        if (!dim || typeof dim.getBlockFromRay !== "function") return;
+        let eye;
+        try { eye = this.sim.getHeadLocation(); } catch { eye = this.sim.location; }
+        const n = Math.max(1, this.lookCadence ?? 4);
+        for (let c = 0; c < n; c++) {
+            const i = this.lookCursor % LOOK_DIRS.length;
+            this.lookCursor = i + 1;
+            let hit;
+            try { hit = dim.getBlockFromRay(eye, LOOK_DIRS[i], { maxDistance: LOOK_RANGE, includeLiquidBlocks: true }); } catch { hit = undefined; }
+            this.lookTick[i] = tick;
+            if (!hit || !hit.block) { this.lookDepth[i] = LOOK_RANGE; this.lookType[i] = undefined; continue; }
+            const pos = { ...hit.block.location };
+            const dist = distance(eye, center(pos));
+            const typeId = hit.block.typeId ?? "";
+            this.lookDepth[i] = dist;
+            this.lookType[i] = typeId;
+            const k = key(pos);
+            if (this.vision.size >= 800 && !this.vision.has(k)) this.vision.delete(this.vision.keys().next().value);
+            this.vision.set(k, { typeId, pos, dist, tick });
+            this.recordSight(typeId, pos, tick);
+        }
+        if (this.vision.size >= 800) {
+            let dropped = 0;
+            for (const [k, v] of this.vision) {
+                if (tick - v.tick > 1200) { this.vision.delete(k); if (++dropped >= 200) break; }
+            }
+        }
+        if (tick - this._lookEntTick >= 20) {
+            this._lookEntTick = tick;
+            try { this.sweepEntities(eye, tick); } catch { /* entity listing is optional */ }
+        }
+    }
+
+    /** Identify entities around the bot (mobs, animals, items, players). */
+    sweepEntities(eye, tick) {
+        const seen = [];
+        const list = this.sim.dimension.getEntities({ location: eye, maxDistance: LOOK_RANGE }) ?? [];
+        for (const e of list) {
+            if (!e?.isValid || e.id === this.sim.id) continue;
+            const d = distance(eye, e.location);
+            if (d > LOOK_RANGE) continue;
+            const kind = e.typeId === "minecraft:player" ? "player"
+                : e.typeId === "minecraft:item" ? "item"
+                : /zombie|skeleton|creeper|spider|enderman|witch|pillager|slime|magma|blaze|hoglin|piglin|phantom|drowned|husk|stray|guardian|ravager|vindicator|evoker|vex|silverfish|endermite|warden/.test(e.typeId) ? "hostile"
+                : /cow|pig|sheep|chicken|rabbit|horse|donkey|llama|fox|wolf|cat|parrot|turtle|bee|polar_bear|panda|goat|frog|camel|sniffer|axolotl|villager|golem/.test(e.typeId) ? "animal"
+                : "other";
+            seen.push({ typeId: e.typeId, pos: { ...e.location }, dist: d, kind, tick, id: e.id });
+            if (e.typeId === "minecraft:sheep") {
+                const sk = `${Math.floor(e.location.x / 8)},${Math.floor(e.location.z / 8)}`;
+                if (!this._sheepGrid.has(sk)) {
+                    this._sheepGrid.set(sk, true);
+                    this.sheepSpots.push({ ...floor(e.location), tick, entity: e, score: 85 });
+                    this.rememberSpot("sheep", floor(e.location), tick, 85);
+                }
+            }
+        }
+        this.visionEntities = seen.slice(0, 24);
+    }
+
+    /** Classify a sighting and feed the spot lists other systems already read. */
+    recordSight(typeId, pos, tick) {
+        if (!typeId) return;
+        for (const [re, kind] of LOOK_SIGHTS) {
+            if (!re.test(typeId)) continue;
+            if (kind === "village") {
+                const k = `${Math.floor(pos.x / 16)},${Math.floor(pos.z / 16)}`;
+                if (!this._villageGrid.has(k)) {
+                    this._villageGrid.set(k, true);
+                    this.villageSpots.push({ ...pos, tick, score: 95, sighted: true });
+                    this.rememberSpot("village", pos, tick, 95);
+                }
+            } else if (kind === "loot") {
+                const k = `${Math.floor(pos.x / 6)},${Math.floor(pos.z / 6)}`;
+                if (!this._chestGrid.has(k)) {
+                    this._chestGrid.set(k, true);
+                    this.chestSpots.push({ ...pos, tick, score: 85, type: typeId });
+                    this.rememberSpot("chest", pos, tick, 85);
+                    if (this.chestSpots.length > 40) this.chestSpots.shift();
+                }
+            } else if (kind === "iron" || kind === "diamond") {
+                const k = `${Math.floor(pos.x / 4)},${Math.floor(pos.y / 4)},${Math.floor(pos.z / 4)}`;
+                const grid = kind === "iron" ? this._ironGrid : this._diamondGrid;
+                if (!grid.has(k)) {
+                    grid.set(k, true);
+                    const score = kind === "diamond" ? 100 : 95;
+                    (kind === "iron" ? this.ironSpots : this.diamondSpots).push({ ...pos, tick, score });
+                    this.rememberSpot(kind === "iron" ? "iron_ore" : "diamond", pos, tick, score);
+                }
+            }
+            this.visionSpots.push({ ...pos, kind, typeId, tick });
+            if (this.visionSpots.length > 60) this.visionSpots.shift();
+            return;
+        }
+        if (/water/.test(typeId)) {
+            const k = `${Math.floor(pos.x / 8)},${Math.floor(pos.y / 8)},${Math.floor(pos.z / 8)}`;
+            if (!this._waterGrid.has(k)) { this._waterGrid.set(k, true); this.waterSources.push({ ...pos, tick }); if (this.waterSources.length > 10) this.waterSources.shift(); }
+        } else if (/lava/.test(typeId)) {
+            const k = `${Math.floor(pos.x / 6)},${Math.floor(pos.y / 6)},${Math.floor(pos.z / 6)}`;
+            if (!this._lavaGrid.has(k)) { this._lavaGrid.set(k, true); this.lavaPools.push({ ...pos, tick }); if (this.lavaPools.length > 10) this.lavaPools.shift(); }
+        }
+    }
+
+    /** Fresh flat-sector openness for exploration: open sectors with distance. */
+    openSectors(tick, minDist = 24, fresh = 200) {
+        const out = [];
+        for (let i = 0; i < LOOK_FLAT.length; i++) {
+            if (tick - this.lookTick[i] > fresh) continue;
+            if (this.lookDepth[i] >= minDist) out.push({ i, dir: LOOK_FLAT[i], dist: this.lookDepth[i] });
+        }
+        return out;
+    }
+
+    /** Cleared distance of one flat sector (undefined when stale). */
+    sectorDepth(dirIndex, tick, fresh = 200) {
+        if (dirIndex < 0 || dirIndex >= LOOK_FLAT.length) return undefined;
+        if (tick - this.lookTick[dirIndex] > fresh) return undefined;
+        return this.lookDepth[dirIndex];
+    }
+
+    /** Nearest actionable sighting: village first, then loot, then ores. */
+    sightingTarget(tick, maxDist = 64, fresh = 600) {
+        const rank = { village: 0, loot: 1, diamond: 2, iron: 3, ore: 4 };
+        let best = null, bestKey = Infinity;
+        for (const s of this.visionSpots) {
+            if (tick - s.tick > fresh) continue;
+            const d = distance(s, this.sim.location);
+            if (d > maxDist) continue;
+            const score = (rank[s.kind] ?? 9) * 1000 + d;
+            if (score < bestKey) { bestKey = score; best = { ...s, dist: d }; }
+        }
+        return best;
+    }
+
+    /** One-line description of what the look sweep currently sees. */
+    lookReport(tick) {
+        const parts = [];
+        const open = this.openSectors(tick, 24);
+        if (open.length) parts.push(`open ${open.map((o) => SECTOR_NAMES[o.i]).join("/")}`);
+        else {
+            for (let i = 0; i < LOOK_FLAT.length; i++) {
+                if (tick - this.lookTick[i] > 200 || this.lookDepth[i] >= LOOK_RANGE) continue;
+                parts.push(`${SECTOR_NAMES[i]} ${Math.round(this.lookDepth[i])}b ${this.lookType[i] ?? ""}`.trim());
+            }
+        }
+        const s = this.sightingTarget(tick, 64);
+        if (s) {
+            const ang = Math.atan2(s.z - this.sim.location.z, s.x - this.sim.location.x);
+            const idx = ((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8;
+            parts.push(`${s.kind} sighted ${Math.round(s.dist)}b ${SECTOR_NAMES[idx]}`);
+        }
+        const hostiles = this.visionEntities.filter((e) => e.kind === "hostile");
+        if (hostiles.length) parts.push(`${hostiles.length} hostile in sight`);
+        return parts.length ? "Look: " + parts.join("; ") : "";
     }
 
     getGoals(hp, hunger, hasWeapon, phase) {

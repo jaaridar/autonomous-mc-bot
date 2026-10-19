@@ -348,20 +348,26 @@ export const HEALTH_THRESHOLDS = {
 };
 
 export function assessFoodReserves(inventory, context = {}) {
-    // context may contain hunger, health for richer reasoning, but inventory is primary
+    // context may contain hunger, health for richer reasoning, but inventory is primary.
+    // context.facts (runtime): typeId -> { hunger, saturation } read from the live
+    // item components, so new/renamed foods count without a pack-side table.
     let totalHunger = 0;
     let totalSaturation = 0;
     let foodCount = 0;
     let bestFood = null;
     let bestValue = -1;
+    const facts = context.facts;
 
     for (const [type, amount] of Object.entries(inventory)) {
-        const food = FOOD_VALUES[type];
-        if (!food) continue;
-        totalHunger += food.hunger * amount;
-        totalSaturation += food.saturation * amount;
+        const native = facts?.[type];
+        const table = FOOD_VALUES[type];
+        const hunger = native?.hunger ?? table?.hunger;
+        if (hunger === undefined) continue;
+        const saturation = native?.saturation ?? table?.saturation ?? 0;
+        totalHunger += hunger * amount;
+        totalSaturation += saturation * amount;
         foodCount += amount;
-        const value = food.hunger + food.saturation;
+        const value = hunger + saturation;
         if (value > bestValue) {
             bestValue = value;
             bestFood = type;

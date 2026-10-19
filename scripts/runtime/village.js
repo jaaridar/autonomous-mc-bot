@@ -4,6 +4,55 @@ import { GOLEM_STATS, chooseBestGolemStrategy, evaluateGolemFight, evaluateVilla
 import { bedTarget } from "../core/recipes.js";
 import { timeOfDay, weaponTierLoose } from "./world.js";
 
+// ---------------------------------------------------------------- structures
+
+/**
+ * Village discovery ladder.
+ *
+ * Primary (what Mojang provides): Dimension.getGeneratedStructures(location)
+ * - script module 2.4.0-beta / Bedrock 1.21.120+. It reports every generated
+ * structure (villages included) whose footprint contains the sample point, so
+ * a hit IS a village, not a hunch. The bot walks a coarse grid of sample
+ * points outward from its position across successive search cycles.
+ *
+ * Secondary (engines without that binding): the seed-derived search -
+ * Dimension.calculateClosestBiomeFromSeed(location, biome[, options]) from
+ * module 2.9.0, or the identical idea under its older name Dimension.
+ * findClosestBiome(biome, location?) on 2.3.0-beta..2.8.0-beta. That locates
+ * the nearest village-capable biome PATCH, then the trip+sweep machinery
+ * below looks for the actual village once the patch is reached.
+ *
+ * (/locate chat output is not readable from scripts on any version, so a
+ * runCommand-based finder is deliberately not part of this ladder.)
+ */
+const VILLAGE_BIOMES = [
+    "minecraft:plains", "minecraft:sunflower_plains", "minecraft:desert",
+    "minecraft:savanna", "minecraft:savanna_plateau", "minecraft:taiga",
+    "minecraft:snowy_plains", "minecraft:snowy_taiga",
+];
+/** Mojang-sensitive sample set (getGeneratedStructures): id pick. */
+const VILLAGE_ID = /village/i; // matches minecraft:village, village_plains, ... (not pillager)
+const BIOME_SEARCH_EVERY = 600; // ticks between heavy structure/biome searches
+const BIOME_LEAD_TTL = 6000; // a cached lead expires after ~5 minutes
+const BIOME_LEAD_MIN = 56; // closer than this = already in/near that spot, detection owns it
+const BIOME_LEAD_ARRIVED = 20; // inside this radius the located spot counts as reached
+const BIOME_LEAD_SPENT_TTL = 6000; // do not re-target a spent patch for ~5 minutes
+const BIOME_SWEEP_TICKS = 4000; // after arrival: hold the gate and sweep this long
+
+// Sample grid for getGeneratedStructures probes (primary finder on 1.21.120+).
+const PROBE_STEP = 64; // grid pitch; village footprints span dozens of blocks
+const PROBE_RADIUS_MAX = 384; // outward growth cap (~6 rings of 44 cells)
+const PROBES_PER_SCAN = 10; // sample points evaluated per search cycle
+const PROBE_MISS_TTL = 43200; // a missed cell is trusted for ~36 in-game minutes
+const PROBE_DISABLE_FAILS = 8; // consecutive sample exceptions -> probes off, biome search on
+
+// Village raid schedule: the raid is due as soon as the tools exist; if the
+// bot has been busy (deep mining, smelting) the five-minute cap forces the
+// trip regardless. "Forced but unreachable" only unlocks deep mining again
+// after a longer grace so the bot can never be deadlocked by a phantom village.
+const VILLAGE_RAID_DEADLINE = 6000; // 5 minutes -> raid becomes overdue/forced
+const VILLAGE_RAID_GRACE = 6000; // overdue + this with zero progress -> give up
+
 // ---------------------------------------------------------------- village.js
 
 /**
@@ -35,6 +84,25 @@ export class VillageDirector {
         this.bedPos = null;
         this.lastBedUse = 0;
         this.villageTrips = 0;
+        // Village-first planning: the first looted trip unlocks autonomous deep
+        // mining, and a known-but-unreached village holds new deep shafts back.
+        this.visited = false;
+        this.firstTripGivenUp = false;
+        this.forced = false;
+        this._firstTripAt = 0;
+        this._golemSeen = undefined;
+        this.nearest = null;
+        // Script-API "locate" state: nearest village-capable biome patch and
+        // the post-arrival sweep that searches it (see locateVillageBiome).
+        this.biomeLead = null;
+        this.biomeLeadTick = -99999;
+        this._spentLeads = new Map();
+        this.biomeSweep = null;
+        this.sweepUntil = 0;
+        // getGeneratedStructures probe state (primary finder on 1.21.120+).
+        this._probes = new Map(); // "gx,gz" -> tick when the miss cache expires
+        this._probeRadius = PROBE_STEP; // outward growth of the sample annulus
+        this._probeFails = 0; // consecutive probe exceptions on this engine
     }
 
     reset(tick) {
@@ -53,11 +121,11 @@ export class VillageDirector {
             this.currentVillage = null;
         }
 
-        if (tick - this.lastScan < 40) return false;
+        if (tick - this.lastScan < 120) return false;
         this.lastScan = tick;
 
         const context = this.buildContext(tick);
-        const village = this.findNearestVillage(128);
+        const village = this.findNearestVillage(128, tick);
 
         if (!village) {
             // No village, check if should craft bed independently
@@ -78,6 +146,11 @@ export class VillageDirector {
             }
             return false;
         }
+
+        // Script-API "locate" fallback: no village SEEN yet, but a
+        // village-capable biome patch was located - head straight there
+        // (and once there, sweep it) instead of wandering.
+        if (village.biomeLead) return this.biomeTrip(village, tick);
 
         // Evaluate village
         const villageEval = evaluateVillage(village, context);
@@ -132,14 +205,15 @@ export class VillageDirector {
 
     buildContext(tick) {
         const counts = this.bag.counts();
-        const hasWood = Object.entries(counts).filter(([k])=>k.endsWith("_log")||k.endsWith("_wood")||k.includes("_stem")).reduce((a,[,v])=>a+v,0) >= 3;
+        const isWood = (k) => k.endsWith("_log") || k.endsWith("_wood") || k.includes("_stem") || k.includes("_hyphae") || k === "minecraft:bamboo_block";
+        const hasWood = Object.entries(counts).filter(([k])=>isWood(k)).reduce((a,[,v])=>a+v,0) >= 3;
         const hasStone = (counts["minecraft:cobblestone"] ?? 0) >= 8;
         const hasFood = Object.keys(counts).some(k => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot"));
         const foodAmount = Object.entries(counts).filter(([k]) => k.includes("bread") || k.includes("cooked_") || k.includes("potato") || k.includes("carrot")).reduce((sum, [,v]) => sum + v, 0);
         const hasBed = Object.keys(counts).some(k => k.endsWith("_bed") || k === "minecraft:bed");
         const hasWool = Object.keys(counts).some(k => k.includes("_wool"));
         const woolCount = Object.entries(counts).filter(([k]) => k.includes("_wool")).reduce((sum, [,v]) => sum + v, 0);
-        const woodCount = Object.entries(counts).filter(([k])=>k.endsWith("_log")||k.endsWith("_planks")||k.includes("_stem")).reduce((a,[,v])=>a+v,0);
+        const woodCount = Object.entries(counts).filter(([k])=>isWood(k)||k.endsWith("_planks")).reduce((a,[,v])=>a+v,0);
         const hasIron = (counts["minecraft:iron_ingot"] ?? 0) >= 1;
         const hasBucket = (counts["minecraft:bucket"] ?? 0) > 0 || (counts["minecraft:water_bucket"] ?? 0) > 0;
         const hasFurnace = (counts["minecraft:furnace"] ?? 0) > 0;
@@ -178,7 +252,223 @@ export class VillageDirector {
         };
     }
 
-    findNearestVillage(radius) {
+    findNearestVillage(radius, tick = 0) {
+        // Record the freshest sighting for the village-first gate; the body
+        // stays in _findNearestVillage.
+        let v = this._findNearestVillage(radius);
+        if (!v) {
+            // Nothing SEEN yet: use the locate ladder (Mojang structure probe,
+            // else the seed-derived biome patch) as the target.
+            const lead = this.locateVillageBiome(tick);
+            if (lead) v = { pos: lead.pos, distance: distance(lead.pos, this.sim.location), biome: lead.biome, biomeLead: true };
+        }
+        if (!v && tick > 0 && this.biomeSweep) {
+            if (tick >= this.sweepUntil) { this.biomeSweep = null; this.sweepUntil = 0; }
+            else v = { pos: this.biomeSweep.pos, distance: distance(this.biomeSweep.pos, this.sim.location), biome: this.biomeSweep.biome, biomeLead: true, sweep: true };
+        }
+        this.nearest = v && v.pos ? v : null;
+        return v;
+    }
+
+    /**
+     * Village "locate": the best current answer to "where is a village?".
+     * 1. Mojang's structure locator (getGeneratedStructures) on a coarse,
+     *    outward-growing grid - a hit IS a generated village.
+     * 2. Seed-derived biome patch (calculateClosestBiomeFromSeed from 2.9.0,
+     *    else findClosestBiome on 2.3.0-beta..2.8.0-beta engines) - a capacity
+     *    hunch that the trip+sweep machinery verifies on the ground.
+     * The call is heavy, so the ladder runs at most every BIOME_SEARCH_EVERY
+     * ticks; the freshest lead is cached in between and biomeTrip() drives
+     * the bot to it.
+     */
+    locateVillageBiome(tick) {
+        if (this.biomeSweep) {
+            if (tick > 0 && tick >= this.sweepUntil) { this.biomeSweep = null; this.sweepUntil = 0; }
+            else return null; // while sweeping, hold the gate - no new searches
+        }
+        if (this.biomeLead && tick > 0 && tick - this.biomeLead.tick > BIOME_LEAD_TTL) this.biomeLead = null;
+        if (tick <= 0) return this.biomeLead;
+        if (tick - this.biomeLeadTick < BIOME_SEARCH_EVERY) return this.biomeLead;
+        this.biomeLeadTick = tick;
+        const best = this.probeGeneratedStructures(tick) ?? this.findBiomeLead(tick);
+        this.biomeLead = best;
+        if (best) this.bot.record?.(`Village locate: ${best.biome.replace("minecraft:", "")} is ${Math.round(best.dist)} blocks away at ${Math.round(best.pos.x)},${Math.round(best.pos.y)},${Math.round(best.pos.z)} - heading straight there`);
+        if (this._spentLeads.size > 64) this._spentLeads.delete(this._spentLeads.keys().next().value);
+        return best;
+    }
+
+    /**
+     * One probe cycle of Mojang's structure locator: walk the annulus for the
+     * current radius (innermost ring first), sample PROBES_PER_SCAN fresh
+     * cells against dimension.getGeneratedStructures, negative-cache misses
+     * so no cell is re-sampled inside PROBE_MISS_TTL, then widen the net.
+     */
+    probeGeneratedStructures(tick) {
+        const dim = this.sim.dimension;
+        const get = dim?.getGeneratedStructures;
+        if (typeof get !== "function" || this._probeFails >= PROBE_DISABLE_FAILS)
+            return null; // API absent (pre-1.21.120 engine) or proven unusable
+        const origin = floor(this.sim.location);
+        let lead = null;
+        for (let n = 0; n < PROBES_PER_SCAN && !lead; n++) {
+            const cell = this.nextProbeCell(origin, tick);
+            if (!cell) {
+                // Whole annulus sampled or negative-cached: widen the net and
+                // give this cycle's remaining budget back to the next one.
+                if (this._probeRadius < PROBE_RADIUS_MAX) this._probeRadius += PROBE_STEP;
+                break;
+            }
+            const p = { x: cell.x * PROBE_STEP, y: 64, z: cell.z * PROBE_STEP };
+            let ids;
+            try { ids = get.call(dim, p); this._probeFails = 0; }
+            catch {
+                // Sample point is not queryable (usually an unloaded chunk):
+                // neither a miss nor a hit, and a run of failures disables the
+                // probes outright so the biome search takes over.
+                if (++this._probeFails >= PROBE_DISABLE_FAILS)
+                    this.bot.record?.(`Village locate: Mojang locator unusable after ${this._probeFails} bad calls; biome search takes over`);
+                continue;
+            }
+            const hit = (Array.isArray(ids) ? ids : []).find((s) =>
+                typeof s === "string" && VILLAGE_ID.test(s));
+            if (hit)
+                lead = { pos: p, biome: hit, dist: distance(p, this.sim.location), tick, fails: 0, probe: true };
+            else
+                this._probes.set(cell.key, tick + PROBE_MISS_TTL);
+        }
+        // Miss-cache hygiene: trim the oldest entries once oversized.
+        if (this._probes.size > 512) {
+            const drop = this._probes.size - 384;
+            let dropped = 0;
+            for (const k of this._probes.keys()) { this._probes.delete(k); if (++dropped >= drop) break; }
+        }
+        return lead;
+    }
+
+    /** Next grid vertex to sample: ring surfaces only, skipping fresh misses. */
+    nextProbeCell(origin, tick) {
+        const ex = Math.floor(origin.x / PROBE_STEP);
+        const ez = Math.floor(origin.z / PROBE_STEP);
+        const r = Math.max(1, Math.round(this._probeRadius / PROBE_STEP));
+        for (let ring = 1; ring <= r; ring++) {
+            for (let dx = -ring; dx <= ring; dx++) {
+                for (let dz = -ring; dz <= ring; dz++) {
+                    if (Math.abs(dx) !== ring && Math.abs(dz) !== ring)
+                        continue; // ring surface only - interior rings were walked
+                    const key = `${ex + dx},${ez + dz}`;
+                    if ((this._probes.get(key) ?? 0) > tick)
+                        continue; // recent miss
+                    return { x: ex + dx, z: ez + dz, key };
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Secondary finder: closest village-capable biome patch via the seed.
+     * calculateClosestBiomeFromSeed (2.9.0+) samples (location, biome); the
+     * older findClosestBiome (2.3.0-beta..2.8.0-beta) samples (biome, location)
+     * - the order switched with the rename, matching neither order was why the
+     * old call silently returned nothing here.
+     */
+    findBiomeLead(tick) {
+        const dim = this.sim.dimension;
+        const from = floor(this.sim.location);
+        let best = null;
+        for (const biome of VILLAGE_BIOMES) {
+            let p;
+            try {
+                p = typeof dim?.calculateClosestBiomeFromSeed === "function"
+                    ? dim.calculateClosestBiomeFromSeed(from, biome)
+                    : (typeof dim?.findClosestBiome === "function" ? dim.findClosestBiome(biome, from) : undefined);
+            }
+            catch { p = undefined; }
+            if (!p || !Number.isFinite(p.x)) continue;
+            const d = distance(p, this.sim.location);
+            if (d < BIOME_LEAD_MIN) continue; // already in/near it - detection owns it
+            const k = `${Math.floor(p.x / 64)},${Math.floor(p.z / 64)}`;
+            if ((this._spentLeads.get(k) ?? 0) > tick) continue; // patch recently checked out
+            if (!best || d < best.dist) best = { pos: { x: p.x, y: p.y, z: p.z }, biome, dist: d, tick, fails: 0 };
+        }
+        return best;
+    }
+
+    /** Spend a biome lead (patch reached / unroutable): ignore that patch a while. */
+    spendBiomeLead(tick, reason, sweep = false) {
+        const lead = this.biomeLead;
+        this.biomeLead = null;
+        if (!lead) return;
+        const k = `${Math.floor(lead.pos.x / 64)},${Math.floor(lead.pos.z / 64)}`;
+        this._spentLeads.set(k, tick + BIOME_LEAD_SPENT_TTL);
+        if (sweep) { this.biomeSweep = { pos: lead.pos, biome: lead.biome }; this.sweepUntil = tick + BIOME_SWEEP_TICKS; }
+        if (reason) this.bot.record?.(`Village locate: ${reason}`);
+    }
+
+    /** Head straight for the located biome patch; on arrival, sweep it. */
+    biomeTrip(lead, tick) {
+        const name = lead.biome.replace("minecraft:", "");
+        const d = distance(lead.pos, this.sim.location);
+        if (lead.sweep) {
+            // Arrived: hold around the located spot while the sighting sweep
+            // (awareness rays + Explorer) looks for the actual village.
+            if (tick >= this.sweepUntil) { this.biomeSweep = null; this.sweepUntil = 0; return false; }
+            this.bot.reason = `Village: sweeping the ${name} biome for the village (${Math.round(d)} blocks off the located spot)`;
+            if (d < 10) return false; // sitting on it - keep eyes open
+            return this.bot.navTo(center(lead.pos), tick, 4) !== "failed";
+        }
+        if (d < BIOME_LEAD_ARRIVED) {
+            this.spendBiomeLead(tick, `reached the ${name} biome; sweeping it for the village`, true);
+            return false;
+        }
+        this.bot.reason = `Village lead: heading to the ${name} biome ${Math.round(d)} blocks at ${Math.round(lead.pos.x)},${Math.round(lead.pos.z)}`;
+        const r = this.bot.navTo(center(lead.pos), tick, 4);
+        if (r !== "failed") return true;
+        const canon = this.biomeLead;
+        if (canon) {
+            canon.fails = (canon.fails ?? 0) + 1;
+            if (canon.fails > 20) this.spendBiomeLead(tick, "biome patch unreachable; dropping that lead");
+        }
+        return false;
+    }
+
+    /**
+     * True while the first village raid is still owed: a village is known,
+     * none has been looted yet, and the errand is inside the forced window.
+     * Survival holds new deep shafts while this is true, and after
+     * VILLAGE_RAID_DEADLINE the raid is FORCED (see overdue): the rule is
+     * "deep mining can wait, but after 5 minutes go to the village at any how".
+     */
+    pendingFirstTrip(tick = 0) {
+        if (this.visited || this.firstTripGivenUp) return false;
+        if (!this.nearest) return false;
+        this.overdue(tick);
+        if (this.forced && this._firstTripAt && tick - this._firstTripAt > VILLAGE_RAID_DEADLINE + VILLAGE_RAID_GRACE) {
+            this.firstTripGivenUp = true;
+            this.bot.record?.("Village raid unreachable inside the forced window; deep mining allowed again");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * True once the raid is overdue: a village is known, none has been
+     * looted, and the trip was deferred longer than the five-minute cap.
+     * The survival branch forces the raid on this flag and the deep-shaft
+     * gate keeps refusing new shafts - "after 5 minutes go at any how".
+     */
+    overdue(tick = 0) {
+        if (this.visited || this.firstTripGivenUp) return false;
+        if (!this.nearest) return false;
+        if (!this._firstTripAt) this._firstTripAt = tick;
+        if (!this.forced && this._firstTripAt && tick - this._firstTripAt > VILLAGE_RAID_DEADLINE) {
+            this.forced = true;
+            this.bot.record?.(`Village raid overdue (${Math.round(VILLAGE_RAID_DEADLINE / 1200)} min): forcing the trip - golem, chests, food`);
+        }
+        return this.forced;
+    }
+
+    _findNearestVillage(radius) {
         // Fast path: check awareness, structures, and memory first (bounded, cheap)
         try {
             const candidates = [];
@@ -216,12 +506,6 @@ export class VillageDirector {
             }
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
 
-        try {
-            // Try /locate if commands available
-            const located = this.tryLocateVillage();
-            if (located) return located;
-        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-
         // Environmental detection: find village via blocks and entities - BUDGETED (max 800 block checks per call)
         const p = floor(this.sim.location);
         const villageBlocks = ["minecraft:hay_block","minecraft:bell","minecraft:farmland","minecraft:composter","minecraft:blast_furnace","minecraft:smoker","minecraft:bed"];
@@ -250,19 +534,25 @@ export class VillageDirector {
             if (villageScore >= 4) break;
         }
 
-        // Scan for villagers - limited radius 48 for performance, not full 128
+        // Scan for villagers - limited radius 48 for performance, not full 128.
+        // Filtered to the villager family so the common case (nothing around)
+        // does not fetch every sheep, pig and ghost in the query volume.
         try {
             const scanRadius = Math.min(radius, 48);
-            const entities = this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: scanRadius });
+            const entities = this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: scanRadius, families: ["villager"] });
             let villagerCount = 0;
             let villagerPos = null;
+            let golemFound = false;
             for (const e of entities) {
-                if (e.typeId === "minecraft:villager" || e.typeId === "minecraft:villager_v2" || e.typeId === "minecraft:iron_golem" || e.typeId === "minecraft:cat") {
+                if (e.typeId === "minecraft:villager" || e.typeId === "minecraft:villager_v2") {
                     villagerCount++;
                     if (!villagerPos) villagerPos = floor(e.location);
                 }
             }
             if (villagerCount >= 2 || villageScore >= 3) {
+                // Golems stand inside villages: only pay the second query when a
+                // village context is already confirmed.
+                try { golemFound = this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: scanRadius, type: "minecraft:iron_golem" }).length > 0; } catch { golemFound = false; }
                 const pos = villagerPos ?? centerPos ?? p;
                 const dist = distance(pos, this.sim.location);
                 return {
@@ -273,7 +563,7 @@ export class VillageDirector {
                     hasHay: true,
                     hasCrafting: true,
                     hasChest: villageScore >= 1,
-                    hasGolem: entities.some(e => e.typeId === "minecraft:iron_golem"),
+                    hasGolem: golemFound,
                     hasWool: false,
                     dangerLevel: { hostileCount: 0 },
                     villagerCount,
@@ -305,8 +595,10 @@ export class VillageDirector {
     }
 
     tryLocateVillage() {
-        // The /locate result text is not exposed to scripts, so parsing it never
-        // worked - skip the command entirely (it ran on every village scan).
+        // Village leads now come from locateVillageBiome(): Mojang's
+        // getGeneratedStructures when present, else the seed-derived biome
+        // search. There is no /locate-based path - its chat output is not
+        // readable from scripts on any engine version.
         return null;
     }
 
@@ -316,8 +608,24 @@ export class VillageDirector {
         if (dist > 8) {
             const r = this.bot.navTo(center(village.pos), tick, 4);
             if (r !== "failed") {
-                this.bot.reason = `Village: travelling to village at ${village.pos.x},${village.pos.y},${village.pos.z} (${dist.toFixed(0)}b) - stores, food, beds`;
+                this.bot.reason = `Village: travelling to village at ${village.pos.x},${village.pos.y},${village.pos.z} (${dist.toFixed(0)}b) - golem, stores, food, beds`;
                 return true;
+            }
+        }
+
+        // 0. Iron golem: the raid's main prize (3-5 ingots fund the bucket).
+        //    The golem director always keeps its safety checks; the raid flag
+        //    only drops the soft "iron is available elsewhere" out.
+        if (this.bot.settings.defend && this.bot.golem) {
+            const golem = this.bot.golem.findGolemNearby(24);
+            if (golem) {
+                this._golemSeen = { pos: floor(golem.location), tick };
+                if (this.bot.golem.tick(tick, true)) return true;
+            } else if (this._golemSeen && tick - this._golemSeen.tick < 1800) {
+                // It went down: sweep its drops before moving on - nothing
+                // valuable despawns on this bot's watch.
+                if (this.sweepDrops(tick, "minecraft:iron_ingot", this._golemSeen.pos, 12)) return true;
+                this._golemSeen = undefined;
             }
         }
 
@@ -348,25 +656,19 @@ export class VillageDirector {
             }
         }
 
-        // 2. Loot chests in the village
-        let lootTarget = this.bot.structures?.getLootTarget();
-        if (!lootTarget) {
-            const chests = this.bot.looting?.scan(24, tick) ?? [];
-            if (chests.length) lootTarget = chests[0];
-        }
-        if (lootTarget) {
-            const distChest = distance(lootTarget.pos, this.sim.location);
-            if (distChest <= 3.5) {
-                this.bot.reason = `Village: looting chest at ${lootTarget.pos.x},${lootTarget.pos.y},${lootTarget.pos.z}`;
-                this.bot.looting.lootChest(lootTarget.pos, tick);
-                return true;
-            }
-            const r = this.bot.navTo(center(lootTarget.pos), tick, 2);
+        // 2. Loot EVERY chest in the village. lootChest() drains a chest and
+        //    ignores it afterwards, so repeated sweeps walk chest to chest
+        //    until the stores are empty (or the bag is full) - not just the
+        //    first one found.
+        const structChest = this.bot.structures?.getLootTarget();
+        if (structChest && distance(structChest.pos, this.sim.location) <= 32 && distance(structChest.pos, this.sim.location) > 3.5) {
+            const r = this.bot.navTo(center(structChest.pos), tick, 2);
             if (r !== "failed") {
-                this.bot.reason = `Village: approaching chest at ${lootTarget.pos.x},${lootTarget.pos.y},${lootTarget.pos.z}`;
+                this.bot.reason = `Village: approaching the ${structChest.name ?? "structure"} chest at ${structChest.pos.x},${structChest.pos.y},${structChest.pos.z}`;
                 return true;
             }
         }
+        if (this.bot.looting?.tick(tick)) return true;
 
         // 3. Beds: identify, sleep if night, or take one for camping
         const bedPos = this.findBedNearby(this.sim.location, 20) ?? this.findBedNearby(village.pos, 24);
@@ -403,14 +705,59 @@ export class VillageDirector {
             }
         }
 
-        // 4. Craft wheat to bread if still holding wheat
+        // 3b. Iron bucket: 3 ingots, however they arrived (golem or chests).
+        //     Place a table if the village has none in reach first.
         const counts = this.bag.counts();
+        if ((counts["minecraft:iron_ingot"] ?? 0) >= 3 && !context.hasBucket && this.bot.settings.assistedCrafting) {
+            if (!this.terrain.tableNear(this.sim.location)) {
+                const tableSlot = this.bag.find((s) => s.typeId === "minecraft:crafting_table");
+                if (tableSlot < 0) {
+                    this.bot.reason = "Village raid: getting a crafting table for the bucket";
+                    try { this.bot.obtain("minecraft:crafting_table", 1, tick); } catch (e) { this.bot.record?.("Village raid: table obtain failed - " + String(e?.message ?? e).slice(0, 80)); }
+                    return true;
+                }
+                const p = floor(this.sim.location);
+                let placedTable = false;
+                for (const d of CARDINAL) {
+                    const spot = add(p, d);
+                    if (this.terrain.block(spot)?.isAir && this.terrain.solid(add(spot, DOWN))) {
+                        if (this.bot.builder.placeAt(spot, add(spot, DOWN), { autoAnchor: true, blockType: "minecraft:crafting_table" }) === "placed") { placedTable = true; break; }
+                    }
+                }
+                this._tableTries = placedTable ? 0 : (this._tableTries ?? 0) + 1;
+                if (this._tableTries > 80) { this._tableTries = 0; return false; } // no spot here: let the sweep continue
+                return true;
+            }
+            try {
+                this.bot.craft("minecraft:bucket", 1);
+                this.bot.reason = `Village raid: iron bucket crafted (${(this.bag.counts()["minecraft:iron_ingot"] ?? 0)} iron left in the bag)`;
+                this.bot.record?.("Village raid: crafted the iron bucket");
+                return true;
+            } catch (e) {
+                this.bot.record?.("Village raid: bucket craft failed - " + String(e?.message ?? e).slice(0, 80));
+            }
+        }
+
+        // 4. Craft wheat to bread if still holding wheat
         if ((counts["minecraft:wheat"] ?? 0) >= 3) {
             try { this.bot.craft("minecraft:bread", Math.floor((counts["minecraft:wheat"] ?? 0) / 3)); } catch (_) {}
         }
 
         this.villageTrips++;
+        this.visited = true;
+        this.firstTripGivenUp = false;
         return false;
+    }
+
+    /** Walk onto a recent golem/chest drop pile until the engine collects it. */
+    sweepDrops(tick, item, pos, radius = 8) {
+        const b = this.bot;
+        const e = b.drops?.near?.({ item }, pos, radius, tick);
+        if (!e) return false;
+        this.bot.reason = `Village: collecting the golem's ${item.replace("minecraft:", "")} drops`;
+        const r = b.navTo(e.location, tick, 1);
+        if (r === "failed" || r === "blocked") b.drops.pushToward?.(e.location, 1.05);
+        return true;
     }
 
     findHayBaleNearby(villagePos, radius = 24) {
@@ -488,9 +835,13 @@ export class GolemDirector {
         this.pillarPos = null;
         this.fightStage = "idle";
         this.hits = 0;
+        // The fight sneaks near the pillar edge ("avoid fall damage"); the
+        // edge-sneak must not outlive the fight - a lingering sneak blocks
+        // the next navigation jump.
+        try { this.sim.isSneaking = false; } catch { /* best effort */ }
     }
 
-    tick(tick) {
+    tick(tick, raid = false) {
         if (!this.bot.settings.defend) return false;
         // ROBUST QUICK: only scan every 20 ticks unless in active fight
         if (this.fightStage === "idle" && tick - this.lastScan < 20) return false;
@@ -506,8 +857,13 @@ export class GolemDirector {
         const context = this.buildContext(golem, tick);
         const evaluation = evaluateGolemFight(context);
 
-        // Only attempt when benefit justifies risk and reliable combat plan
-        if (!evaluation.shouldFight) {
+        // A village raid actively wants the golem (3-5 ingots = the bucket):
+        // it may ignore the SOFT "iron is available elsewhere" deductions,
+        // but never the safety ones - a raid still walks away from a fight
+        // the score rates as genuinely bad (low health / weak weapon / mobs).
+        const softOut = context.saferFasterRouteAvailable || evaluation.alternative;
+        const raidOk = raid && evaluation.score >= 30 && context.health > 12;
+        if (!evaluation.shouldFight && !raidOk) {
             if (this.fightStage !== "idle") {
                 this.bot.reason = `Golem: ${evaluation.reasons} - disengaging, ${evaluation.alternative}`;
                 this.reset();
@@ -516,7 +872,7 @@ export class GolemDirector {
         }
 
         // Never mandatory if safer faster route available
-        if (evaluation.alternative && context.saferFasterRouteAvailable) {
+        if (softOut && !raid) {
             this.bot.reason = `Golem: safer faster route available - ${evaluation.alternative}, skipping golem`;
             return false;
         }

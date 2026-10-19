@@ -42,7 +42,7 @@ Two rules carry most of the design:
 |---|---|
 | `bot.js` | the brain: tick order, mode dispatch, task objects, `think()` integration of every director below |
 | `world.js` | `Terrain` (cached block reads, ores, obstructions), `BlockScan`, `RollingSweep`, `threatInfo` |
-| `inventory.js` | `Bag` (per-tick inventory snapshot, tools/food counts), deposits/withdraw, organisation, resource decisions |
+| `inventory.js` | `Bag` (per-tick inventory snapshot, tools/food counts), deposits/withdraw, organisation, resource decisions; injects the native `ItemStack.maxAmount` stack-limit reader into core (`setStackResolver`) |
 | `navigation.js` | `Navigator` (rolling-horizon A*, loop detection, threat avoidance) + `Parkour` gap/step/sprint/ladder handling |
 | `builder.js` | bridging, pillaring, scaffolding, torch placement, obstruction clearing, portal frame + `Hands` (aim/place/verify) |
 | `combat.js` | `Combat` execution: rush ranged, retreat creeper, kite heavies, crit jumps, group positioning |
@@ -51,14 +51,14 @@ Two rules carry most of the design:
 | `survival.js` | `SurvivalDirector` (gear ladder + food), `Forager` (hunting), `FoodDirector` (healing/readiness) |
 | `scouting.js` | `Scout` (village/forage sweep) + `Explorer` (frontier walking) |
 | `world-awareness.js` | `WorldAwareness` surroundings scan (iron, sheep, lava, water) + `StructureDetector` |
-| `looting.js` | `Looting` (scored chest scanning) + `Drops` (loose item pickup, mining-sweep flush) |
-| `mining.js` | `Miner` (staircase/corridor) + `DeepMiner` (shaft → branch → vein → ascend) |
+| `looting.js` | `Looting` (scored chest scanning; containers detected via the `minecraft:inventory` component, id-table fallback + ender-chest veto) + `Drops` (loose item pickup, mining-sweep flush); chests are FULL-DRAINED (every useful stack the bag can hold, merges ride free, junk only when roomy) and `lootIntegration()` puts fresh armour/weapon on the body immediately |
+| `mining.js` | `Miner` (staircase/corridor) + `DeepMiner` (shaft → branch → vein → ascend); `climbStep`/`digToSurface`: the bot always digs and bridges its own way out — pillar + staircase primitives, then a safe 1×1 pocket cut (`safeToMineEx`: no gravel column overhead, no water/lava in the cut) before any "needs help" handover |
 | `nether.js` | `NetherDirector`: route choice, water/lava handling, portal build, ignition, entry; `BucketDirector` |
-| `village.js` | `VillageDirector` (village-first food/beds/loot) + `GolemDirector` (iron golem fights) |
+| `village.js` | `VillageDirector` (village-first food/beds/loot) + `GolemDirector` (iron golem fights); village *locate*: `Dimension.getGeneratedStructures` probe grid (2.4.0-beta+), falling back to the seed-derived biome patch (`calculateClosestBiomeFromSeed` / older `findClosestBiome`, arg order handled) with a throw-disable switch |
 | `speedrun.js` | `SpeedrunDirector`: wood → stone → iron → diamond → portal phases, milestone verification |
 | `equipment.js` | `Equipment` (armour/weapon upkeep) + `Furnace` (smelting station) |
 | `memory.js` | `Memory`: loads/saves the persistent JSON document, passive bounded observation |
-| `ui.js` | scoreboard/HUD output |
+| `ui.js` | scoreboard/HUD output (actionbar via `onScreenDisplay.setActionBar`, no command-string fallback) |
 | `host.js` | `Host`: remote GameTest host site, spawn, ticking area, recovery |
 
 ## Rules that keep the bot honest

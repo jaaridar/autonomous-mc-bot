@@ -19,8 +19,19 @@ export const OFFHAND_SLOT = "Offhand";
 
 const SMALL_STACK = /(_sign$|_hanging_sign$|_banner$|bucket|_bucket$|snowball|egg$|ender_pearl|_potion$|potion$|_stew$|stew$|_soup$|honey_bottle|_shulker_box$|_bed$|_door$|_boat$|_minecart$|_tool$|_rod$)/;
 
-/** Max stack size for an item id (engine-accurate enough for planning). */
+// Core stays engine-free: maxStack answers from the regex table below, and
+// boot refines it with the engine's own answer (ItemStack.maxAmount,
+// registered by runtime/inventory.js through setStackResolver). The regex
+// values remain the truth when no resolver answered.
+let stackResolver = null;
+/** Runtime boot injects the native stack-limit reader into this engine-free core. */
+export function setStackResolver(fn) { stackResolver = typeof fn === "function" ? fn : null; }
+
+/** Max stack size for an item id (native ItemStack.maxAmount when injected). */
 export function maxStack(typeId) {
+    const native = stackResolver?.(typeId);
+    if (Number.isInteger(native) && native > 0)
+        return native;
     if (toolProfile(typeId))
         return 1;
     if (/(_helmet|_chestplate|_leggings|_boots|shield|bow|crossbow|trident|elytra|flint_and_steel|shears|_horse_armor)$/.test(typeId))

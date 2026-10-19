@@ -25,6 +25,25 @@ const LIQUID = new Set(["minecraft:water", "minecraft:flowing_water", "minecraft
 const PASSABLE_HINT = /(short_grass|tall_grass|fern|deadbush|dead_bush|flower|sapling|_mushroom$|torch|rail|_carpet$|lily_pad|vine|snow_layer|leaf_litter|pink_petals|wheat$|carrots$|potatoes$|beetroots$|sugar_cane|redstone_wire|tripwire$|_button$|_plate$|bush$)/;
 const CONTAINER_HINT = /(_chest|_barrel|_shulker_box|_furnace|_smoker|_campfire|_dispenser|_dropper|_hopper|_brewing_stand|^minecraft:barrel$|^minecraft:chest$)/;
 const NON_SOLID = new Set(["minecraft:water", "minecraft:flowing_water", "minecraft:lava", "minecraft:flowing_lava", "minecraft:fire", "minecraft:soul_fire", "minecraft:powder_snow"]);
+// Vanilla block tags (subset of wiki.bedrock.dev/blocks/vanilla-block-tags) for the
+// offline world. Unknown ids get no tags, exactly like a block with no vanilla tag.
+const BLOCK_TAGS = new Map([
+    ["minecraft:stone", ["stone", "minecraft:is_pickaxe_item_destructible"]],
+    ["minecraft:cobblestone", ["stone", "minecraft:is_pickaxe_item_destructible"]],
+    ["minecraft:dirt", ["dirt", "grass", "minecraft:is_shovel_item_destructible"]],
+    ["minecraft:grass_block", ["dirt", "grass", "minecraft:is_shovel_item_destructible"]],
+    ["minecraft:farmland", ["dirt", "grass"]],
+    ["minecraft:oak_log", ["log", "oak", "wood", "minecraft:is_axe_item_destructible"]],
+    ["minecraft:oak_leaves", ["minecraft:leaves", "minecraft:is_hoe_item_destructible"]],
+    ["minecraft:oak_planks", ["wood", "minecraft:is_axe_item_destructible"]],
+    ["minecraft:coal_ore", ["minecraft:is_pickaxe_item_destructible"]],
+    ["minecraft:iron_ore", ["minecraft:is_pickaxe_item_destructible"]],
+    ["minecraft:sand", ["sand", "minecraft:is_shovel_item_destructible"]],
+    ["minecraft:red_sand", ["sand", "minecraft:is_shovel_item_destructible"]],
+    ["minecraft:gravel", ["gravel", "minecraft:is_shovel_item_destructible"]],
+    ["minecraft:water", ["water"]],
+]);
+function blockTags(id) { return BLOCK_TAGS.get(id) ?? []; }
 
 const DURABILITY = {
     "minecraft:wooden_pickaxe": 59, "minecraft:stone_pickaxe": 131, "minecraft:iron_pickaxe": 250,
@@ -47,6 +66,68 @@ const FOOD = {
     "minecraft:melon_slice": [2, false], "minecraft:golden_apple": [4, true], "minecraft:dried_kelp": [1, false],
 };
 const MAX_STACK = /(_pickaxe|_axe|_sword|_shovel|_hoe|bucket|bow|shield|shears|flint_and_steel|_boat|arrow|_door$|_sign$|water_bottle|potion|_helmet|_chestplate|_leggings|_boots)$/;
+/** Loot the pack can actually use when an animal dies (deterministic, not random). */
+const MOB_DROPS = {
+    "minecraft:sheep": [["minecraft:mutton", 1], ["minecraft:white_wool", 1]],
+    "minecraft:cow": [["minecraft:beef", 1], ["minecraft:leather", 1]],
+    "minecraft:pig": [["minecraft:porkchop", 1]],
+    "minecraft:chicken": [["minecraft:chicken", 1], ["minecraft:feather", 1]],
+    "minecraft:rabbit": [["minecraft:rabbit", 1], ["minecraft:rabbit_hide", 1]],
+};
+
+/**
+ * Vanilla-ish block drops (deterministic). Without these a broken block in the
+ * offline world vanished with no item, so the pack's pickup + supply chain
+ * (bridge with cobblestone, smelt raw iron, craft from logs) could never run.
+ */
+const BLOCK_DROPS = new Map([
+    ["minecraft:grass_block", "minecraft:dirt"],
+    ["minecraft:podzol", "minecraft:dirt"],
+    ["minecraft:mycelium", "minecraft:dirt"],
+    ["minecraft:rooted_dirt", "minecraft:dirt"],
+    ["minecraft:coarse_dirt", "minecraft:dirt"],
+    ["minecraft:dirt_path", "minecraft:dirt"],
+    ["minecraft:farmland", "minecraft:dirt"],
+    ["minecraft:stone", "minecraft:cobblestone"],
+    ["minecraft:deepslate", "minecraft:cobbled_deepslate"],
+    ["minecraft:iron_ore", "minecraft:raw_iron"],
+    ["minecraft:deepslate_iron_ore", "minecraft:raw_iron"],
+    ["minecraft:gold_ore", "minecraft:raw_gold"],
+    ["minecraft:deepslate_gold_ore", "minecraft:raw_gold"],
+    ["minecraft:copper_ore", "minecraft:raw_copper"],
+    ["minecraft:deepslate_copper_ore", "minecraft:raw_copper"],
+    ["minecraft:diamond_ore", "minecraft:diamond"],
+    ["minecraft:deepslate_diamond_ore", "minecraft:diamond"],
+    ["minecraft:coal_ore", "minecraft:coal"],
+    ["minecraft:deepslate_coal_ore", "minecraft:coal"],
+    ["minecraft:lapis_ore", "minecraft:lapis_lazuli"],
+    ["minecraft:deepslate_lapis_ore", "minecraft:lapis_lazuli"],
+    ["minecraft:redstone_ore", "minecraft:redstone"],
+    ["minecraft:deepslate_redstone_ore", "minecraft:redstone"],
+    ["minecraft:emerald_ore", "minecraft:emerald"],
+    ["minecraft:deepslate_emerald_ore", "minecraft:emerald"],
+    ["minecraft:clay", "minecraft:clay_ball"],
+    ["minecraft:glass", null],
+    ["minecraft:ice", null],
+]);
+function blockDropId(id) {
+    if (BLOCK_DROPS.has(id)) return BLOCK_DROPS.get(id);
+    if (/(leaves|vine|short_grass|tall_grass|fern$|flower|torch|_air$|_bush|seagrass|kelp|sugar_cane)/.test(id)) return null;
+    return id; // default: the block drops itself (logs, planks, dirt, sand, ...)
+}
+
+/**
+ * Item -> block mapping for offline placements. Only items that ARE blocks in
+ * vanilla map through; everything else answers undefined and the placement is
+ * skipped (like the real API refusing to place food).
+ */
+function placementBlockId(itemId) {
+    if (typeof itemId !== "string") return undefined;
+    const id = itemId.replace(/^minecraft:/, "");
+    if (/^(cobblestone|cobbled_deepslate|stone|deepslate|netherrack|dirt|coarse_dirt|mud|gravel|sand|red_sand|glass|obsidian|torch|furnace|crafting_table|chest|bricks)$/.test(id)) return "minecraft:" + id;
+    if (/(_planks|_log|_wood|_stem|_hyphae|_bricks|_wool|_terracotta|_concrete|bamboo_block|bamboo_mosaic)$/.test(id)) return "minecraft:" + id;
+    return undefined;
+}
 
 // ------------------------------------------------------------------ counters
 /** Native-call counters. Tests assert budgets against these (docs/DEV-WORKFLOW.md). */
@@ -93,6 +174,67 @@ class FakeDimension {
                 return this.getBlock({ x, y, z });
         }
         return undefined;
+    }
+    /**
+     * The 2.3.0-beta..2.8.0-beta shape: (biomeToFind, options?) - wait, no:
+     * findClosestBiome takes (biomeToFind, location?) - biome FIRST. From
+     * module 2.9.0 the same call is calculateClosestBiomeFromSeed(location,
+     * biomeToFind) - location first. Both stand-ins share the patch search.
+     * (The pack used to call findClosestBiome(pos, biome, {boundingSize})
+     * which matched neither signature and therefore never worked.)
+     */
+    findClosestBiome(biomeToFind, pos) {
+        counted("dimension.findClosestBiome");
+        return this._findBiomeBySeed(biomeToFind, pos);
+    }
+    calculateClosestBiomeFromSeed(pos, biomeToFind) {
+        counted("dimension.calculateClosestBiomeFromSeed");
+        return this._findBiomeBySeed(biomeToFind, pos);
+    }
+    _findBiomeBySeed(biomeToFind, pos) {
+        // Offline stand-in: patch list seeded by __harness.setBiome. The real
+        // call is heavy; the pack throttles it (village.js locateVillageBiome).
+        if (!pos || typeof pos.x !== "number")
+            return undefined;
+        let best = undefined;
+        let bestD = Infinity;
+        for (const patch of this.engine.biomes) {
+            if (patch.dimension !== this.id || patch.biome !== biomeToFind)
+                continue;
+            const d = Math.hypot(patch.pos.x - pos.x, patch.pos.y - pos.y, patch.pos.z - pos.z);
+            if (d < bestD) { bestD = d; best = { ...patch.pos }; }
+        }
+        return best;
+    }
+    /**
+     * Mojang's structure locator (module 2.4.0-beta / Bedrock 1.21.120+):
+     * every generated structure whose footprint contains `location`.
+     * Handles the village.js probe grid; seeded via __harness.setStructure.
+     */
+    getGeneratedStructures(location) {
+        counted("dimension.getGeneratedStructures");
+        if (!location || typeof location.x !== "number")
+            return [];
+        const out = [];
+        for (const s of this.engine.structures) {
+            if (s.dimension !== this.id)
+                continue;
+            const d = Math.hypot(location.x - s.pos.x, location.y - s.pos.y, location.z - s.pos.z);
+            if (d <= (s.radius ?? 96) && !out.includes(s.id))
+                out.push(s.id);
+        }
+        return out;
+    }
+    getBiome(location) {
+        counted("dimension.getBiome");
+        for (const patch of this.engine.biomes) {
+            if (patch.dimension !== this.id)
+                continue;
+            const r = patch.radius ?? 96;
+            if (Math.abs(location.x - patch.pos.x) <= r && Math.abs(location.z - patch.pos.z) <= r)
+                return patch.biome;
+        }
+        return this.engine.defaultBiome ?? "minecraft:plains";
     }
     getEntities(options = {}) {
         counted("dimension.getEntities");
@@ -169,6 +311,8 @@ class FakeBlock {
     get isLiquid() { return LIQUID.has(this.typeId); }
     get isSolid() { return !this.isAir && !NON_SOLID.has(this.typeId) && !PASSABLE_HINT.test(this.typeId); }
     get isValid() { return true; }
+    getTags() { counted("block.getTags"); return blockTags(this.typeId).slice(); }
+    hasTag(tag) { counted("block.hasTag"); return blockTags(this.typeId).includes(tag); }
     get permutation() { return new FakeBlockPermutation(this.typeId); }
     setPermutation(perm) { counted("block.setPermutation"); this.engine.setBlock(this.dimension, this.x, this.y, this.z, perm.type.id); }
     setType(typeId) { counted("block.setType"); this.engine.setBlock(this.dimension, this.x, this.y, this.z, typeId); }
@@ -265,8 +409,15 @@ export class ItemStack {
         this.nameTag = undefined;
     }
     get maxAmount() {
-        const rule = ITEM_RULES.get(this.typeId)?.max ?? (MAX_STACK.test(this.typeId) ? 1 : 64);
-        return rule;
+        // Mirror the engine tiers: 1 (tools/gear), 16 (the usual small-stack
+        // exceptions), else 64. Kept in step with core/inventory-model.js
+        // SMALL_STACK so offline stack math matches the engine.
+        const rule = ITEM_RULES.get(this.typeId)?.max;
+        if (rule !== undefined) return rule;
+        const bare = String(this.typeId).replace(/^minecraft:/, "");
+        if (MAX_STACK.test(bare)) return 1;
+        if (/(_sign$|_hanging_sign$|_banner$|bucket|_bucket$|snowball|egg$|ender_pearl|_potion$|potion$|_stew$|stew$|_soup$|honey_bottle|_shulker_box$|_bed$|_door$|_boat$|_minecart$|_rod$)/.test(bare)) return 16;
+        return 64;
     }
     get isStackable() { return this.maxAmount > 1; }
     get type() { return new FakeItemType(this.typeId); }
@@ -317,6 +468,7 @@ export const EntityComponentTypes = {
 };
 export const EquipmentSlot = { Head: "Head", Chest: "Chest", Legs: "Legs", Feet: "Feet", Offhand: "Offhand", Mainhand: "Mainhand" };
 export const GameMode = { survival: "survival", creative: "creative", adventure: "adventure", spectator: "spectator" };
+export const DisplaySlotId = { BelowName: "belowName", List: "list", Sidebar: "sidebar" };
 export const Direction = { Down: "Down", Up: "Up", North: "North", South: "South", East: "East", West: "West" };
 export const BlockComponentTypes = { Inventory: "minecraft:inventory" };
 export const ItemComponentTypes = { Durability: "minecraft:durability", Food: "minecraft:food" };
@@ -324,7 +476,7 @@ export const ItemComponentTypes = { Durability: "minecraft:durability", Food: "m
 class FakeEntityComponents {
     constructor(entity) { this.entity = entity; }
     health(initial = 20) {
-        const self = this;
+        const self = this.entity;
         return {
             get currentValue() { return self.hp; },
             get effectiveMax() { return 20; },
@@ -361,7 +513,9 @@ class FakeEntity {
     get isOnGround() { return true; }
     get isInWater() { return this.__inWater ?? false; }
     get isSprinting() { return !!this.__sprinting; }
+    set isSprinting(v) { this.__sprinting = !!v; }
     get isSneaking() { return !!this.__sneaking; }
+    set isSneaking(v) { this.__sneaking = !!v; }
     get isFalling() { return false; }
     get isSleeping() { return this.__sleeping; }
     get isClimbing() { return false; }
@@ -396,6 +550,11 @@ class FakeEntity {
         if (id === EntityComponentTypes.Item) return this.__item ? { itemStack: this.__item } : undefined;
         return undefined;
     }
+    hasComponent(id) {
+        counted("entity.hasComponent");
+        if (id === "minecraft:tameable") return false; // plain animals in the stub are untamed
+        return this.getComponent(id) !== undefined;
+    }
     addTag(tag) { this.tags.add(tag); return true; }
     hasTag(tag) { return this.tags.has(tag); }
     getTags() { return [...this.tags]; }
@@ -418,13 +577,40 @@ class FakeEntity {
         this.isValid = false;
         this.engine.entities = this.engine.entities.filter((e) => e !== this);
         this.engine.players = this.engine.players.filter((e) => e !== this);
+        // Vanilla mob drops so the harvest -> food loop has something to pick up.
+        for (const [typeId, amount] of MOB_DROPS[this.typeId] ?? []) {
+            const drop = this.engine.spawnEntity("minecraft:item", { ...this.location }, this.dimension);
+            drop.__item = new ItemStack(typeId, amount);
+        }
         this.engine.fire("world.afterEvents.entityDie", { deadEntity: this, damageSource: { cause: "entityAttack" } });
     }
     // SimulatedPlayer movement surface (also used by Player for owner commands)
-    moveToLocation(loc, speed) { counted("sim.moveToLocation"); this.__movement = { target: { ...loc }, speed: speed ?? 1 }; return true; }
+    moveToLocation(loc, options) {
+        counted("sim.moveToLocation");
+        // 2.3.0-beta signature: moveToLocation(location, options?: MoveToOptions).
+        // A bare number stays accepted so older call sites keep working offline.
+        const speed = typeof options === "number" ? options : (options?.speed ?? 1);
+        this.__movement = { target: { ...loc }, speed, faceTarget: options?.faceTarget };
+        return true;
+    }
     stopMoving() { counted("sim.stopMoving"); this.__movement = undefined; return true; }
-    move(forward) { this.__movement = { direction: forward }; }
-    moveRelative(left, up, forward) { this.__movement = { relative: { left, up, forward } }; }
+    move(westEast, northSouth, speed) {
+        counted("sim.move");
+        this.__movement = {
+            target: { x: this.location.x + westEast, y: this.location.y, z: this.location.z + northSouth },
+            speed: speed ?? 1,
+        };
+        return true;
+    }
+    moveRelative(leftRight, backwardForward, speed) {
+        counted("sim.moveRelative");
+        // Rotation-free approximation: +z is forward, -x is left.
+        this.__movement = {
+            target: { x: this.location.x - leftRight, y: this.location.y, z: this.location.z + backwardForward },
+            speed: speed ?? 1,
+        };
+        return true;
+    }
     jump() { counted("sim.jump"); this.engine.jumps.push(this.id); return true; }
     swim() { this.__swimming = true; }
     stopSwimming() { this.__swimming = false; }
@@ -443,21 +629,78 @@ class FakeEntity {
     }
     interactWithEntity(entity) { counted("sim.interactWithEntity"); return true; }
     stopInteracting() { counted("sim.stopInteracting"); return true; }
-    startBreakingBlock(block) { counted("sim.startBreakingBlock"); this.__breaking = { at: { ...block.location }, id: block.typeId }; return true; }
+    startBreakingBlock(block) {
+        counted("sim.startBreakingBlock");
+        const b = this.__resolveBlock(block);
+        if (!b) return false;
+        this.__breaking = { at: { ...b.location }, id: b.typeId, block: b, dimension: b.dimension, left: 10 };
+        return true;
+    }
     stopBreakingBlock() { counted("sim.stopBreakingBlock"); this.__breaking = undefined; return true; }
+    /**
+     * The real API takes a block *location* (Vector3), not a Block object.
+     * Accepting both matches how the pack calls it and stops the stub from
+     * throwing on `block.location.x` - the silent failure that made every
+     * offline mining test look like "breaker is broken".
+     */
+    __resolveBlock(locOrBlock) {
+        if (!locOrBlock) return undefined;
+        if (locOrBlock.isAir !== undefined || locOrBlock.typeId) return locOrBlock;
+        return this.dimension?.getBlock?.({
+            x: Math.floor(locOrBlock.x), y: Math.floor(locOrBlock.y), z: Math.floor(locOrBlock.z),
+        });
+    }
     breakBlock(block) {
         counted("sim.breakBlock");
-        if (!block || block.isAir) return false;
-        const id = block.typeId;
-        this.engine.setBlock(block.dimension, block.location.x, block.location.y, block.location.z, "minecraft:air");
-        this.engine.brokenBlocks.push({ id, at: { ...block.location }, by: this.id });
+        const b = this.__resolveBlock(block);
+        if (!b || b.isAir) return false;
+        const id = b.typeId;
+        this.engine.setBlock(b.dimension, b.location.x, b.location.y, b.location.z, "minecraft:air");
+        this.engine.brokenBlocks.push({ id, at: { ...b.location }, by: this.id });
         this.engine.fire("world.afterEvents.playerBreakBlock", {
-            player: this, brokenBlockPermutation: new FakeBlockPermutation(id), block: block, dimension: block.dimension,
+            player: this, brokenBlockPermutation: new FakeBlockPermutation(id), block: b, dimension: b.dimension,
         });
+        const dropId = blockDropId(id);
+        if (dropId && b.dimension?.spawnItem) {
+            b.dimension.spawnItem(new ItemStack(dropId, 1), { x: b.location.x + 0.5, y: b.location.y + 0.5, z: b.location.z + 0.5 });
+        }
         return true;
     }
     useItemInSlot(slot) { counted("sim.useItemInSlot"); return true; }
-    useItemInSlotOnBlock(slot, block, face) { counted("sim.useItemInSlotOnBlock"); return true; }
+    /**
+     * Real placement semantics for the offline world: the held block lands in
+     * the cell adjacent to the anchor on the given face and one item is spent.
+     * Without this the stub answered "true" forever while the world never
+     * changed - which masked every bridge/pillar climb path offline (the bot
+     * looked like it refused to place when in reality it was placing into a
+     * void, and the climb freeze could never reproduce faithfully).
+     */
+    useItemInSlotOnBlock(slot, block, face) {
+        counted("sim.useItemInSlotOnBlock");
+        try {
+            const b = block?.location ? block : this.__resolveBlock(block);
+            if (!b || !b.dimension) return true;
+            const dirs = {
+                East: { x: 1, y: 0, z: 0 }, West: { x: -1, y: 0, z: 0 },
+                South: { x: 0, y: 0, z: 1 }, North: { x: 0, y: 0, z: -1 },
+                Up: { x: 0, y: 1, z: 0 }, Down: { x: 0, y: -1, z: 0 },
+            };
+            const d = dirs[String(face)] ?? dirs.Up;
+            const x = Math.floor(b.location.x) + d.x;
+            const y = Math.floor(b.location.y) + d.y;
+            const z = Math.floor(b.location.z) + d.z;
+            const idx = Number.isFinite(slot) ? slot : (this.selectedSlotIndex ?? 0);
+            const stack = this.__inventory?.getItem?.(idx);
+            const blockId = placementBlockId(stack?.typeId);
+            if (!blockId) return true;                          // not a block item
+            const occupied = this.engine.peek(b.dimension, x, y, z);
+            if (occupied && occupied !== "minecraft:air") return false; // real API refuses
+            this.engine.setBlock(b.dimension, x, y, z, blockId);
+            if (stack && stack.amount > 1) this.__inventory.setItem(idx, new ItemStack(stack.typeId, stack.amount - 1));
+            else this.__inventory?.setItem?.(idx, undefined);
+            return true;
+        } catch { return true; }
+    }
     useItem() { counted("sim.useItem"); return { success: true }; }
     startUsingItem() { return true; }
     stopUsingItem() { counted("sim.stopUsingItem"); return true; }
@@ -669,6 +912,9 @@ class Engine {
         this.openedContainers = [];
         this.explosions = [];
         this.entityEvents = [];
+        this.biomes = [];
+        this.structures = [];
+        this.defaultBiome = "minecraft:plains";
         this.signals = new Map();
         this.containers = new Map();
         this.world = new FakeWorld(this);
@@ -758,6 +1004,43 @@ class Engine {
         finally { this.acting = false; }
     }
     step(entity) {
+        // Vanilla-ish block breaking: the swing completes after a short delay.
+        if (entity.__breaking) {
+            const brk = entity.__breaking;
+            if (--brk.left <= 0) {
+                const dim = brk.dimension ?? entity.dimension;
+                this.setBlock(dim, brk.at.x, brk.at.y, brk.at.z, "minecraft:air");
+                this.brokenBlocks.push({ id: brk.id, at: { ...brk.at }, by: entity.id });
+                this.fire("world.afterEvents.playerBreakBlock", {
+                    player: entity,
+                    brokenBlockPermutation: new FakeBlockPermutation(brk.id),
+                    block: brk.block,
+                    dimension: dim,
+                });
+                const dropId = blockDropId(brk.id);
+                if (dropId && dim?.spawnItem) {
+                    dim.spawnItem(new ItemStack(dropId, 1), { x: brk.at.x + 0.5, y: brk.at.y + 0.5, z: brk.at.z + 0.5 });
+                }
+                entity.__breaking = undefined;
+            }
+        }
+        // Vanilla-ish item pickup: players absorb item entities they stand near.
+        if (entity.__inventory) {
+            for (const other of [...this.entities]) {
+                if (!other.isValid || other === entity || other.dimension !== entity.dimension) continue;
+                const stack = other.__item;
+                if (!stack) continue;
+                if (Math.hypot(other.location.x - entity.location.x, other.location.y - entity.location.y, other.location.z - entity.location.z) > 1.2) continue;
+                const leftover = entity.__inventory.addItem(new ItemStack(stack));
+                const picked = !leftover || leftover.amount <= 0;
+                if (picked) {
+                    other.isValid = false;
+                    this.entities = this.entities.filter((e) => e !== other);
+                    this.picked = this.picked ?? [];
+                    this.picked.push({ by: entity.id, item: stack.typeId });
+                }
+            }
+        }
         const move = entity.__movement;
         if (!move?.target) return;
         const target = move.target;
@@ -790,6 +1073,9 @@ class Engine {
         this.openedContainers = [];
         this.explosions = [];
         this.entityEvents = [];
+        this.biomes = [];
+        this.structures = [];
+        this.defaultBiome = "minecraft:plains";
         this.signals.clear();
         this.containers.clear();
         this.world = new FakeWorld(this);
@@ -828,6 +1114,14 @@ export const __harness = {
     ground(y = 63, size = 8, typeId = "minecraft:stone") {
         __harness.fillBox({ x: -size, y, z: -size }, { x: size, y, z: size }, typeId);
         return { x: 0, y: y + 1, z: 0 };
+    },
+    /** Seed a biome patch for findClosestBiome/getBiome (offline only). */
+    setBiome: (loc, biome, radius = 96, dimension = "minecraft:overworld") => {
+        __engine.biomes.push({ pos: { ...loc }, biome, radius, dimension });
+    },
+    /** Seed a generated structure for getGeneratedStructures (offline only). */
+    setStructure: (loc, id, radius = 96, dimension = "minecraft:overworld") => {
+        __engine.structures.push({ pos: { ...loc }, id, radius, dimension });
     },
     at: (loc, dimension = "minecraft:overworld") => __harness.engine.dimension(dimension).getBlock(loc),
     typeAt: (loc, dimension = "minecraft:overworld") => __engine.peek(__engine.dimension(dimension), Math.floor(loc.x), Math.floor(loc.y), Math.floor(loc.z)),

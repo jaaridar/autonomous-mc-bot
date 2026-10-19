@@ -298,7 +298,8 @@ export class Scout {
 
 /** Bounded frontier wandering. Does not pretend to know structures in unloaded chunks. */
 export class Explorer {
-    constructor() {
+    constructor(bot) {
+        this.bot = bot;
         this.visits = new Map();
         this.blocked = new Map();
         this.since = 0;
@@ -332,6 +333,19 @@ export class Explorer {
             nav.reset();
             return "arrived";
         }
+        // Look-sweep sightings: if the vision fan spotted something actionable
+        // (village block, chest, ore) up to ~64 blocks out, head for it instead
+        // of wandering blind.
+        const aw = this.bot?.awareness;
+        if (aw?.sightingTarget) {
+            const sight = aw.sightingTarget(tick, range, 600);
+            if (sight && distance(sight, position) > 3 && (this.blocked.get(key(sight)) ?? 0) <= tick) {
+                this.goal = floor(sight);
+                this.since = tick;
+                this.turns++;
+                return "running";
+            }
+        }
         const origin = floor(position), options = [];
         this.turns++;
         for (let dir = 0; dir < 8; dir++)
@@ -354,13 +368,18 @@ export class Explorer {
                         const raw = Math.abs(dir - this.heading);
                         turnDiff = Math.min(raw, 8 - raw);
                     }
+                    // Vision fan: prefer sectors with a long clear sightline,
+                    // avoid sectors whose ray hit a wall within a few blocks.
+                    const lookD = aw?.sectorDepth?.(dir, tick);
+                    const lookBonus = lookD === undefined ? 0 : lookD >= 20 ? -40 : lookD <= 6 ? 60 : 0;
                     options.push({
                         p,
                         dir,
                         score: penalty +
                             turnDiff * 6 +
                             Math.abs(y) * 2 +
-                            (24 - radius),
+                            (24 - radius) +
+                            lookBonus,
                     });
                     break;
                 }
@@ -388,6 +407,12 @@ export class Explorer {
             this.heading = undefined;
             return "blocked";
         }
+        // Distributed scan: pick from far rings first so the bot does not loop on its feet.
+        options.sort((a, b) => {
+            const ra = Math.hypot(a.p.x - origin.x, a.p.z - origin.z);
+            const rb = Math.hypot(b.p.x - origin.x, b.p.z - origin.z);
+            return rb - ra || a.score - b.score;
+        });
         this.goal = options[0].p;
         this.heading = options[0].dir;
         this.since = tick;

@@ -11,7 +11,7 @@ import { Builder, Hands } from "./builder.js";
 import { Combat } from "./combat.js";
 import { Equipment } from "./equipment.js";
 import { Escaper } from "./escape.js";
-import { Bag, NativeInventory, ResourceManager } from "./inventory.js";
+import { Bag, NativeInventory, ResourceManager, foodFacts } from "./inventory.js";
 import { Drops, Looting } from "./looting.js";
 import { DeepMiner, Miner } from "./mining.js";
 import { Navigator, Parkour } from "./navigation.js";
@@ -50,6 +50,9 @@ const OBSERVED = new Map([
     ["minecraft:nether_portal", "portal"],
 ]);
 const totalItems = (c) => Object.values(c).reduce((a, b) => a + b, 0);
+/** The six face neighbours: used by woodExposed() and the reach toolkit. */
+const N6 = [{ x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }, { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }];
+
 /** Tree-log neighbourhood, nearest first (dx,dz in -2..2, dy in -1..4). */
 const LOG_OFFSETS = (() => {
     const out = [];
@@ -67,7 +70,16 @@ const BLOCKED_TTL = 1800;
 const VALUABLE = /^minecraft:(diamond|emerald|netherite|.*_ingot|.*enchanted_book|golden_apple|enchanted_golden_apple|totem_of_undying|heart_of_the_sea|nautilus_shell|.*_horse_armor|saddle|name_tag|.*_bucket|.*_smithing_template|.*_armor_trim|music_disc_.*|.*_spawn_egg|.*_shulker_box|ancient_debris|obsidian|ender_pearl|blaze_rod|ender_eye|elytra|trident|.*_bed|.*_wool)/;
 // UNBREAKABLE WOOD: any log/wood/stem is acceptable for wood needs
 const ANY_WOOD = /(_log|_wood|_stem|_hyphae|bamboo_block)/;
-function isAnyWood(type) { return ANY_WOOD.test(type); }
+/**
+ * Tree material check: the vanilla `log` tag first (covers every current and
+ * future log type), regex fallback for stems/hyphae/bamboo which vanilla does
+ * not tag as `log`. Deliberately NOT the `wood` tag - it also covers planks,
+ * doors and fences, which must never count as trees.
+ */
+function isAnyWood(type, cell) {
+    if (cell?.hasTag?.("log")) return true;
+    return ANY_WOOD.test(type);
+}
 function isWoodRequest(block) { return block && (block === "#logs" || block.endsWith("_log") || block.endsWith("_wood") || block.includes("_stem") || block === "minecraft:bamboo"); }
 
 function wrapSim(sim) {
@@ -108,6 +120,7 @@ export class Bot {
         this.host = host;
         this.memory = memory ?? null;
         this.recoveryAttempts = 0;
+        this.lastBlockedAt = undefined;
         this.progressSignature = "";
         this.hurtTick = -1000;
         this.lastEquipmentCheck = -100;
@@ -143,7 +156,7 @@ export class Bot {
         this.paused = true;
         this.state = "paused";
         this.reason = "Spawned safely; choose a task.";
-        this.explorer = new Explorer();
+        this.explorer = new Explorer(this);
         this.stationTrips = 0;
         this.taskStart = 0;
         this.lastBranch = "";
@@ -376,17 +389,24 @@ export class Bot {
         }
         if (this.blocked) { this.stopActions(); this.state = "blocked"; return; }
         this.stopActions();
-        this.blocked = blockedTask(reason, recovery, ++this.recoveryAttempts, system.currentTick);
+        const now = system.currentTick;
+        // A previous blocked stretch that has been quiet for far longer than the
+        // whole backoff ladder counts as a new problem, not the same one: restart
+        // the attempt ladder so the delay is not pinned at the 1200-tick cap forever.
+        if (this.lastBlockedAt !== undefined && now - this.lastBlockedAt > 2400) this.recoveryAttempts = 0;
+        this.lastBlockedAt = now;
+        this.blocked = blockedTask(reason, recovery, ++this.recoveryAttempts, now);
         this.state = "blocked";
         this.reason = reason;
         this.record("task blocked: " + reason);
         const retrying = this.blocked.retryAt !== undefined;
         const soon = (this.blocked.attempt ?? 1) <= 3;
-        const text = `Problem: ${reason} (while ${this.mission()}). ` + (retrying
+        const text = `Problem: ${reason} (while ${this.mission()}). ` + (this.blocked.capped
+            ? `Retried ${this.blocked.attempt} times without progress - stopping retry; needs attention (defence stays active).`
+            : retrying
             ? (soon ? "Retrying shortly; defence stays active." : "Retrying periodically (about a minute); defence stays active.")
             : "Task needs attention; defence stays active.");
         const last = this.lastBlockedTell;
-        const now = system.currentTick;
         if (!last || last.text !== text || now - last.tick > 12000) {
             this.lastBlockedTell = { text, tick: now };
             this.tell(text);
@@ -401,12 +421,20 @@ export class Bot {
         this.record("hurt: " + event.damage);
     }
     recoverTask(tick) {
+        const attempt = this.blocked?.attempt ?? 1;
         const remaining = this.mode === "mine" && this.mineRequest ? Math.max(1, (this.mining?.amount ?? this.mineRequest.count) - (this.mining?.broken ?? 0)) : undefined;
         this.cancelWork();
         if (remaining !== undefined && this.mineRequest) {
             this.mineRequest.count = remaining;
             this.mining = this.newMining(remaining, this.mineRequest.block);
         }
+        // A retry that just re-runs the same beliefs re-blocks on the same cell
+        // (the original "must press !bot auto" loop). So retries change WHAT is
+        // trusted: the current route always goes (it may end at the cell that
+        // tripped us), and from the third attempt on the terrain cache plus the
+        // vision sweep reset too - the replan re-probes the world from scratch.
+        this.nav.reset();
+        if (attempt >= 3) { this.terrain.clear(); this.awareness?.reset?.(); }
         this.autonomy.resume(tick);
         this.autonomy.recover();
         this.blocked = undefined;
@@ -816,6 +844,14 @@ export class Bot {
      */
     deepMine(m, tick, met) {
         const full = this.bag.container.emptySlotsCount < 1;
+        // Village-first: while a known village is still unlooted the current
+        // shaft ends at the next safe point (ascend cuts the way out) so the
+        // trip really happens - deep mining can wait, the raid cannot. The
+        // five-minute deadline stays as the fallback for the deferred case;
+        // new shafts are already closed by the gate (see villageGateOpen).
+        if (m.underground && this.mode === "survival" && this.settings.loot
+            && (this.village?.pendingFirstTrip?.(tick) === true || this.village?.forced === true))
+            this.deepMiner.wantsOut = true;
         const wantedOut = this.miner.wantsOut || this.deepMiner.wantsOut;
 
         // If deepMiner active, delegate
@@ -829,23 +865,22 @@ export class Bot {
                         this.nav.go(center(origin), tick);
                         return "continue";
                     }
-                    const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
+                    const why = met ? "" : wantedOut ? "No vein found on that shaft." : full ? "Inventory full underground." : "";
                     this.deepMiner.reset();
                     this.miner.reset();
-                    if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
+                    if (why) { this.record(why + " Climbed out; concluding the shaft."); return "exhausted"; }
                     return "done";
                 }
                 if (r === "stalled") {
-                    const origin = this.deepMiner.site?.origin ?? m.entrance;
-                    if (origin && floor(this.sim.location).y < origin.y - 2) {
-                        this.nav.go(center(origin), tick);
-                        this.reason = "Ascending towards surface entrance";
-                        return "continue";
-                    }
+                    // No A* fallback underground: the pathfinder cannot climb a
+                    // dug shaft, and the old `nav.go(origin)` there was exactly
+                    // the "walks 5 blocks forward and 5 back" ping-pong. The
+                    // ascent carries its own pillar/staircase climb now, so a
+                    // stall here is real - report it and let the blocked-task
+                    // retry contract take over.
+                    this.reason = this.deepMiner.reason;
                     this.record("DeepMiner stalled: " + this.deepMiner.reason + ", retrying");
-                    this.deepMiner.reset();
-                    this.miner.reset();
-                    return "done";
+                    return "blocked";
                 }
                 return "continue";
             }
@@ -874,21 +909,17 @@ export class Bot {
                     this.nav.go(center(origin), tick);
                     return "continue";
                 }
-                const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
+                const why = met ? "" : wantedOut ? "No vein found on that shaft." : full ? "Inventory full underground." : "";
                 this.miner.reset();
-                if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
+                if (why) { this.record(why + " Climbed out; concluding the shaft."); return "exhausted"; }
                 return "done";
             }
             if (r === "stalled") {
-                const origin = this.miner.site?.origin ?? m.entrance;
-                if (origin && floor(this.sim.location).y < origin.y - 2) {
-                    this.nav.go(center(origin), tick);
-                    this.reason = "Ascending towards surface entrance";
-                    return "continue";
-                }
+                // Same as the DeepMiner branch: no underground A* fallback -
+                // the ascent climb handles vertical, a stall here is honest.
+                this.reason = this.miner.reason;
                 this.record("Miner stalled: " + this.miner.reason + ", retrying");
-                this.miner.reset();
-                return "done";
+                return "blocked";
             }
             return "continue";
         }
@@ -896,7 +927,7 @@ export class Bot {
         if (!this.miner.active && !m.bulk && !m.underground && tick - m.noTargetSince < 400) return "fallthrough";
 
         // For deep ores (not surface/bulk stone), use deepMiner for branch mining
-        if (m.underground && m.deepItem && !m.bulk && this.settings.deepMining) {
+        if (m.underground && m.deepItem && !m.bulk && this.settings.deepMining && this.villageGateOpen(tick)) {
             const started = this.deepMiner.start(m.deepItem, tick);
             if (started) {
                 this.miner.reset();
@@ -910,6 +941,19 @@ export class Bot {
         if (r === "no-tool" || r === "lava" || r === "water" || r === "stalled" || r === "blocked") return "blocked";
         return "continue";
     }
+
+    /**
+     * Village-first: while a known village is still unlooted, autonomous
+     * survival must not open a new deep shaft - the round trip to the village
+     * comes first (cheap loot: food, beds, chests) and the deep mine happens
+     * after it. User-assigned mine orders are never held back.
+     */
+    villageGateOpen(tick) {
+        const v = this.village;
+        if (!v || !this.settings.loot) return true;
+        if (this.mode !== "survival") return true;
+        return !v.pendingFirstTrip(tick);
+    }
     craft(item, batches = 1) {
         if (!this.settings.assistedCrafting) throw Error("Assisted crafting is off. !bot config crafting on explicitly enables inventory recipes.");
         if (item === id("bed")) {
@@ -919,7 +963,25 @@ export class Bot {
         }
         const r = RECIPES.find((r) => r.output === item);
         if (!r) throw Error("Recipe not supported.");
-        craft(this.bag, r, batches, this.terrain.tableNear(this.sim.location));
+        try {
+            craft(this.bag, r, batches, this.terrain.tableNear(this.sim.location));
+        } catch (e) {
+            if (!String(e?.message ?? e).includes("Inventory full")) throw e;
+            // A full bag must not dead-end the task ("Inventory full; nothing
+            // consumed."). Shed bulk first (merges partial stacks, drops
+            // re-minable stone/dirt beyond the floors), then run the identical
+            // recipe once more. A genuine "store something" bag retries later
+            // instead of stopping the mission.
+            const free = this.resource.makeRoom(1);
+            if (free < 1) throw new TaskFault("Inventory full and nothing safe to shed; store something first.", "retry");
+            try {
+                craft(this.bag, r, batches, this.terrain.tableNear(this.sim.location));
+            } catch (e2) {
+                if (String(e2?.message ?? e2).includes("Inventory full")) throw new TaskFault("Inventory full even after making room; retrying later.", "retry");
+                throw e2;
+            }
+            this.record(`made room (shed bulk) to craft ${item}`);
+        }
         this.record(`craft:${item} x${r.amount * batches}`);
     }
     /**
@@ -1083,6 +1145,10 @@ export class Bot {
             }
             return cachedThreatInfo;
         };
+        // Warm the snapshot now: threatInfo() is memoised (3-tick grace), so
+        // this is one entity query per 3 ticks, not one per tick - and it
+        // keeps the survival-master fast path below actually reachable.
+        getCachedThreat();
 
         // ARBITER: replaces 430-line chain of if (director.tick()) return;
         // Keeps current behavior until finishes or clearly better appears, returns reason codes
@@ -1201,7 +1267,8 @@ export class Bot {
             if (tick - (this.lastFoodCheck ?? 0) > 80) {
                 this.lastFoodCheck = tick;
                 try {
-                    const reserves = assessFoodReserves(this.bag.counts(), { hunger, health: curHealth });
+                    const bagCounts = this.bag.counts();
+                    const reserves = assessFoodReserves(bagCounts, { hunger, health: curHealth, facts: foodFacts(Object.keys(bagCounts)) });
                     if (reserves.status === "critical" && this.mode !== "idle") {
                         this.reason = `Food critical ${reserves.totalHunger} hunger, ${reserves.status} - prioritizing food`;
                     }
@@ -1276,6 +1343,17 @@ export class Bot {
         const justStuck = this.nav.stuck;
         this.nav.stuck = false;
         let escapeKind = this.escaper.active ? this.escaper.mode : "";
+        // A climb owns the movement: a still-active "trapped" escape (left over
+        // from before the ascent) used to keep steering the bot one slow block
+        // per step along the tunnel while the ascent waited for movement it
+        // would never receive - the endless walk-out. Stand it down; genuine
+        // suffocation / hazard escapes stay allowed to restart below.
+        if (escapeKind === "trapped" && !isSuffocating && !below?.hazard
+            && (this.miner.ascentStarted || this.deepMiner.ascentStarted || this.deepMiner.ascending)) {
+            this.escaper.reset();
+            this.nav.reset();
+            escapeKind = "";
+        }
         if (!escapeKind) {
             if (isSuffocating) {
                 try {
@@ -1287,7 +1365,13 @@ export class Bot {
             }
             else if (this.sim.isInWater && !this.ridingBoat()) escapeKind = "water";
             else if (below?.hazard) escapeKind = "trapped";
-            else if (justStuck && this.mode !== "idle") escapeKind = "trapped";
+            else if (justStuck && this.mode !== "idle"
+                && !this.miner.ascentStarted && !this.deepMiner.ascentStarted && !this.deepMiner.ascending) {
+                // ...unless an ascent/climb owns the movement: the escaper's
+                // horizontal "walk out" used to fight the climb (walk away,
+                // declare "escaped", climb again - the endless alternation).
+                escapeKind = "trapped";
+            }
             // World-class: extreme combat situations need dedicated escape
             else if (info.count >= 8 || info.bombNear || (info.ranged >= 6) || (info.list.some(e => e.typeId === "minecraft:ender_man") && (this.sim.getComponent("minecraft:health")?.currentValue ?? 20) <= 12)) {
                 escapeKind = "combat_escape";
@@ -1304,10 +1388,18 @@ export class Bot {
         if (retreat) this.fleeSince = this.fleeSince || tick; else this.fleeSince = 0;
         if (this.fleeSince && info.nearest && tick - this.fleeSince < 200) retreat = true;
         const eat = foodSlot >= 0 && hunger <= 17 && (!info.nearest || info.closest > 10 || hunger <= 6);
-        const branch = priority({ paused: false, escape: !!escapeKind, retreat, eat, threat: !!info.nearest, });
+        const branch = priority({ paused: false, escape: !!escapeKind && tick >= (this.escapeCooldownUntil ?? 0), retreat, eat, threat: !!info.nearest, });
         if (branch !== this.lastBranch) { this.stopActions(); this.lastBranch = branch; this.retreatSince = 0; this.eatingUntil = 0; }
         this.state = branch;
         if (branch === "escape") {
+            // Creeper next to us: box in completely and sneak before anything
+            // else. This is the "can seal itself but died anyway" fix - the
+            // sealing must happen BEFORE the escaper starts running away in
+            // the open.
+            if (info.explosive > 0 && info.closest <= 7 && this.sealIn(tick)) {
+                this.reason = "Sealed in against the creeper - sneaking";
+                return;
+            }
             if (!this.escaper.active) {
                 if (this.escapeAttempts++ >= 14) { this.blockTask("Stuck repeatedly with no way out; needs help.", "retry"); return; }
                 this.escapeOrigin = { ...this.sim.location };
@@ -1317,7 +1409,16 @@ export class Bot {
             if (result === "done") {
                 const moved = this.escapeOrigin ? distance(this.sim.location, this.escapeOrigin) : 0;
                 this.escaper.reset(); this.nav.reset();
-                if (moved >= 1) this.escapeAttempts = 0;
+                if (moved >= 1) { this.escapeAttempts = 0; }
+                else {
+                    // Handing back with zero progress used to reset cleanly and
+                    // fire again next tick - the endless "Handing back to
+                    // pathfinder." / walk-out alternation. Count it, and give
+                    // the task 100 uninterrupted ticks (the reach toolkit can
+                    // tunnel / scaffold) before escaping may take over again.
+                    this.escapeAttempts += 1;
+                    this.escapeCooldownUntil = tick + 100;
+                }
                 this.fleeSince = 0; this.lastBranch = ""; this.record(moved >= 2 ? "escaped" : "escape made no progress");
             } else if (result === "failed") {
                 const why = this.escaper.lastReason;
@@ -1335,6 +1436,17 @@ export class Bot {
         if (this.blocked) {
             this.state = "blocked";
             if (this.blocked.retryAt !== undefined && tick >= this.blocked.retryAt) { this.recoverTask(tick); }
+            else if (this.blocked.capped && tick - this.blocked.since > 2400) {
+                // A capped stop is not forever: every ~2.5 minutes of quiet, hand
+                // the SAME fault one fresh bounded round - the world may have
+                // changed while the bot waited (mob left, liquid settled, drops
+                // despawned). Only bounded ladders can cap; equipment CRITICAL and
+                // other owner decisions stay parked until a command.
+                const why = this.blocked.reason;
+                this.blocked = undefined;
+                this.recoveryAttempts = 0;
+                this.blockTask(why, "retry-bounded");
+            }
             return;
         }
         // Progress signature: cheap integer sum checked once per second.
@@ -1371,9 +1483,12 @@ export class Bot {
         if (this.mining && this.mode !== "mine") {
             try {
                 if (this.pickaxeGuard(this.mining)) return;
-                if (this.mine(this.mining, tick)) {
+                const task = this.mining;
+                if (this.mine(task, tick)) {
                     this.mining = undefined;
-                    this.reason = "Mining quota complete, continuing.";
+                    this.reason = task.concludedNoQuota
+                        ? "Shaft concluded without the quota; re-evaluating objectives."
+                        : "Mining quota complete, continuing.";
                 }
             } catch (error) {
                 if (chunkFault(error)) {
@@ -1383,7 +1498,8 @@ export class Bot {
                     this.nav.reset();
                     return;
                 }
-                this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual");
+                // Unexpected errors ride the retry-bounded ladder, not "manual": see think()'s catch below.
+                this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "retry-bounded");
             }
             return;
         }
@@ -1403,11 +1519,16 @@ export class Bot {
                     }
                     break;
                 case "mine":
-                    if (this.mining && this.mine(this.mining, tick)) {
-                        // Command mining (!bot mine/deepmine): finish, then hold position.
-                        // Directors use assignMine() instead and never enter this mode.
-                        this.stop("Mining quota complete (blocks broken, drops collected).");
-                        this.tell(this.reason);
+                    if (this.mining) {
+                        const task = this.mining;
+                        if (this.mine(task, tick)) {
+                            // Command mining (!bot mine/deepmine): finish, then hold position.
+                            // Directors use assignMine() instead and never enter this mode.
+                            this.stop(task.concludedNoQuota
+                                ? "Shaft concluded without the quota (no vein in reach). Stopped; reissue the command to retry."
+                                : "Mining quota complete (blocks broken, drops collected).");
+                            this.tell(this.reason);
+                        }
                     }
                     break;
                 case "survival": this.autonomy.tick(tick); break;
@@ -1429,7 +1550,10 @@ export class Bot {
                 this.reason = "Repositioning from unloaded chunk boundary.";
                 return;
             }
-            this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual");
+            // Unexpected (non-TaskFault) errors are engine hiccups far more often than real
+            // bugs: retry-bounded self-recovers them with backoff and only parks the task
+            // after MANY_RETRIES clean failures (see core/arbiter.js blockedTask()).
+            this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "retry-bounded");
         }
         if (tick % 100 === 0) this.save();
     }
@@ -1620,19 +1744,13 @@ export class Bot {
         }
         if (r === "blocked") {
             this.followBlocked = this.followBlocked || tick;
-            if (this.builder && this.builder.canBuild && tick % 60 === 0) {
-                try {
-                    const p = floor(this.sim.location);
-                    const dir = { x: Math.sign(goal.x - p.x), y: 0, z: Math.sign(goal.z - p.z) };
-                    if (dir.x !== 0 || dir.z !== 0) {
-                        const bridgeRes = this.builder.bridge(dir, tick);
-                        if (bridgeRes === "placed" || bridgeRes === "placed_support") {
-                            this.reason = "Follow: bridging to reach you";
-                            return;
-                        }
-                    }
-                } catch (_e) { this.fault(_e); }
-            }
+            // Come-to-me breakthrough BEFORE parking: run the direct line as
+            // close as the ground allows, then break through (mine / parkour /
+            // scaffold / bridge) and collect blocks when the bag is empty -
+            // the old code stood still here repeating "Still finding way to
+            // you" while the owner waited.
+            const breakthrough = this.followBreakthrough(goal, tick);
+            if (breakthrough) { this.reason = breakthrough; return; }
             if (tick % 60 === 0) {
                 try { this.explorer.step(this.sim.location, goal, tick, this.terrain, this.nav, Math.min(32, totalDist)); } catch (_e) { this.fault(_e); }
                 return;
@@ -1649,6 +1767,10 @@ export class Bot {
         if (r === "failed") {
             this.followFails = (this.followFails ?? 0) + 1;
             this.reason = this.nav.reason;
+            // Same breakthrough ladder as the blocked branch: never just
+            // stand there when the grid path gives up.
+            const breakthrough = this.followBreakthrough(goal, tick);
+            if (breakthrough) { this.reason = breakthrough; return; }
             if (this.followFails % 3 === 0) {
                 try {
                     const obstruct = this.terrain.findObstructions(this.sim.location, goal);
@@ -1700,7 +1822,99 @@ export class Bot {
         return undefined;
     }
 
+    /**
+     * Come-to-me breakthrough. When the pathfinder cannot link the last stretch
+     * to the owner the bot must not park and report - it closes the distance
+     * by hand, then breaks through what stops it:
+     *   1. reach toolkit -> mine the line of sight, scaffold up, parkour a gap
+     *   2. raw run       -> walk the direct line as close as the ground allows
+     *   3. bridge        -> lay floor toward you with blocks from the bag
+     *   4. collect       -> empty bag: mine an obstruction / near wall, retry
+     * Returns a reason string when it acted, otherwise undefined.
+     */
+    followBreakthrough(goal, tick) {
+        const fc = (this._followCache ??= { tick: -1000, blocks: [], water: null, waterNear: false, waterTick: -1000, hop: undefined, hopBan: 0 });
+        const m = (fc.reach ??= { blocked: new Map(), reachFor: undefined, reachTries: 0, reachScaffold: false, reachParkour: false });
+        const loc = this.sim.location;
+        const selfFloor = floor(loc);
+        const totalDist = distance(loc, goal);
+
+        // 1. Reach toolkit: mine the blocks between the eyes and the owner,
+        //    scaffold up, or parkour a short gap (bounded per target cell).
+        if (tick % 10 === 0 && this.tryReach(goal, m, tick)) {
+            return `Follow breakthrough: reaching you, ${Math.round(totalDist)}b away`;
+        }
+
+        // 2. Run the direct line as close as the ground allows (the grid path
+        //    gave up, but a raw step often still carries through).
+        if (tick % 8 === 0) {
+            const dx = goal.x - loc.x, dz = goal.z - loc.z;
+            const len = Math.hypot(dx, dz);
+            if (len > 1.4) {
+                const step = Math.max(1, Math.min(3, Math.round(len)));
+                const cell = { x: Math.floor(loc.x + (dx / len) * step), y: selfFloor.y, z: Math.floor(loc.z + (dz / len) * step) };
+                if (cell.x !== selfFloor.x || cell.z !== selfFloor.z) {
+                    const below = add(cell, DOWN), headC = add(cell, UP);
+                    const walkable = this.terrain.solid(below) && !this.terrain.solid(cell) && !this.terrain.solid(headC)
+                        && !this.terrain.dangerous(cell) && !this.terrain.liquid(cell) && !this.terrain.liquid(below);
+                    if (walkable) {
+                        this.nav.reset();
+                        try {
+                            this.sim.isSprinting = true;
+                            // Bunny hop down the open line: sprint-jumping is the
+                            // fastest travel a player has. One hop per ~10 ticks.
+                            if (this.sim.isOnGround && tick - (fc.jumpAt ?? -99) >= 10
+                                && this.terrain.block(add(selfFloor, { x: 0, y: 2, z: 0 }))?.isAir) {
+                                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
+                                fc.jumpAt = tick;
+                            }
+                            this.sim.moveToLocation(this.host.relative(center(cell)), { faceTarget: true });
+                        } catch (_e) { this.fault(_e); }
+                        return `Follow breakthrough: running toward you, ${Math.round(totalDist)}b out`;
+                    }
+                }
+            }
+        }
+
+        // 3. Bridge: blocks in the bag -> lay floor toward the owner.
+        if (this.builder && this.builder.canBuild && tick % 30 === 0) {
+            try {
+                const dir = { x: Math.sign(goal.x - loc.x), y: 0, z: Math.sign(goal.z - loc.z) };
+                if (dir.x !== 0 || dir.z !== 0) {
+                    const res = this.builder.bridge(dir, tick);
+                    if (res === "placed" || res === "placed_support") return "Follow breakthrough: bridging to reach you";
+                }
+            } catch (_e) { this.fault(_e); }
+        }
+
+        // 4. Empty bag: collect - break the first obstruction on the line, or
+        //    mine a near wall block - then the bridge step above retries.
+        if ((!this.builder || !this.builder.canBuild) && tick % 40 === 0) {
+            try {
+                const head = this.sim.getHeadLocation();
+                const obs = (this.terrain.findObstructions?.(head, goal) ?? []).filter((c) => this.terrain.solid(c)).slice(0, 2);
+                for (const c of obs) {
+                    const b = this.terrain.block(c);
+                    if (!b || b.isAir) continue;
+                    if (isUnbreakable(b.typeId) || retainScore(b.typeId) >= 80) continue;
+                    const r = this.digCell(c, tick);
+                    if (r === "digging") return `Follow breakthrough: mining ${b.typeId} at ${c.x},${c.y},${c.z} to come to you`;
+                }
+                const near = this.terrain.scanOres(loc, 5, (type) => type === "minecraft:dirt" || type === "minecraft:cobblestone" || type === "minecraft:stone" || type.endsWith("_log") || type.endsWith("_planks"), 60);
+                for (const c of near) {
+                    const r = this.digCell(c, tick);
+                    if (r === "digging") return `Follow breakthrough: collecting ${this.terrain.typeAt(c) ?? "blocks"} at ${c.x},${c.y},${c.z} to bridge to you`;
+                }
+            } catch (_e) { this.fault(_e); }
+        }
+        return undefined;
+    }
+
     idle(tick) {
+        // Idle debounce starts from entering idle - never from a stale
+        // timestamp remembered by a previous mission.
+        if (this.mode !== "idle")
+            this._idleSince = undefined;
         // ULTRA AUTONOMY: only auto-start survival after the bot has been idle for 60 s
         // and the owner is truly absent AND settings.autoSurvival is explicitly enabled.
         if (this.mode === "idle" && !this.paused) {
@@ -1829,7 +2043,7 @@ export class Bot {
             }
             return; 
         }
-        const raw = this.sim.dimension.getEntities({ type: "minecraft:item", location: { x: g.anchor.x, y: g.anchor.y, z: g.anchor.z }, maxDistance: g.radius, }).filter((e) => e.isValid);
+        const raw = this.sim.dimension.getEntities({ type: "minecraft:item", location: { x: g.anchor.x, y: g.anchor.y, z: g.anchor.z }, maxDistance: g.radius, }).filter((e) => e.isValid && (this.grabIgnore.get(e.id) ?? 0) < tick);
         if (tick > g.deadline) return this.finishCollect(raw, g, "Sweep budget reached");
         const drop = raw.filter((e) => !g.skipped.has(e.id) && this.terrain.safe(e.location)).sort((a, b) => distance(a.location, this.sim.location) - distance(b.location, this.sim.location))[0];
         if (drop) {
@@ -1998,7 +2212,11 @@ export class Bot {
         if (m.item) {
             const gained = amountOf(stock, m.item) - m.startCount;
             if (m.treeMode) {
-                met = (gained + m.broken + (m.loot?.size ?? 0)) >= m.amount || gained >= m.amount;
+                // Use the strongest single signal: broken and picked-up logs
+                // describe the same log, so summing them finished the quota
+                // about twice as early as requested. The loot queue would
+                // triple-count in-flight drops and is deliberately excluded.
+                met = Math.max(gained, m.broken) >= m.amount;
             } else {
                 met = gained >= m.amount;
             }
@@ -2007,25 +2225,50 @@ export class Bot {
         }
         if (met && this.bag.container.emptySlotsCount > 0) {
             if (m.treeMode) {
-                const adj = this.findAdjacentLogs(m, tick);
-                if (adj) {
-                    m.sweepUntil = undefined;
-                    m.target = adj;
-                    m.type = this.terrain.block(adj)?.typeId;
-                    this.reason = `Tree: fast continue to adjacent log ${adj.x},${adj.y},${adj.z} - advanced`;
-                    return false;
+                // Keep chopping the REST of the tree after the quota is met.
+                // The old code re-picked an adjacent log EVERY tick and
+                // returned immediately, so the "Tree: fast continue to
+                // adjacent log ... - advanced" reason printed while the bot
+                // stood still - the target pointer walked around the tree
+                // without a single swing. Now: finish the log already in
+                // progress and let blockChanged advance to the next one; only
+                // pick a new adjacent log when there is no target at all.
+                if (m.target) {
+                    m.continuing = true;
+                } else {
+                    const adj = this.findAdjacentLogs(m, tick);
+                    if (adj) {
+                        m.sweepUntil = undefined;
+                        m.target = adj;
+                        m.type = this.terrain.block(adj)?.typeId;
+                        m.noTargetSince = tick;
+                        m.continuing = true;
+                        this.reason = `Tree: fast continue to adjacent log ${adj.x},${adj.y},${adj.z} - advanced`;
+                    } else {
+                        m.continuing = false;
+                    }
                 }
             }
-            if (m.sweepUntil === undefined) m.sweepUntil = tick + 20;
-            if (tick < m.sweepUntil) {
-                const stray = this.drops.near(m, this.sim.location, 10, tick);
-                if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 15; }
-                if (this.drops.run(m, tick)) return false;
+            if (!m.continuing) {
+                if (m.sweepUntil === undefined) m.sweepUntil = tick + 80;
+                if (tick < m.sweepUntil) {
+                    const stray = this.drops.near(m, this.sim.location, 10, tick);
+                    if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 50; }
+                    if (this.drops.run(m, tick)) return false;
+                }
             }
         }
         // Delegate underground to deep miners
         if (m.underground) {
             const deep = this.deepMine(m, tick, met);
+            if (deep === "exhausted") {
+                // The shaft is concluded without the quota (no vein / full bag).
+                // End the task honestly and hand back to the caller: directors
+                // re-evaluate (village-first / next objective) instead of this
+                // task re-scanning surface work it already dug.
+                m.concludedNoQuota = true;
+                return true;
+            }
             if (deep === "done") {
                 if (m.entrance && curLoc.y < m.entrance.y - 1) {
                     m.returning = true;
@@ -2049,6 +2292,8 @@ export class Bot {
                 const nextTarget = m.breadcrumbs[m.breadcrumbs.length - 1];
                 if (distance(curLoc, nextTarget) < 1.4) {
                     m.breadcrumbs.pop();
+                    m.returnSinceKey = undefined;
+                    m.returnSkips = 0;
                 } else {
                     break;
                 }
@@ -2058,18 +2303,105 @@ export class Bot {
             const distToEntrance = m.entrance ? distance(curLoc, m.entrance) : distToExit;
             if (distToExit <= 1.8 && (m.breadcrumbs.length <= 1 || distToEntrance <= 2.5)) {
                 m.returning = false;
-                this.record("Mining quota complete; returned safely to surface entrance.");
+                m.concludedNoQuota = !met;
+                this.record(met
+                    ? "Mining quota complete; returned safely to surface entrance."
+                    : "Shaft concluded; returned safely to surface entrance.");
                 return true;
+            }
+            // A breadcrumb ABOVE the feet is a vertical climb, and A* cannot
+            // climb a dug shaft - blind moveTo/nav there was exactly the
+            // "walk 5 blocks forward and 5 back, never comes out" loop. Climb
+            // it with the pillar/staircase primitives instead.
+            if (exitTarget.y >= curLoc.y + 1) {
+                // No-height guard, mirroring routeAscend's 900-tick net: a
+                // column climb that keeps "working" without ever gaining a
+                // block would otherwise loop here forever.
+                if (m.returnClimbHigh === undefined || curLoc.y > m.returnClimbHigh) { m.returnClimbHigh = curLoc.y; m.returnClimbAt = tick; }
+                if (tick - (m.returnClimbAt ?? tick) > 900) {
+                    m.returnClimbAt = tick;
+                    const d = this.deepMiner.digToSurface(tick);
+                    if (d === "blocked")
+                        this.blockTask("Cannot climb back to the surface (stuck at Y=" + curLoc.y + (this.deepMiner.stairWhy ? "; why: " + this.deepMiner.stairWhy : "") + "); needs help.", "retry");
+                    else
+                        this.reason = `Digging own way out: ${this.deepMiner.reason}`;
+                    return false;
+                }
+                const r = this.deepMiner.climbStep(exitTarget, tick);
+                this.reason = this.deepMiner.reason;
+                if (r === "blocked") {
+                    const atEntranceColumn = m.entrance && m.breadcrumbs.length === 1
+                        && m.breadcrumbs[0].x === m.entrance.x && m.breadcrumbs[0].z === m.entrance.z;
+                    if (!atEntranceColumn) {
+                        // That exact crumb cannot be reached: aim for the
+                        // entrance column - the climb fixes height, and the
+                        // surface walk finishes the horizontal part.
+                        m.breadcrumbs = [{ ...m.entrance }];
+                        this.reason = "Mapped cell unreachable; climbing straight for the entrance column";
+                    } else {
+                        // Even the entrance column cannot be climbed - but the
+                        // bot can always dig and bridge up: cut a pocket into a
+                        // safe wall (no gravel overhead, no water/lava in the
+                        // cut) and climb from there. The honest handover is the
+                        // last resort after that rescue bails out.
+                        const r = this.deepMiner.digToSurface(tick);
+                        if (r === "blocked")
+                            this.blockTask("Cannot climb back to the surface (stuck at Y=" + curLoc.y + (this.deepMiner.stairWhy ? "; why: " + this.deepMiner.stairWhy : "") + "); needs help.", "retry");
+                        else
+                            this.reason = `Digging own way out: ${this.deepMiner.reason}`;
+                    }
+                }
+                return false;
+            }
+            // Same level (or a step down): the mapped corridor is walkable.
+            // Bounded: a crumb that cannot be reached in 200 ticks is skipped
+            // so a single broken link cannot pin the whole return.
+            const crumbKey = key(exitTarget);
+            if (m.returnSinceKey !== crumbKey) { m.returnSinceKey = crumbKey; m.returnSinceAt = tick; }
+            if (tick - (m.returnSinceAt ?? tick) > 200) {
+                this.nav.reset();
+                m.returnSkips = (m.returnSkips ?? 0) + 1;
+                if (m.returnSkips >= 2 || m.breadcrumbs.length <= 1) {
+                    // The crumb walk is not converging: a buried crumb, a wall
+                    // in the way, or only the entrance cell left. Stop dancing
+                    // around the trail - this was the live "looping in one
+                    // direction" report. Aim at the entrance column instead:
+                    // the monotonic pillar/digUp climb fixes height,
+                    // digToSurface is the last resort, and the surface walk
+                    // finishes the horizontal leg.
+                    m.breadcrumbs = [{ ...(m.entrance ?? exitTarget) }];
+                    m.returnSkips = 0;
+                    m.returnSinceKey = undefined;
+                    if ((m.entrance?.y ?? curLoc.y) <= curLoc.y + 1) {
+                        // Already at entrance height with the entrance cell
+                        // unreachable: no climb left to do - end the return.
+                        m.returning = false;
+                        m.concludedNoQuota = !met;
+                        this.record("At the surface but the entrance cell is unreachable; ending the return here.");
+                        return true;
+                    }
+                    this.reason = "Trail not converging; climbing straight for the entrance column";
+                    return false;
+                }
+                if (m.breadcrumbs.length > 1) m.breadcrumbs.pop();
+                m.returnSinceKey = undefined;
+                this.reason = "Mapped cell still unreachable; skipping back along the trail";
+                return false;
             }
             this.reason = `Returning to surface entrance along mapped path (${m.breadcrumbs.length} left)`;
             const navRes = this.navTo(center(exitTarget), tick, 1);
             if (navRes === "failed" || navRes === "blocked") {
-                this.digCell(exitTarget, tick);
-                this.digCell(add(exitTarget, UP), tick);
+                // Never ping-pong nav against a stuck exit: tunnel the line of
+                // sight with the reach toolkit first, then fall back to
+                // breaking the exit cell itself.
+                if (!this.tryReach(exitTarget, m, tick)) {
+                    this.digCell(exitTarget, tick);
+                    this.digCell(add(exitTarget, UP), tick);
+                }
             }
             return false;
         }
-        if (met) return true;
+        if (met && !m.continuing) return true;
         if (this.bag.container.emptySlotsCount < 1) { 
             try { this.resource.organizeIfNeeded(); } catch (_e) { this.fault(_e); }
             if (this.bag.container.emptySlotsCount < 1) {
@@ -2084,7 +2416,11 @@ export class Bot {
             if (m.underground) {
                 // Only try to start deepMiner if we haven't just set wantsOut (200-tick cooldown).
                 const deepCooldown = (m._deepRetryAt ?? 0);
-                if (!this.deepMiner.active && !this.miner.active && this.settings.deepMining && m.deepItem && tick >= deepCooldown) {
+                // Bulk blocks (stone/cobble) dig shallow, never a deep shaft:
+                // bestYFor(cobblestone) is 56, which sent bulk jobs through a
+                // soil staircase into a loop of "dig dirt, climb out, retry".
+                if (!this.deepMiner.active && !this.miner.active && this.settings.deepMining && m.deepItem && !m.bulk && tick >= deepCooldown
+                    && this.villageGateOpen(tick)) {
                     if (this.deepMiner.start(m.deepItem, tick)) {
                         this.miner.wantsOut = false;
                         this.deepMiner.wantsOut = false;
@@ -2101,6 +2437,18 @@ export class Bot {
                         return false;
                     }
                 }
+                // Bulk dig found no stone on this level: deepen the shaft once
+                // or twice before giving up (dirt/sand hides the rock layer),
+                // bounded so a bulk task can never mine dirt in circles.
+                if (m.bulk && this.miner.active && (m.deepens ?? 0) < 2) {
+                    m.deepens = (m.deepens ?? 0) + 1;
+                    this.miner.underground = false;
+                    this.miner.turns = 0;
+                    if (this.miner.site) this.miner.site.targetY = Math.max((this.miner.site.targetY ?? curLoc.y) - 12, -48);
+                    this.miner.reason = `No stone on this level; deepening the shaft (${m.deepens}/2) - bulk dig`;
+                    m.noTargetSince = tick;
+                    return false;
+                }
                 if (!this.deepMiner.active) {
                     this.miner.wantsOut = true;
                     m.noTargetSince = tick;
@@ -2110,7 +2458,7 @@ export class Bot {
             }
             if (isWoodRequest(m.block)) {
                 try {
-                    const anyWood = this.terrain.scanOres(this.sim.location, 16, (type) => isAnyWood(type), 400);
+                    const anyWood = this.terrain.scanOres(this.sim.location, 16, (type, pt, c) => isAnyWood(type, c), 400);
                     if (anyWood.length > 0) {
                         m.target = anyWood[0];
                         m.type = this.terrain.block(anyWood[0])?.typeId;
@@ -2137,7 +2485,7 @@ export class Bot {
                 return false;
             } else {
                 try {
-                    const anyWood = this.terrain.scanOres(this.sim.location, 32, (type) => isAnyWood(type) || type === "minecraft:deadbush" || type === "minecraft:dead_bush", 600);
+                    const anyWood = this.terrain.scanOres(this.sim.location, 32, (type, pt, c) => isAnyWood(type, c) || type === "minecraft:deadbush" || type === "minecraft:dead_bush", 600);
                     if (anyWood.length > 0) {
                         m.target = anyWood[0];
                         m.type = this.terrain.block(anyWood[0])?.typeId;
@@ -2182,12 +2530,12 @@ export class Bot {
 
         if (m.exploring) {
             const stray = this.drops.near(m, this.sim.location, 8, tick);
-            if (stray) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 40; }
+            if (stray && !m.pickup) { m.pickup = floor(stray.location); m.pickupEntity = stray; m.pickupUntil = tick + 40; }
             if (this.drops.run(m, tick)) return false;
             if (tick - (m.peekAt ?? 0) > 10) {
                 m.peekAt = tick;
                 if (m.treeMode || isWoodRequest(m.block) || m.item === "#logs") {
-                    const woodList = this.terrain.scanOres(this.sim.location, 24, (type, pt) => (isAnyWood(type) || type === "minecraft:deadbush" || type === "minecraft:dead_bush") && (m.blocked.get(key(pt)) ?? 0) <= tick, 300);
+                    const woodList = this.terrain.scanOres(this.sim.location, 24, (type, pt, c) => (isAnyWood(type, c) || type === "minecraft:deadbush" || type === "minecraft:dead_bush") && (m.blocked.get(key(pt)) ?? 0) <= tick, 300);
                     if (woodList.length > 0) {
                         m.exploring = false; m.peek = undefined; m.target = woodList[0]; m.type = this.terrain.block(woodList[0])?.typeId;
                         m.approach = undefined; m.approachTry = 0;
@@ -2208,6 +2556,10 @@ export class Bot {
             }
             this.reason = `Exploring for ${m.item ?? m.block}; visited ${this.explorer.trips} areas - advanced`;
             const result = this.explorer.step(this.sim.location, this.anchor, tick, this.terrain, this.nav, this.settings.range);
+            // A running leg (path search + walk) is progress: refresh the anti-idle
+            // clock so the 40-tick sweep cannot reset nav mid-leg. Long legs at
+            // borders used to be aborted every window - the second livelock.
+            if (result === "running") m.noTargetSince = tick;
             if (result === "blocked") {
                 m.exploring = false; m.peek = undefined;
                 const home = this.home();
@@ -2259,7 +2611,7 @@ export class Bot {
                 }
             }
             if (!m.target && (m.treeMode || isWoodRequest(m.block) || m.item === "#logs" || m.block === "#logs")) {
-                const woodList = this.terrain.scanOres(this.sim.location, 32, (type, pt) => (isAnyWood(type) || type === "minecraft:deadbush" || type === "minecraft:dead_bush") && (m.blocked.get(key(pt)) ?? 0) <= tick, 500);
+                const woodList = this.terrain.scanOres(this.sim.location, 32, (type, pt, c) => (isAnyWood(type, c) || type === "minecraft:deadbush" || type === "minecraft:dead_bush") && (m.blocked.get(key(pt)) ?? 0) <= tick, 500);
                 if (woodList.length > 0) {
                     m.target = woodList[0];
                     m.type = this.terrain.block(woodList[0])?.typeId;
@@ -2335,7 +2687,7 @@ export class Bot {
         const at = add(target, { x: 0.5, y: 0.5, z: 0.5 });
         const distHead = distance(head, at);
         const selfFloor = floor(this.sim.location);
-        const isFrontBlock = distHead <= 5.5 && Math.abs(target.y - selfFloor.y) <= 2 && horizontal(target, selfFloor) <= 4;
+        const isFrontBlock = distHead <= 5.5 && Math.abs(target.y - selfFloor.y) <= 2 && horizontal(target, selfFloor) <= 2;
 
         if (isFrontBlock) {
             // Front blocks are NOT cleared preemptively here - that dug the shaft
@@ -2365,8 +2717,11 @@ export class Bot {
                 if (!this.bag.tool(ruleFront.tool, ruleFront.tier)) {
                     // Try to obtain better tool
                     try {
-                        if (ruleFront.tier >= 2) { const c = this.bag.counts(); if ((c["minecraft:cobblestone"]??0)>=3) { this.obtain("minecraft:stone_pickaxe",1,tick); return false; } }
-                        if (ruleFront.tier >= 3) { const c = this.bag.counts(); if ((c["minecraft:iron_ingot"]??0)>=3) { this.obtain("minecraft:iron_pickaxe",1,tick); return false; } }
+                        // Exact tiers, not >=: a tier-3 target must not loop on
+                        // the (already crafted) stone pickaxe forever - fall
+                        // through so the iron branch can act.
+                        if (ruleFront.tier === 2) { const c = this.bag.counts(); if ((c["minecraft:cobblestone"]??0)>=3) { this.obtain("minecraft:stone_pickaxe",1,tick); return false; } }
+                        if (ruleFront.tier === 3) { const c = this.bag.counts(); if ((c["minecraft:iron_ingot"]??0)>=3) { this.obtain("minecraft:iron_pickaxe",1,tick); return false; } }
                     } catch (_e) { this.fault(_e); }
                     m.target = undefined; m.approach = undefined; m.breakingSince = undefined;
                     this.blockTask(`Need ${ruleFront.tool} tier ${ruleFront.tier} for front ${b.typeId}`, "retry");
@@ -2380,15 +2735,16 @@ export class Bot {
                     m.breakingSince = tick;
                     m.approach = undefined; m.approachTry = 0;
                     this.nav.reset();
-                    this.reason = `Breaking front ${m.block} at ${target.x},${target.y},${target.z} - direct front fix`;
+                    this.reason = `Breaking front ${m.item ?? m.block} at ${target.x},${target.y},${target.z} - direct front fix`;
                     return false;
                 }
             } else {
-                const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
+                const timeout = m.treeMode ? 140 : m.block === "minecraft:cobblestone" ? 150 : 200;
                 if (tick - m.breakingSince > timeout) {
                     try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
                     m.blocked.set(key(target), tick + BLOCKED_TTL); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout front - advanced");
                 }
+                else m.noTargetSince = tick; // breaking in progress counts as target progress
                 return false;
             }
         }
@@ -2437,19 +2793,52 @@ export class Bot {
             }
         }
         if (m.treeMode && target.y > selfFloor.y + 6) {
-            // For very high logs >6, try scaffold but with precise logic
+            // For very high logs >6, try scaffold but with precise logic.
+            // Never fall through to approach/nav while pillaring - that is the
+            // bug that looked like "keeps jumping and never mines up".
             const scaffold = this.builder.scaffoldTo(target, tick);
             if (scaffold === "placed" || scaffold === "jumping") { this.reason = "Scaffolding to reach high log >6 - advanced"; return false; }
+            // Pillar itself is bounded now ("no-block"/"blocked"/"timeout"):
+            // give up on this log honestly instead of hopping under it forever.
+            m.blocked.set(key(target), tick + 200);
+            m.target = undefined;
+            m.approach = undefined;
+            this.reason = `Cannot pillar to high log (${scaffold}); skipping it - advanced`;
+            return false;
         }
 
         // Approach logic: if target is farther than reach (4.5 blocks), navigate to it!
         if (distance(this.sim.getHeadLocation(), at) > 4.5) {
+            if (!m.approachSince) m.approachSince = tick;
             const r = this.navTo(center(target), tick, 3.0);
             if (r === "running") {
+                // Active navigation IS progress: refresh the anti-idle clock so the
+                // 40-tick no-target sweep above cannot abort a slow path search
+                // mid-flight. Without this the bot livelocked: spot target ->
+                // start search -> sweep nukes target at 40 ticks -> re-spot the
+                // same block, forever, with zero movement.
+                m.noTargetSince = tick;
+                // Nav that "runs" without ever arriving is the circling case:
+                // after 60 ticks hand the job to the reach toolkit (parkour the
+                // gap, scaffold up, bridge, or mine the line of sight) instead
+                // of trusting the pathfinder forever.
+                if (tick - m.approachSince > 60 && this.tryReach(target, m, tick)) {
+                    m.approachSince = tick;
+                    return false;
+                }
                 this.reason = `Approaching ${m.item ?? m.block} at ${target.x},${target.y},${target.z} - closing distance`;
                 return false;
             }
-            if (r === "failed") {
+            m.approachSince = undefined;
+            if (r === "done") {
+                this.nav.reset();
+            }
+            // Out of reach and nav is not running: it failed, or it said "done"
+            // prematurely. Both get the same recovery - reach toolkit first,
+            // then a bounded number of tries before the target is blacklisted.
+            // Falling through silently here was the other half of the livelock.
+            if (distance(this.sim.getHeadLocation(), at) > 4.5) {
+                if (this.tryReach(target, m, tick)) { m.noTargetSince = tick; return false; }
                 m.approachTry = (m.approachTry ?? 0) + 1;
                 if (m.approachTry >= 3) {
                     m.blocked.set(key(target), tick + (m.treeMode ? 200 : BLOCKED_TTL));
@@ -2458,9 +2847,6 @@ export class Bot {
                     this.nav.reset();
                     return false;
                 }
-            }
-            if (r === "done") {
-                this.nav.reset();
             }
             if (distance(this.sim.getHeadLocation(), at) > 4.5) return false;
         }
@@ -2473,7 +2859,7 @@ export class Bot {
             const hasTool = this.bag.tool(rule.tool, rule.tier);
             if (!hasTool) {
                 const neededTier = rule.tier; const toolName = rule.tool;
-                if (neededTier >= 2 && toolName === "pickaxe") {
+                if (neededTier === 2 && toolName === "pickaxe") {
                     const counts = this.bag.counts();
                     if ((counts["minecraft:cobblestone"] ?? 0) >= 3 || (counts["minecraft:cobbled_deepslate"] ?? 0) >= 3) {
                         this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, crafting stone pickaxe - tier awareness`;
@@ -2487,7 +2873,7 @@ export class Bot {
                         } catch (_e) { this.fault(_e); }
                     }
                 }
-                if (neededTier >= 3 && toolName === "pickaxe") {
+                if (neededTier === 3 && toolName === "pickaxe") {
                     this.reason = `Need ${toolName} tier ${neededTier} for ${b.typeId}, need iron pickaxe`;
                     try { 
                         const counts = this.bag.counts();
@@ -2496,24 +2882,126 @@ export class Bot {
                     } catch (_e) { this.fault(_e); }
                 }
                 m.target = undefined; m.approach = undefined; m.approachTry = 0;
-                if (rule.tier > 0) { this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3.`, "retry"); return false; }
-                try { this.bag.emptyHand(); } catch (_e) { this.fault(_e); }
+                // rule.tier > 0 is guaranteed by the outer guard - just block.
+                this.blockTask(`Need ${rule.tool} tier ${rule.tier}; wooden=1, stone=2, iron=3.`, "retry");
+                return false;
             }
         }
         if (!m.breakingSince) {
             if (this.breakThrough(target) !== "digging") { m.blocked.set(key(target), tick + (m.treeMode ? 200 : BLOCKED_TTL)); m.target = undefined; m.approach = undefined; return false; }
             m.breakingSince = tick;
         } else {
-            const timeout = m.treeMode ? 80 : m.block === "minecraft:cobblestone" ? 150 : 200;
+            const timeout = m.treeMode ? 140 : m.block === "minecraft:cobblestone" ? 150 : 200;
             if (tick - m.breakingSince > timeout) {
                 try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
                 m.blocked.set(key(target), tick + (m.treeMode ? 200 : BLOCKED_TTL)); m.target = undefined; m.approach = undefined; m.breakingSince = undefined; this.record("mining timeout quick - advanced");
             }
+            else m.noTargetSince = tick; // breaking in progress counts as target progress
         }
         const held = this.bag.get(this.sim.selectedSlotIndex);
         if (rule && rule.tier > 0 && (!held?.typeId.endsWith("_pickaxe") || toolTier(held.typeId) < rule.tier)) {
             try { this.sim.stopBreakingBlock(); } catch (_e) { this.fault(_e); }
             this.blockTask("Required pickaxe lost or broken.", "retry");
+        }
+        return false;
+    }
+
+    /**
+     * Creeper box-in: sneak (a creeper only primes when it can sense the
+     * player) and fill every open face with blocks. A blast inside a sealed
+     * pocket is survivable - the same blast in an open tunnel is not. Normal
+     * digging or the reach toolkit opens the pocket again afterwards.
+     */
+    sealIn(tick) {
+        const p = floor(this.sim.location);
+        try { this.sim.isSneaking = true; } catch (_e) { this.fault(_e); }
+        const open = N6.filter((d) => {
+            const blk = this.terrain.block(add(p, d));
+            return !blk || blk.isAir || blk.isLiquid;
+        });
+        if (!open.length) return true;              // already boxed: keep sneaking
+        if (this.builder.countBlocks() < 1) return false;
+        let acted = false;
+        for (const d of open) {
+            const cell = add(p, d);
+            const res = this.builder.placeAt(cell, p, { autoAnchor: true, sneak: true, allowHazard: true });
+            if (res === "placed") acted = true;
+        }
+        return acted;
+    }
+
+    /**
+     * A wood cell wrapped in leaves/vines on every face is not worth chasing:
+     * the bot would chew through foliage for a log it cannot even see. Any
+     * other neighbour (air, a log of the same tree, ground) means the cell is
+     * a real, visible tree part and stays targetable.
+     */
+    woodExposed(cell) {
+        for (const d of N6) {
+            const t = this.terrain.typeAt(add(cell, d));
+            if (!t) return true;                        // unknown: never hide a cell
+            if (!/(leaves|vine)/.test(t)) return true;  // anything but foliage = exposed
+        }
+        return false;                                   // leaves on all six faces: hidden
+    }
+
+    /**
+     * Reach toolkit for targets the pathfinder refuses: mine the blocks in the
+     * line of sight, scaffold up to it, or parkour a short gap. This stops the
+     * "circling a target it cannot path to" loop - and it is bounded (a few
+     * cells, one scaffold, one jump per target) so it can never become an
+     * endless dig of random blocks.
+     */
+    tryReach(target, m, tick) {
+        const k = key(target);
+        if (m.reachFor !== k) { m.reachFor = k; m.reachTries = 0; m.reachScaffold = false; m.reachParkour = false; }
+        if ((m.reachTries ?? 0) > 10) return false;
+        const selfFloor = floor(this.sim.location);
+        const head = this.sim.getHeadLocation();
+        // 1. Mine through: the first solid cells between the eyes and target.
+        try {
+            const obs = (this.terrain.findObstructions?.(head, target) ?? [])
+                .filter((c) => !(c.x === target.x && c.y === target.y && c.z === target.z) && this.terrain.solid(c))
+                .slice(0, 2);
+            for (const c of obs) {
+                if ((m.blocked.get(key(c)) ?? 0) > tick) continue;
+                const r = this.digCell(c, tick);
+                if (r === "digging") {
+                    m.reachTries = (m.reachTries ?? 0) + 1;
+                    this.reason = `Reaching target: mining ${this.terrain.typeAt(c) ?? "block"} at ${c.x},${c.y},${c.z} - reach toolkit`;
+                    return true;
+                }
+                m.blocked.set(key(c), tick + 400);
+            }
+        } catch (_e) { this.fault(_e); }
+        // 2. Build up to it: one scaffold/pillar attempt per target.
+        if (!m.reachScaffold && target.y > selfFloor.y && target.y <= selfFloor.y + 4 && horizontal(target, selfFloor) <= 4) {
+            m.reachScaffold = true;
+            try {
+                const s = this.builder.scaffoldTo(target, tick);
+                if (s === "placed" || s === "jumping") {
+                    this.reason = `Reaching target: scaffolding up to ${target.x},${target.y},${target.z} - reach toolkit`;
+                    return true;
+                }
+            } catch (_e) { this.fault(_e); }
+        }
+        // 3. Parkour: a short gap in the direct direction toward the target.
+        if (!m.reachParkour) {
+            const dir = { x: Math.sign(target.x - selfFloor.x), y: 0, z: Math.sign(target.z - selfFloor.z) };
+            if (dir.x || dir.z) {
+                for (const gap of [1, 2, 3]) {
+                    try {
+                        if (this.parkour.canJumpGap(selfFloor, dir, gap)) {
+                            m.reachParkour = true;
+                            const land = add(selfFloor, { x: dir.x * (gap + 1), y: 0, z: dir.z * (gap + 1) });
+                            this.parkour.jump(dir, tick);
+                            try { this.sim.moveToLocation(this.host.relative(center(land)), { faceTarget: true }); } catch (_e) { this.fault(_e); }
+                            this.reason = `Reaching target: parkour over a ${gap}-block gap - reach toolkit`;
+                            return true;
+                        }
+                    } catch (_e) { this.fault(_e); }
+                }
+            }
         }
         return false;
     }
@@ -2530,6 +3018,7 @@ export class Bot {
             // Only real wood cells: a #logs task must never chase leaves/grass/stone.
             const woodish = t.endsWith("_log") || t.endsWith("_wood") || t.endsWith("_stem") || t.endsWith("_hyphae") || t.includes("bamboo");
             if (!woodish && t !== m.block && !(m.item && t === m.item)) continue;
+            if (woodish && !this.woodExposed(p)) continue;
             const blockedUntil = m.blocked.get(key(p)) ?? 0;
             if (blockedUntil > tick && blockedUntil - tick > 200) continue; // allow retry after short block
             if (this.safeToMine(p)) return p;
@@ -2540,6 +3029,9 @@ export class Bot {
     wantedToMine(m, type, p, tick) {
         const r = MINE[type];
         if (!r && !isAnyWood(type) && type !== "minecraft:bamboo" && type !== "minecraft:deadbush" && type !== "minecraft:dead_bush") return false;
+        // A wood cell buried in leaves on every face is not worth chasing: the
+        // bot would chew through foliage for a log it cannot even see.
+        if (isAnyWood(type) && !this.woodExposed(p)) return false;
         // FIX: #logs handling - any log acceptable, fixes oak-only waste
         let wanted = false;
         if (m.block === "#logs" || m.item === "#logs") {
@@ -2708,7 +3200,7 @@ export class Bot {
         const p = floor(this.sim.location);
         if (s.bed === undefined) s.bed = this.bag.find((x) => x.typeId.endsWith("_bed") || x.typeId === "minecraft:bed");
         if (s.bed >= 0 && !s.bedTried) {
-            const spot = CARDINAL.map((d) => ({ c: add(p, d), c2: add(p, { x: d.x * 2, z: d.z * 2 }) })).find(({ c, c2 }) => this.terrain.solid(add(c, DOWN)) && this.terrain.solid(add(c2, DOWN)) && this.terrain.empty(c) && this.terrain.empty(add(c, UP)) && this.terrain.empty(c2) && this.terrain.empty(add(c2, UP)) && !this.terrain.dangerous(add(c, DOWN)) && !this.terrain.dangerous(add(c2, DOWN)));
+            const spot = CARDINAL.map((d) => ({ c: add(p, d), c2: add(p, { x: d.x * 2, y: 0, z: d.z * 2 }) })).find(({ c, c2 }) => this.terrain.solid(add(c, DOWN)) && this.terrain.solid(add(c2, DOWN)) && this.terrain.empty(c) && this.terrain.empty(add(c, UP)) && this.terrain.empty(c2) && this.terrain.empty(add(c2, UP)) && !this.terrain.dangerous(add(c, DOWN)) && !this.terrain.dangerous(add(c2, DOWN)));
             s.bedTried = true;
             if (spot) {
                 const r = this.hands.placeItemOn(add(spot.c, DOWN), s.bed);
@@ -2718,7 +3210,7 @@ export class Bot {
         const breakable = (b) => { const rule = MINE[b.typeId] ?? diggable(b.typeId); return !!rule && (rule.tier === 0 || this.bag.tool(rule.tool, rule.tier)); };
         for (const d of CARDINAL) {
             const dirKey = `${d.x},${d.z}`; if (s.tried.has(dirKey)) continue;
-            const f1 = add(p, d), h1 = add(f1, UP); const f2 = add(p, { x: d.x * 2, z: d.z * 2 }), h2 = add(f2, UP);
+            const f1 = add(p, d), h1 = add(f1, UP); const f2 = add(p, { x: d.x * 2, y: 0, z: d.z * 2 }), h2 = add(f2, UP);
             const front = this.terrain.block(f1); const inner = this.terrain.block(f2); const hi1 = this.terrain.block(h1); const hi2 = this.terrain.block(h2); const floorB = this.terrain.block(add(f2, DOWN));
             const bad = (b) => !b || b.isLiquid || this.terrain.lavaNear(b.location) || this.terrain.waterNear(b.location);
             s.tried.add(dirKey);

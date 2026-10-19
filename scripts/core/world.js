@@ -125,9 +125,14 @@ export const BULK = new Set([
 export function isBulk(item) {
     return BULK.has(item);
 }
-/** Shallow target for a bulk dig: just below the local soil layer. */
+/**
+ * Target for a bulk dig: below the local soil layer. Soil runs 4-8 deep in
+ * most biomes, so 12 gets under it; the task still ends early the moment a
+ * cobble drop is collected, so the extra depth costs nothing on thin ground
+ * and saves the whole loop on thick dirt.
+ */
 export function bulkLevel(y) {
-    return { best: Math.max(y - 4, -60), min: -64, max: 320 };
+    return { best: Math.max(y - 12, -60), min: -64, max: 320 };
 }
 /** Deepest useful depth for a drop, or undefined when it is not a known ore. */
 

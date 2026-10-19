@@ -12,7 +12,7 @@
 // works from a clean checkout.
 
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 
 const stubs = fileURLToPath(new URL(".", import.meta.url));
@@ -46,7 +46,10 @@ export function resetLoad() {
     rmSync(load, { recursive: true, force: true });
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())) {
+// Windows argv[1] is a backslash path while import.meta.url is a file URL, so
+// compare resolved paths instead of string suffixes.
+const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (invokedDirectly) {
     resetLoad();
     mkdirSync(load, { recursive: true });
     console.log("installed offline engine stubs into tools/load/node_modules:");

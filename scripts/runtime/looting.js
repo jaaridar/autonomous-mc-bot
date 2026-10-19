@@ -12,6 +12,40 @@ import { NativeInventory } from "./inventory.js";
  * Structure loot main priority, lava pool -> portal, retain important.
  */
 
+/**
+ * Is a block a lootable container without naming every id upfront? The
+ * engine-accurate test is the inventory component being present (chests,
+ * trapped chests, barrels, shulker boxes in any colour, copper chest and
+ * whatever container Mojang adds next). The id regex stays as the fallback
+ * for engines/cards without the binding. Answers are cached per typeId so a
+ * 600-check sweep costs zero extra component calls after the first contact
+ * with a type.
+ */
+const containerByType = new Map();
+function containerById(id) {
+    return /(^|_)(chest|barrel)($|_)|shulker_box/.test(String(id).replace(/^minecraft:/, ""));
+}export function isContainerBlock(block) {
+    if (!block) return false;
+    const id = block.typeId ?? "";
+    const hit = containerByType.get(id);
+    if (hit !== undefined) return hit;
+    let component = false;
+    try {
+        component = typeof block.getComponent === "function" &&
+            block.getComponent("minecraft:inventory") !== undefined;
+    }
+    catch { component = false; }
+    // Fallback regex when the component binding is unavailable (offline or
+    // odd cards): matches the original hardcoded list. Ender chest is
+    // rejected on both paths - its contents are not a block-local container
+    // (the opening is bound to the player's ender storage), so the bot
+    // must never plan a trip to strip it.
+    const v = (component || containerById(id)) && !/ender_chest/.test(id);
+    if (containerByType.size > 128) containerByType.clear();
+    containerByType.set(id, v);
+    return v;
+}
+
 
 export class Looting {
     constructor(bot) {
@@ -61,7 +95,7 @@ export class Looting {
                     if ((this.ignore.get(key(p)) ?? 0) > tick) continue;
                     const b = this.terrain.block(p);
                     if (!b) continue;
-                    if (b.typeId === "minecraft:chest" || b.typeId === "minecraft:trapped_chest" || b.typeId === "minecraft:barrel" || b.typeId.includes("shulker_box") || b.typeId === "minecraft:ender_chest") {
+                    if (isContainerBlock(b)) {
                         found.push({ pos: p, type: b.typeId, dist: Math.hypot(dx, dy, dz) });
                     }
                 }
@@ -109,7 +143,7 @@ export class Looting {
 
     lootChest(pos, tick) {
         const block = this.terrain.block(pos);
-        if (!block || !(block.typeId === "minecraft:chest" || block.typeId === "minecraft:barrel" || block.typeId === "minecraft:trapped_chest" || block.typeId.includes("shulker_box") || block.typeId === "minecraft:ender_chest")) {
+        if (!block || !isContainerBlock(block)) {
             this.currentChest = undefined;
             return false;
         }
@@ -151,39 +185,36 @@ export class Looting {
                 this.currentChest = undefined;
                 return false;
             }
-            let moved = 0;
+            // Drain the chest type by type: withdraw() moves every stack of a
+            // type it can (first merging into carried partial stacks, then
+            // free slots) while keeping its own reserve open for travel drops.
+            // ONE call per distinct type - choosing 27 stacks was re-running
+            // the identical sweep per stack before.
+            let moved = 0, merged = 0;
+            const seen = new Set();
             for (const idx of toTake) {
-                const chestSlot = items[idx]?.slot;
-                if (chestSlot === undefined) continue;
-                const item = chest.get(chestSlot);
-                if (!item) continue;
-                // Try merge first
-                let dest = -1;
-                for (let s = 0; s < this.bag.size; s++) {
-                    const bagItem = this.bag.get(s);
-                    if (bagItem && bagItem.isStackableWith(item) && bagItem.amount < bagItem.maxAmount) {
-                        dest = s;
-                        break;
-                    }
-                }
-                if (dest < 0) {
-                    for (let s = 0; s < this.bag.size; s++) {
-                        if (!this.bag.get(s)) { dest = s; break; }
-                    }
-                }
-                if (dest < 0) break;
+                const entry = items[idx];
+                if (!entry || seen.has(entry.item.typeId)) continue;
+                seen.add(entry.item.typeId);
                 try {
-                    const res = this.bag.withdraw(chest, (it) => it.typeId === item.typeId, 2);
-                    moved += res.moved + res.merged;
+                    const res = this.bag.withdraw(chest, (it) => it.typeId === entry.item.typeId, 2);
+                    moved += res.moved;
+                    merged += res.merged;
                     // Keep going: chooseLoot returns every stack worth taking, so
                     // draining the first type must not abandon the rest (this used
                     // to ignore the chest for 10 minutes after one successful grab).
-                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                }
+                catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
             }
             if (moved > 0) {
                 this.memory?.notice("chest", pos, this.sim.dimension.id, tick);
                 this.trips++;
-                this.bot.record(`loot: ${moved} from ${key(pos)} ${structName ? `(${structName})` : ""}`);
+                this.bot.record(`loot: ${moved} moved + ${merged} merged from ${key(pos)}${structName ? ` (${structName})` : ""}`);
+                // Loot is only worth having when it is in use: put freshly
+                // taken gear on the body right away (armour/weapon); food,
+                // blocks, torches and ore flow through the standing directors
+                // on their own cadence.
+                this.lootIntegration();
                 // Remember important loot
                 try { this.bot.awareness?.rememberSpot("chest", pos, tick, struct?.priority ?? 85); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
@@ -196,6 +227,23 @@ export class Looting {
             this.currentChest = undefined;
             return false;
         }
+    }
+
+    /**
+     * Use looted things immediately instead of waiting for the next generic
+     * equipment cycle: better armour found in a chest goes on the body, and
+     * the best weapon is selected. Everything else routes itself through the
+     * standing directors (food on hunger, blocks/torches on demand, ore as
+     * crafting input, beds via the village director). Every step is optional
+     * and guarded - a loot action must never fail because an upgrade path is
+     * unavailable.
+     */
+    lootIntegration() {
+        const b = this.bot;
+        try { b.equipment?.autoEquip(); }
+        catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
+        try { b.equipment?.ensureWeaponEquipped(); }
+        catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
     }
 
     tick(tick) {
@@ -260,6 +308,10 @@ export class Looting {
  * mechanics. A stack that cannot be reached within its window is blacklisted
  * briefly so the owner task can move on instead of orbiting it forever.
  */
+/** Any wood-family drop counts for a generic wood request. */
+const ANY_WOOD_ITEM = /(_log|_wood|_stem|_hyphae|bamboo)/;
+const isWoodish = (v) => typeof v === "string" && (v === "#logs" || ANY_WOOD_ITEM.test(v));
+
 export class Drops {
     constructor(bot) {
         this.bot = bot;
@@ -272,13 +324,20 @@ export class Drops {
     near(m, loc, radius, tick) {
         const b = this.bot;
         const want = m.item ?? m.deepItem ?? (m.block ? MINE[m.block]?.drops : undefined);
-        if (!want)
+        // Generic wood requests ("#logs") carry no concrete item id; without a
+        // `want` the sweep used to return immediately, which is why chopped
+        // logs were left lying on the ground. A request for a SPECIFIC wood
+        // type still only accepts that type.
+        const woodWanted = want === "#logs" || (want === undefined && isWoodish(m.block));
+        if (!want && !woodWanted)
             return undefined;
         try {
             return b.terrain.dimension
                 .getEntities({ type: "minecraft:item", location: loc, maxDistance: radius })
                 .filter((e) => {
                 if (!e.isValid)
+                    return false;
+                if ((b.grabIgnore?.get(e.id) ?? 0) >= tick)
                     return false;
                 const cell = floor(e.location);
                 if ((m.blocked?.get(key(cell)) ?? 0) > tick)
@@ -288,7 +347,13 @@ export class Drops {
                 .sort((a, c) => distance(a.location, b.sim.location) - distance(c.location, b.sim.location))
                 .find((e) => {
                 const item = e.getComponent("minecraft:item")?.itemStack;
-                return !!item && (matches(item.typeId, want) || (m.type && matches(item.typeId, MINE[m.type]?.drops)));
+                if (!item)
+                    return false;
+                if (want && matches(item.typeId, want))
+                    return true;
+                if (woodWanted && ANY_WOOD_ITEM.test(item.typeId))
+                    return true;
+                return !!(m.type && matches(item.typeId, MINE[m.type]?.drops));
             });
         }
         catch {
@@ -315,7 +380,10 @@ export class Drops {
             return false;
         }
         if (tick > (m.pickupUntil ?? 0)) {
-            m.blocked?.set(key(floor(e.location)), tick + 300);
+            // Short retry window, not a permanent abandon: a stack that timed
+            // out mid-walk (leaves, a slope) must come back around while the
+            // task is still running.
+            m.blocked?.set(key(floor(e.location)), tick + 90);
             m.pickup = undefined;
             m.pickupEntity = undefined;
             m.standSince = undefined;
@@ -329,12 +397,16 @@ export class Drops {
             let r = b.nav.go(center(m.pickup), tick);
             if (r === "failed")
                 r = b.navTo(e.location, tick, 1);
-            if (r === "failed" || r === "blocked") {
+            if (r === "failed" || r === "blocked" || (r === "done" && distance(e.location, b.sim.location) > 1.2)) {
                 // Short hop the planner refuses (leaves, a fence line, a
                 // seam): walk it directly, bounded by the pickup window.
+                // Also covers nav saying "done" for the BLOCK while the stack
+                // itself is still outside the engine's pickup range - the
+                // classic one-deep hole where the bot stands on the edge
+                // forever and the window keeps getting re-armed.
                 b.nav.reset();
                 b.nav.stuck = false;
-                this.pushToward(e.location);
+                this.pushToward(e.location, 1.05);
             }
         }
         else {
@@ -345,7 +417,10 @@ export class Drops {
             b.sim.stopMoving();
             m.standSince = m.standSince ?? tick;
             if (tick - m.standSince > 30) {
-                m.blocked?.set(key(floor(e.location)), tick + 300);
+                // Short retry window, not a permanent abandon: a stack that timed
+            // out mid-walk (leaves, a slope) must come back around while the
+            // task is still running.
+            m.blocked?.set(key(floor(e.location)), tick + 90);
                 m.pickup = undefined;
                 m.pickupEntity = undefined;
                 m.standSince = undefined;
@@ -378,7 +453,7 @@ export class Drops {
             if (e) {
                 m.pickup = floor(e.location);
                 m.pickupEntity = e;
-                m.pickupUntil = tick + 30; // FAST: was 80, now 30 ticks
+                m.pickupUntil = tick + 80; // enough time to walk to a reachable drop; 30 was too short
                 m.loot.delete(c.k);
                 return true;
             }
@@ -393,10 +468,15 @@ export class Drops {
      * detours, so it cannot wander off. Callers bound it with their own tick
      * budget and an honest fallback message.
      */
-    pushToward(loc) {
+    pushToward(loc, reach = 0) {
         const b = this.bot;
-        if (horizontal(b.sim.location, loc) < 1.4 &&
-            Math.abs(b.sim.location.y - loc.y) < 1.6) {
+        // reach > 0 switches to a strict 3D arrival test (entity pickups want
+        // the stack itself inside the engine's collection sphere, not just the
+        // block "reached" by the loose horizontal/vertical tolerance).
+        const closeEnough = reach > 0
+            ? distance(b.sim.location, loc) <= reach
+            : horizontal(b.sim.location, loc) < 1.4 && Math.abs(b.sim.location.y - loc.y) < 1.6;
+        if (closeEnough) {
             b.sim.stopMoving();
             return;
         }

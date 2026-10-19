@@ -395,16 +395,25 @@ export class TaskFault extends Error {
         this.name = "TaskFault";
     }
 }
+const MANY_RETRIES = 5;
 export function blockedTask(reason, recovery, attempt, tick) {
-    const retrying = recovery === "retry";
     // Bounded backoff, but never a dead end: retry blocks keep coming back (delay capped at about a minute).
     // Only explicitly manual blocks (owner hold / equipment faults) wait for the owner.
     const delay = Math.min(40 * 2 ** Math.max(0, attempt - 1), 1200);
+    // "retry-bounded" marks an UNEXPECTED error (a throw that was not a TaskFault):
+    // mostly engine hiccups, far more often than real bugs. It rides the same
+    // backoff ladder so the task self-recovers with no command, but after
+    // MANY_RETRIES consecutive failures without progress it hands over to the
+    // owner honestly instead of re-running the same throw forever.
+    const bounded = recovery === "retry-bounded";
+    const capped = bounded && attempt > MANY_RETRIES;
+    const retrying = (recovery === "retry" || bounded) && !capped;
     return {
         reason,
         recovery: retrying ? "retry" : "manual",
         attempt,
         since: tick,
         retryAt: retrying ? tick + delay : undefined,
+        capped,
     };
 }

@@ -5,6 +5,24 @@ import { counts } from "../core/recipes.js";
 import { FOOD, RAW_MEAT, RISKY_FOOD, toolTier } from "../core/world.js";
 import { EntityComponentTypes, ItemStack, system } from "@minecraft/server";
 
+// Stack limits straight from the engine: planning math (Lib.add, organize)
+// asks ItemStack.maxAmount instead of trusting the core regex table, so
+// new/renamed items stack correctly without touching core. Constructing is
+// heavy, so the answer is cached per type; an unknown id answers 0 and the
+// core falls back to its regex table.
+import { setStackResolver } from "../core/inventory-model.js";
+const stackLimits = new Map();
+setStackResolver((typeId) => {
+    const hit = stackLimits.get(typeId);
+    if (hit !== undefined) return hit;
+    let v = 0;
+    try { v = (new ItemStack(typeId, 1)).maxAmount ?? 0; }
+    catch { v = 0; }
+    if (stackLimits.size > 256) stackLimits.clear();
+    stackLimits.set(typeId, v);
+    return v;
+});
+
 // ---------------------------------------------------------------- inventory.js
 
 /** Building blocks usable for bridging, pillaring and blocking, best first. */
@@ -35,16 +53,31 @@ const BUILD_BLOCKS = [
     "minecraft:glass",
 ];
 /**
+ * Bulk blocks the bag may shed (whole stacks only) when it is dead full.
+ * Ordered most-sheddable first; `keep` is the family floor that always stays.
+ * Everything here is re-mined in seconds and never gates progression, so
+ * losing a stack is far cheaper than a dead-ended task.
+ */
+const SHED_RULES = [
+    { types: ["minecraft:gravel", "minecraft:sand", "minecraft:red_sand"], keep: 0 },
+    { types: ["minecraft:andesite", "minecraft:diorite", "minecraft:granite", "minecraft:tuff", "minecraft:stone", "minecraft:deepslate", "minecraft:netherrack", "minecraft:basalt", "minecraft:blackstone"], keep: 0 },
+    { types: ["minecraft:dirt", "minecraft:coarse_dirt", "minecraft:grass_block", "minecraft:podzol", "minecraft:rooted_dirt"], keep: 0 },
+    { types: ["minecraft:cobblestone", "minecraft:cobbled_deepslate"], keep: 64 },
+];
+/**
  * Reads the authoritative `minecraft:food` component. Nutrition comes from the
  * item itself, so new/renamed foods work without a hardcoded table.
  */
 export function foodValue(stack) {
-    let nutrition = 0, always = false;
+    let nutrition = 0, always = false, saturation;
     try {
         const f = stack.getComponent("minecraft:food");
         if (f) {
             nutrition = f.nutrition ?? 0;
             always = !!f.canAlwaysEat;
+            // Vanilla saturation = nutrition × saturationModifier × 2.
+            if (Number.isFinite(f.saturationModifier))
+                saturation = nutrition * f.saturationModifier * 2;
         }
     }
     catch {
@@ -60,7 +93,7 @@ export function foodValue(stack) {
         else
             return undefined;
     }
-    return { nutrition, always, risky: RISKY_FOOD.has(stack.typeId) };
+    return { nutrition, always, saturation, risky: RISKY_FOOD.has(stack.typeId) };
 }
 /**
  * Nutrition is a property of the item type, so it is looked up once per type
@@ -75,6 +108,37 @@ export function foodValueCached(stack) {
     if (FOOD_CACHE.size < 512)
         FOOD_CACHE.set(t, v);
     return v;
+}
+/**
+ * Food fact for a type id without needing a live stack: native item component
+ * first, knowledge-table fallback (see foodValue). Cached like foodValueCached.
+ */
+export function foodFactFor(typeId) {
+    if (FOOD_CACHE.has(typeId))
+        return FOOD_CACHE.get(typeId);
+    let v;
+    try { v = foodValue(new ItemStack(typeId, 1)); }
+    catch { v = undefined; }
+    if (FOOD_CACHE.size < 512)
+        FOOD_CACHE.set(typeId, v);
+    return v;
+}
+/**
+ * `{ typeId: { hunger?, saturation? } }` for reserve math, resolved from the
+ * item components the game ships instead of a hardcoded nutrition table.
+ * Fields the native read cannot provide are left out so callers fall back.
+ */
+export function foodFacts(ids) {
+    const out = {};
+    for (const id of ids) {
+        const v = foodFactFor(id);
+        if (!v) continue;
+        const fact = {};
+        if (v.nutrition !== undefined) fact.hunger = v.nutrition;
+        if (v.saturation !== undefined) fact.saturation = v.saturation;
+        out[id] = fact;
+    }
+    return out;
 }
 function gameTick() {
     try {
@@ -314,7 +378,7 @@ export class Bag {
         return true;
     }
     emptyHand() {
-        let i = this.find(() => false);
+        let i = -1;
         for (let n = 0; n < this.size; n++)
             if (!this.get(n)) {
                 i = n;
@@ -338,7 +402,7 @@ export class Bag {
         const next = old.map((s) => (s ? this.clone(s, s.amount) : undefined));
         let merged = 0;
         for (let i = 0; i < size; i++) {
-            const target = next[i];
+            let target = next[i];
             if (!target || target.amount >= target.maxAmount)
                 continue;
             for (let j = i + 1; j < size; j++) {
@@ -349,7 +413,11 @@ export class Bag {
                 if (space <= 0)
                     break;
                 const move = Math.min(space, src.amount);
-                next[i] = this.clone(target, target.amount + move);
+                // Rebind the target after every merge: a stale reference made
+                // the second and later merges recompute from the ORIGINAL
+                // amount, silently deleting the merged units (3+ partial
+                // stacks lost everything beyond the first pair).
+                target = next[i] = this.clone(target, target.amount + move);
                 next[j] = src.amount === move ? undefined : this.clone(src, src.amount - move);
                 merged++;
             }
@@ -382,6 +450,13 @@ export class Bag {
      * would be item loss, which this pack never accepts.
      */
     deposit(target) {
+        // main.js passes the raw Minecraft Container here (getItem/setItem
+        // surface, no set()); bridge it onto the same shape the adapter uses
+        // so the commit/rollback helpers below can never crash on set().
+        if (typeof target.set !== "function" && typeof target.setItem === "function") {
+            const raw = target;
+            target = { size: raw.size, getItem: (i) => raw.getItem(i), set: (i, s) => raw.setItem(i, s) };
+        }
         const size = this.size, tsize = target.size;
         const oldSelf = Array.from({ length: size }, (_, i) => this.get(i));
         const oldTarget = Array.from({ length: tsize }, (_, i) => target.getItem(i));
@@ -612,10 +687,70 @@ export class ResourceManager {
             const s = this.bag.get(i);
             if (s && s.amount < s.maxAmount / 2) partials++;
         }
+        let merged = 0;
         if (partials > 6) {
-            return this.bag.organize();
+            merged = this.bag.organize();
         }
-        return 0;
+        // Still no room? A dead-full bag must never dead-end gathering or
+        // crafting: shed whole bulk stacks (floors below) until a slot opens.
+        if (this.bag.container.emptySlotsCount < 1) this.makeRoom(1);
+        return merged;
+    }
+
+    /**
+     * Free inventory slots under pressure: merge partial stacks first, then
+     * shed whole stacks of re-minable bulk (stone/dirt family) respecting the
+     * per-family floors and always keeping a bridging reserve. Dropped stacks
+     * are shunned in `bot.grabIgnore` so the pickup sweeps do not walk back
+     * onto them. Returns the number of free slots afterwards.
+     */
+    makeRoom(need = 1) {
+        const bag = this.bag;
+        const free = () => bag.container.emptySlotsCount;
+        if (free() >= need) return free();
+        try { bag.organize(); } catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 200)); }
+        if (free() >= need) return free();
+        const tick = gameTick();
+        const counts = bag.counts();
+        // Total bulk still in the bag: shedding never eats the last 16
+        // placeable blocks (the builder needs a reserve for bridges/pillars).
+        let bulk = 0;
+        for (const rule of SHED_RULES) for (const t of rule.types) bulk += counts[t] ?? 0;
+        let shed = 0;
+        for (const rule of SHED_RULES) {
+            for (let i = 0; i < bag.size && free() < need && shed < 8; i++) {
+                const s = bag.get(i);
+                if (!s || !rule.types.includes(s.typeId)) continue;
+                let group = 0;
+                for (const t of rule.types) group += counts[t] ?? 0;
+                if (group - s.amount < rule.keep) continue;
+                if (bulk - s.amount < 16) continue;
+                if (!this.dropStack(bag.clone(s, s.amount), tick)) continue;
+                bag.set(i, undefined);
+                counts[s.typeId] = (counts[s.typeId] ?? 0) - s.amount;
+                bulk -= s.amount;
+                shed++;
+            }
+        }
+        if (shed) console.warn(`[Verdant] shed ${shed} bulk stack(s) to make room (${free()} free slots)`);
+        return free();
+    }
+
+    /** Spawn one stack on the ground next to the bot and shun it from pickups. */
+    dropStack(stack, tick) {
+        const b = this.bot;
+        try {
+            const loc = b.sim.location;
+            const e = b.sim.dimension.spawnItem(stack, { x: loc.x, y: loc.y + 0.4, z: loc.z });
+            const ignore = (b.grabIgnore ??= new Map());
+            if (e?.id) ignore.set(e.id, tick + 1800);
+            if (ignore.size > 64) { for (const [entityId, until] of ignore) if (until < tick) ignore.delete(entityId); }
+            return true;
+        }
+        catch (e) {
+            console.warn("[Verdant] " + String(e?.message || e).slice(0, 200));
+            return false;
+        }
     }
 
     /**
@@ -627,7 +762,7 @@ export class ResourceManager {
         // Look for high-value drops within 8 blocks
         try {
             const drops = this.bot.sim.dimension.getEntities({ type: "minecraft:item", location: pos, maxDistance: 8 })
-                .filter(e => e.isValid)
+                .filter(e => e.isValid && (this.bot.grabIgnore?.get(e.id) ?? 0) < tick)
                 .map(e => {
                     const item = e.getComponent("minecraft:item")?.itemStack;
                     if (!item) return null;

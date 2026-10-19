@@ -1,7 +1,7 @@
 # VerdantBot — Resource Library
 
 > Exhaustive organized docs index for coding + structuring this addon.
-> Pack: Verdant Bot 1.2.8 - Bedrock 1.21.114 — BP + `@minecraft/server 2.3.0-beta` + `@minecraft/server-gametest 1.0.0-beta`
+> Pack: Verdant Bot 1.2.9 - Bedrock 1.21.120 — BP + `@minecraft/server 2.4.0-beta` + `@minecraft/server-gametest 1.0.0-beta`
 > Entry: `scripts/main.js` → `core/` (12 pure modules) + `runtime/` (20 adapters) + `structures/verdant/host.mcstructure` + `tools/run-all.mjs`
 > How to use: start at Tier 0, then jump to the section matching the file you edit.
 
@@ -24,7 +24,7 @@ Last curated: 2026-10-16.
 
 ## 1. Pack structure / manifest — manifest.json, folders
 
-Fixes: `format_version, header, modules[], dependencies[], min_engine_version 1.21.114`.
+Fixes: `format_version, header, modules[], dependencies[], min_engine_version 1.21.120`.
 
 ### 1A. Official Learn
 - [Behavior Pack](https://learn.microsoft.com/en-us/minecraft/creator/documents/behaviorpack?view=minecraft-bedrock-stable) — pack root contract
@@ -140,6 +140,10 @@ Lifecycle — spawn / respawn / disconnect (runtime/host.js, main.js orphan take
 - [Blocks — bedrock.dev](https://bedrock.dev/docs/stable/Blocks)
 - [Block Components — Wiki](https://wiki.bedrock.dev/blocks/block-components.html)
 - [Block Event Migration — Wiki](https://wiki.bedrock.dev/blocks/block-event-migration)
+- [Dimension Class](https://learn.microsoft.com/en-us/minecraft/creator/scriptapi/minecraft/server/dimension?view=minecraft-bedrock-stable) — Mojang's structure locator `getGeneratedStructures(location)` (api module 2.4.0-beta / Bedrock 1.21.120+): every generated structure whose footprint contains the sample point — village finding in runtime/village.js is built on it
+- [Bedrock Edition Preview 1.21.120.20 — minecraft.wiki](https://minecraft.wiki/w/Bedrock_Edition_Preview_1.21.120.20) — the engine cycle that shipped the structure-locator binding; the manifest bump (1.2.9) targets this
+- [Bedrock Edition 26.40 — minecraft.wiki](https://minecraft.wiki/w/Bedrock_Edition_26.40) — `findClosestBiome(biome, location)` renamed to `calculateClosestBiomeFromSeed(location, biome)` (arg order swapped too) — the ladder in runtime/village.js feature-detects both; calling the old name with the wrong order silently returns nothing
+- [Dimension.findClosestBiome — Learn](https://learn.microsoft.com/en-us/minecraft/creator/scriptapi/minecraft/server/dimension/findclosestbiome?view=minecraft-bedrock-experimental) — biome FIRST shape (2.3.0-beta..2.8.0-beta); keep for 1.21.114 reversion support
 
 ## 5. Inventory / crafting — runtime/inventory.js, core/recipes.js, equipment.js, looting.js
 

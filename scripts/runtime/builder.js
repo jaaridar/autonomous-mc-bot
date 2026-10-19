@@ -142,6 +142,7 @@ export class Builder {
         if (slot < 0) return "no-block";
 
         const selected = this.bag.select(slot);
+        const savedSneak = this.sim.isSneaking === true;
         try {
             if (options.sneak) this.sim.isSneaking = true;
             this.sim.lookAtBlock(this.host.relative(center(anchor)));
@@ -156,6 +157,12 @@ export class Builder {
         } catch (e) {
             this.placeAttempts++;
             return "rejected";
+        } finally {
+            // Sneak is a per-placement guard, never a lingering state: a leaked
+            // sneak also blocks navigation jumps (navigation.js refuses to jump
+            // while sneaking), which is how the live client ended up "sneaking
+            // randomly" in a mine and unable to step up.
+            if (options.sneak) { try { this.sim.isSneaking = savedSneak; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); } }
         }
     }
 
@@ -307,7 +314,7 @@ export class Builder {
     pillar(tick) {
         const p = floor(this.sim.location);
         if (!this.pillaring) {
-            this.pillaring = { startY: p.y, col: { x: p.x, z: p.z }, since: tick, placed: 0, lastJump: 0 };
+            this.pillaring = { startY: p.y, col: { x: p.x, z: p.z }, since: tick, placed: 0, lastJump: 0, lastPlaced: 0 };
         }
         const state = this.pillaring;
         // For 100 block tower, allow much longer - 3000 ticks = 150 sec for 100 blocks
@@ -315,58 +322,48 @@ export class Builder {
             this.resetPillar();
             return "timeout";
         }
+        // No building material at all: never hop forever, say so immediately.
+        if (this.countBlocks() < 1) {
+            this.resetPillar();
+            return "no-block";
+        }
+        // Stall guard: with zero placements a pillar cannot succeed (no jump
+        // physics, occupied cell, unreachable/broken tool...). Give up after
+        // three jump attempts; once placements happen, be patient (100-block
+        // towers take minutes).
+        const patience = state.placed > 0 ? 200 : 30;
+        if (tick - (state.lastPlaced || state.since) > patience) {
+            this.resetPillar();
+            return "blocked";
+        }
 
         const below = add(p, DOWN);
         const belowBlock = this.terrain.block(below);
 
-        // If we have solid below, jump and place under
-        if (belowBlock && belowBlock.isSolid) {
-            if (this.sim.isOnGround) {
-                if (tick - state.lastJump > 10) {
-                    this.sim.jump();
-                    state.lastJump = tick;
-                }
-                return "jumping";
-            } else {
-                // Airborne, place at previous feet
-                const anchor = add(below, DOWN);
-                const anchorBlock = this.terrain.block(anchor);
-                if (!anchorBlock || !anchorBlock.isSolid) {
-                    // Need to place anchor first? Actually below is solid, anchor is below that
-                    // We want to place at below? No, we already have below solid.
-                    // We want to place where we jumped from, which is below
-                    // But below is already solid, so we need to place one higher? Let's re-evaluate.
-                    // Standard pillar: jump, place block at feet position (which becomes below after jump)
-                    // Actually after jump, feet is empty, so place at below
-                    // But below is already solid before jump, so we need to place at current feet after landing?
-                    // Simplified: if on ground, jump, else try place at below
-                }
-                // Try place at below (feet)
-                const r = this.placeAt(below, anchor, { sneak: true, autoAnchor: true });
-                if (r === "placed") {
-                    state.placed++;
-                    state.startY = p.y;
-                    return "placed";
-                }
-                return r;
+        if (this.sim.isOnGround) {
+            // Standing: jump so the feet cell opens up; the airborne branch
+            // below fills it at the top of the arc.
+            if (tick - state.lastJump > 10) {
+                this.sim.jump();
+                state.lastJump = tick;
             }
-        } else {
-            // No support, need to place at below
-            const anchor = add(below, DOWN);
-            // Find support for below
-            const support = this.findSupportFor(below);
-            if (!support) {
-                // No support at all, need to place at anchor first?
-                // If anchor is air, we can't pillar from mid-air, need to land
-                return "no-support";
-            }
-            const r = this.placeAt(below, support.pos, { sneak: true });
-            if (r === "placed") {
-                state.placed++;
-                return "placed";
-            }
-            return r;
+            return "jumping";
         }
+        // Airborne. The only cell worth placing is `below` - and only once the
+        // feet have risen past the block boundary, so `below` is open. While
+        // floor() still reports the cell we jumped from, `below` IS the solid
+        // ground: wait for the rise instead of trying to fill an occupied cell
+        // (that produced the endless "jump, occupied, jump" loop).
+        if (belowBlock && belowBlock.isSolid) return "jumping";
+        const anchor = add(below, DOWN);
+        const r = this.placeAt(below, anchor, { sneak: true, autoAnchor: true });
+        if (r === "placed") {
+            state.placed++;
+            state.startY = p.y;
+            state.lastPlaced = tick;
+            return "placed";
+        }
+        return r;
     }
 
     resetPillar() {
@@ -636,6 +633,7 @@ export class Hands {
         if (slot < 0)
             return "no-block";
         const selected = this.bag.select(slot);
+        const savedSneak = this.sim.isSneaking === true;
         try {
             if (options.sneak)
                 this.sim.isSneaking = true;
@@ -646,6 +644,11 @@ export class Hands {
         }
         catch {
             return "rejected";
+        }
+        finally {
+            // Scope the sneak again: it must never outlive the placement call
+            // (a leaked sneak blocks navigation jumps - see Builder.placeAt).
+            if (options.sneak) { try { this.sim.isSneaking = savedSneak; } catch { /* best effort */ } }
         }
     }
     /** Place a carried item (bed, torch, table, ...) straight down onto a cell. */

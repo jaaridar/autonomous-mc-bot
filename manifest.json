@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Verdant Bot 1.2.8 \u2022 Bedrock 1.21.114 \u2022 Nether Speedrun World-Class",
-    "description": "Verdant 1.2.8 - autonomous simulated player for Bedrock 1.21.114. Spawns a real GameTest player and drives it with a purpose-built decision stack: starter kit, auto survival, mining (staircase/corridor + deep branch/vein), crafting and smelting with rollback-safe transfers, foraging and food strategy, melee combat with retreats, escape and water survival, exploration, structure loot, village-first food/beds, iron golem fights, nether prep (bucket, obsidian, portal, ignition) and a speedrun director; plus persistent memory, night camping, death recovery and 80 survival scenarios. Honest by construction: nothing fabricated or teleported, dig checks hazards, shelters stay reopenable, owner-gated, circuit breaker on repeated faults. Verified offline by node tools/run-all.mjs (4 gates + unit + perf suites over 32 modules).",
+    "name": "Verdant Bot 1.2.9 \u2022 Bedrock 1.21.114 \u2022 Nether Speedrun World-Class",
+    "description": "Verdant 1.2.9 - autonomous simulated player for Bedrock 1.21.114. Spawns a real GameTest player and drives it with a purpose-built decision stack: starter kit, auto survival, mining (staircase/corridor + deep branch/vein), crafting and smelting with rollback-safe transfers, foraging and food strategy, melee combat with retreats, escape and water survival, exploration, structure loot, village-first food/beds, iron golem fights, nether prep (bucket, obsidian, portal, ignition) and a speedrun director; plus persistent memory, night camping, death recovery and 80 survival scenarios. Honest by construction: nothing fabricated or teleported, dig checks hazards, shelters stay reopenable, owner-gated, circuit breaker on repeated faults. Verified offline by node tools/run-all.mjs (4 gates + unit + perf suites over 32 modules).",
     "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
     "version": [
       1,
       2,
-      8
+      9
     ],
     "min_engine_version": [
       1,
@@ -22,7 +22,7 @@
       "version": [
         1,
         2,
-        8
+        9
       ]
     },
     {
@@ -33,7 +33,7 @@
       "version": [
         1,
         2,
-        8
+        9
       ]
     }
   ],

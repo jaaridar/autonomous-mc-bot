@@ -517,36 +517,45 @@ export function isValuable(typeId) {
 
 /**
  * Decide which items to take from a chest given current inventory.
- * Structure loot main priority.
+ *
+ * FULL-DRAIN plan: every useful stack rides along when the bag can hold it.
+ * Ordering is critical, mergeable (zero slot cost), valuable, then score.
+ * A stack that merges with something already carried is always taken - it
+ * costs no slot. Distinct new types stop at the reserved budget: RESERVE
+ * slots stay open so travel drops remain pickable. Junk rides last and only
+ * while the bag is still roomy, so a leftovers pile never crowds out gear.
+ * Whatever does not fit stays in the chest honestly - the old shine-threshold
+ * cap (score > 50 + slot caps) left most structure loot sitting in the chest.
  */
 export function chooseLoot(chestItems, bagCounts, freeSlots, structure = null) {
+    const RESERVE = 2; // keep travel drops pickable (matches the withdraw reserve)
     const scored = chestItems.map((item, idx) => ({
         idx,
         type: item.typeId,
         amount: item.amount,
         score: scoreItem(item.typeId, item.amount, structure),
+        junk: JUNK.has(item.typeId) && !isCritical(item.typeId),
+        critical: isCritical(item.typeId),
         valuable: isValuable(item.typeId),
-        critical: isCritical(item.typeId)
-    })).filter(s => !JUNK.has(s.type) || s.critical);
+        mergeable: (bagCounts?.[item.typeId] ?? 0) > 0,
+    })).sort((a, b) =>
+        (b.critical - a.critical) ||
+        (b.mergeable - a.mergeable) || // zero-cost picks first
+        (b.valuable - a.valuable) ||
+        (b.score - a.score));
 
-    // Sort critical first, valuable second, then by score desc
-    scored.sort((a,b) => (b.critical - a.critical) || (b.valuable - a.valuable) || (b.score - a.score));
-
+    const budget = Math.max(0, freeSlots - RESERVE); // room for distinct new types
+    const junkBudget = Math.max(0, budget - 6);      // junk only with 6+ spare slots
     const toTake = [];
-    let used = 0;
+    let newSlots = 0, junkSlots = 0;
     for (const s of scored) {
-        if (s.critical) {
-            toTake.push(s.idx);
-            used++;
-            if (used >= freeSlots + 3) break;
-        } else if (s.valuable) {
-            toTake.push(s.idx);
-            used++;
-            if (used >= freeSlots + 2) break;
-        } else if (s.score > 50 && freeSlots > 3) {
-            toTake.push(s.idx);
-            used++;
+        if (s.mergeable) { toTake.push(s.idx); continue; } // rides free in a partial stack
+        if (s.junk) {
+            if (junkSlots < junkBudget) { toTake.push(s.idx); junkSlots++; newSlots++; }
+            continue;
         }
+        if (newSlots < budget) { toTake.push(s.idx); newSlots++; }
+        // else: the chest keeps it - the bot returns when the bag has room
     }
     return toTake;
 }

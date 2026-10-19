@@ -119,6 +119,13 @@ export class Escaper {
             this.pillarStart = 0;
             this.phase = "assess";
         }
+        if (kind === "trapped" && tick - this.since > 260) {
+            // A trapped walk-out is a short burst (a few blocks to open
+            // ground). When it cannot finish in ~13s it is steering the bot
+            // around in place - hand back so the task's own climb/reach code
+            // gets the movement instead.
+            return this.giveUp("Trapped escape made no progress; handing back.");
+        }
         if (tick - this.since > 800) {
             if (kind === "water") {
                 this.lastReason = "Still in water; handing back.";
@@ -1055,7 +1062,11 @@ export class Escaper {
         }
         if (tick - this.since > 500) return this.giveUp("Pillar escape timed out.");
         if (!this.hands.canBuild) return this.giveUp("No blocks to pillar.");
-        sim.isSneaking = true;
+        // Sneak pins you to the edge - but a sneaking player cannot jump, and
+        // this line ran right before the pillar jump, so the escape stood
+        // still "sneaking" instead of rising. The airborne placement below
+        // keeps its own scoped {sneak:true}; the jump needs free feet.
+        try { sim.isSneaking = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         if (sim.isOnGround) {
             this.jumpFrom = p.y;
             this.pillarCol = { x: p.x, z: p.z };

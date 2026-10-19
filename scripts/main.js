@@ -53,10 +53,28 @@ host.onReady = () => {
         spawnBot(p);
     }
     catch (e) {
-        p.sendMessage("§c[Verdant] Auto-spawn failed: " + e.message);
+        try { p.sendMessage("§c[Verdant] Auto-spawn failed: " + e.message); } catch {}
         console.warn("[Verdant] Auto-spawn failed: " + e);
     }
 };
+/** Zero-command auto-spawn: joins/reloads spawn the bot next to the player without chat. */
+function requestAutoSpawn(p) {
+    if (!p?.isValid || p.name === "Verdant") return false;
+    if (bot?.sim.isValid) return false;
+    if (pendingSpawn?.isValid) return false;
+    // Single player auto-grants admin so zero-command works; multiplayer still needs op.
+    try { if (!p.hasTag("verdant.admin") && world.getAllPlayers().length === 1) p.addTag("verdant.admin"); } catch {}
+    if (host.status().running) {
+        try { spawnBot(p); return true; } catch (e) { console.warn("[Verdant] auto-spawn spawnBot: " + e); return false; }
+    }
+    if (host.status().pending) { pendingSpawn = p; return true; }
+    // Host not yet started — one-shot init then spawn onReady. Preview failures are terminal.
+    try { host.preview(p); } catch (e) { console.warn("[Verdant] auto-spawn preview: " + e); return false; }
+    pendingSpawn = p;
+    try { host.init(p); } catch (e) { pendingSpawn = undefined; console.warn("[Verdant] auto-spawn init: " + e); return false; }
+    try { p.sendMessage("§a[Verdant] Auto-starting: host is initializing (~20s). The bot will appear next to you when ready - no command needed."); } catch {}
+    return true;
+}
 /**
  * Shared spawn path: used by !bot spawn and by the automatic spawn that runs
  * when a first-time host finishes starting. The bot starts working on its own
@@ -129,7 +147,7 @@ function spawnBot(p) {
     if (remembered.death)
         say(p, "A death point is remembered; it is fetched automatically after the next death, or use !bot recover now.");
 }
-const HELP = "!bot init confirm | spawn | engine skills/legacy | skill list/run/stop/why/status | reload | | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun/autosurvival on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.2.8 refactor + speedrun-fix + ultra-efficient survival-master 80 scenarios: A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1, arbitrary bridging diagonal/horizontal/up, amazing parkour.";
+const HELP = "!bot init confirm | spawn | engine skills/legacy | skill list/run/stop/why/status | reload | | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | goals | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun/autosurvival on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.2.8 refactor + speedrun-fix + ultra-efficient survival-master 80 scenarios: A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1, arbitrary bridging diagonal/horizontal/up, amazing parkour.";
 function say(p, msg) {
     p.sendMessage("§a[Verdant] §r" + msg);
 }
@@ -340,6 +358,9 @@ function command(p, text) {
             }
             case "memory":
                 say(p, JSON.stringify(memory.summary()));
+                break;
+            case "goals":
+                say(p, b.goals());
                 break;
             case "hold":
                 if (b.paused || b.mode === "idle")
@@ -581,24 +602,58 @@ try {
 catch (e) {
     console.warn("[Verdant] entityHurt unavailable on this Minecraft version: " + e);
 }
-on("entityDie", world.afterEvents.entityDie, (e) => {
-    if (bot && e.deadEntity.id === bot.sim.id && bot.state !== "dead") {
-        // Snapshot the site first: the brain is frozen until it respawns.
-        bot.recordDeath();
-        memory.flush();
-        bot.state = "dead";
-        bot.deadSince = system.currentTick;
-        bot.respawnTried = false;
-        bot.paused = false;
-        bot.tell("Bot died. Death point recorded; attempting an automatic respawn.");
-        console.warn("[Verdant] Bot died; auto-respawn pipeline started, death point remembered.");
-    }
-});
+try {
+    on("entityDie", world.afterEvents.entityDie, (e) => {
+        // The sim can be invalid in the window between death and respawn;
+        // reading .id on it throws InvalidEntityError inside this handler.
+        if (!bot?.sim?.isValid || bot.state === "dead")
+            return;
+        if (e.deadEntity.id === bot.sim.id) {
+            // Snapshot the site first: the brain is frozen until it respawns.
+            bot.recordDeath();
+            memory.flush();
+            bot.state = "dead";
+            bot.deadSince = system.currentTick;
+            bot.respawnTried = false;
+            bot.paused = false;
+            bot.tell("Bot died. Death point recorded; attempting an automatic respawn.");
+            console.warn("[Verdant] Bot died; auto-respawn pipeline started, death point remembered.");
+        }
+    });
+}
+catch (e) {
+    console.warn("[Verdant] entityDie unavailable on this Minecraft version: " + e);
+}
 on("playerLeave", world.afterEvents.playerLeave, (e) => {
     limits.delete(e.playerName);
     if (bot?.ownerName === e.playerName && bot.sim.isValid)
         bot.pause("Owner disconnected.");
 });
+// Zero-command start: joining or (re)spawning next to the world automatically
+// brings Verdant with you. Both signals are tried — playerSpawn exists on
+// every 1.21.114 build; playerJoin is beta-only. Either one debounces the
+// other via pendingSpawn / bot.isValid checks, so no double spawn.
+let lastAutoSpawnTick = -1000;
+function tryAutoSpawnFromEvent(player) {
+    if (!player?.isValid || player.name === "Verdant") return;
+    if (bot?.sim?.isValid || pendingSpawn?.isValid) return;
+    if (system.currentTick - lastAutoSpawnTick < 40) return;
+    lastAutoSpawnTick = system.currentTick;
+    // Run one tick later so the player is fully in the world / dimension.
+    try { system.run(() => { try { requestAutoSpawn(player); } catch (e) { console.warn("[Verdant] auto-spawn event: " + e); } }); }
+    catch { try { requestAutoSpawn(player); } catch (e2) { console.warn("[Verdant] auto-spawn event: " + e2); } }
+}
+try {
+    on("playerJoin", world.afterEvents.playerJoin, (e) => {
+        try { tryAutoSpawnFromEvent(e.player ?? world.getAllPlayers().find(p => p.id === e.playerId)); } catch (err) { console.warn("[Verdant] playerJoin: " + err); }
+    });
+} catch (e) { console.warn("[Verdant] playerJoin unavailable: " + e); }
+try {
+    on("playerSpawn", world.afterEvents.playerSpawn, (e) => {
+        // initialSpawn fires on first join / dimension load - perfect for reload orphan takeover.
+        try { if (e.player?.isValid) tryAutoSpawnFromEvent(e.player); } catch (err) { console.warn("[Verdant] playerSpawn: " + err); }
+    });
+} catch (e) { console.warn("[Verdant] playerSpawn unavailable: " + e); }
 // One pump for the whole pack, registered through the lifecycle manager so a
 // reload can never leave two brains ticking the same bot.
 pump("bot", () => {
@@ -608,4 +663,14 @@ pump("bot", () => {
 on("worldLoad", world.afterEvents.worldLoad, () => {
     console.warn("[Verdant 1.2.8] Survival-Master 80 scenarios world-class: A Falls 1-15, B Night mobs 16-30, C Resource 31-45, D Shelter 46-60, E Multi 61-80 critical. Handles ravine flee zombie low HP unknown depth, mountain ledge sunset fall damage darkness, cave tree no torches, water underwater cave oxygen, lava pool immediate hazard, skeleton above cover climb, creeper hole explosion, broken pickaxe, narrow ledge lava balance, deep cave hostile, drowned chase, spider tree, lose surface orientation, empty hunger, too deep pillar, 3 skeletons zombie sunset LOS, 4 zombies building shelter defensive, creeper 2 skeletons block home explosion cover alternate, spider roof skeleton outside multiple angles, 2 creepers narrow entrance simultaneous, zombie blocks exit skeleton above, witch low health potion retreat, mob enters small shelter doorway control, zombie then skeleton joins reassess, creeper destroys entrance terrain changed, skeleton knocks cliff knockback recovery, spider zombie pursue cave chokepoint, hostile group wooden sword disadvantage, attacked while eating cancel/complete, village night zombies secure, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1 never bare-hand, arbitrary bridging diagonal/horizontal/up, amazing parkour, death recovery, upskilling main goal.");
     world.sendMessage("§a[Verdant] v1.2.8 refactor + speedrun-fix + ultra-efficient survival-master 80 scenarios - !bot spawn to begin. Handles all falls, night mobs, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, quick tool #1. If !bot chat input ever goes unanswered, use /scriptevent verdant:cmd spawn instead.");
+    // Reload / re-enter without a playerJoin event: adopt any lone player as owner.
+    try {
+        system.runTimeout(() => {
+            if (bot?.sim?.isValid || pendingSpawn?.isValid) return;
+            const candidates = world.getAllPlayers().filter(p => p.isValid && p.name !== "Verdant");
+            if (!candidates.length) return;
+            const p = candidates[0];
+            try { requestAutoSpawn(p); } catch (e) { console.warn("[Verdant] worldLoad auto-spawn: " + e); }
+        }, 20);
+    } catch (e) { console.warn("[Verdant] worldLoad auto-spawn scheduling: " + e); }
 });

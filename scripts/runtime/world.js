@@ -16,6 +16,15 @@ const TABLE = "minecraft:crafting_table";
 /** Snapshot TTLs (ticks). Open cells expire sooner so newly placed blocks show up fast. */
 const SOLID_TTL = 40, OPEN_TTL = 20, MISSING_TTL = 2, HANDLE_TTL = 40;
 const CACHE_CAP = 18000, HANDLE_CAP = 6000;
+/**
+ * Vanilla block tags via native `Block.getTags()`, cached per block TYPE.
+ * Tags are permutation-level in the engine, but for every classification this
+ * pack does (log/leaves/dirt/...) the type is authoritative, so one native
+ * read per type replaces every hardcoded id list and future-proofs new blocks
+ * the game adds. `null` = the engine has no tag data for that type.
+ */
+const TAG_TYPES = new Map();
+const TAG_CACHE_CAP = 1024;
 
 /**
  * Cheap, cached view of a block. Only `typeId` is read eagerly (one native
@@ -48,6 +57,28 @@ class Cell {
     }
     get support() { return this.isSolid; }
     get hazard() { return HAZARDS.has(this.type) || this.isLiquid; }
+    /**
+     * Membership in a vanilla block tag ("log", "leaves", "dirt", "stone",
+     * "minecraft:is_pickaxe_item_destructible", ...). One native getTags()
+     * call per block type ever; pure JS afterwards.
+     */
+    hasTag(tag) {
+        let set = TAG_TYPES.get(this.type);
+        if (set === undefined) {
+            set = null;
+            try {
+                const t = this.b.getTags?.();
+                if (Array.isArray(t))
+                    set = new Set(t);
+            }
+            catch {
+                set = null;
+            }
+            if (TAG_TYPES.size < TAG_CACHE_CAP)
+                TAG_TYPES.set(this.type, set);
+        }
+        return !!set && set.has(tag);
+    }
 }
 
 /** Precomputed nearest-first sphere offsets per radius (scanOres used to build and sort ~2000 points per call). */
@@ -92,9 +123,13 @@ export class Terrain {
     }
     freshSafe(p) {
         const b = floor(p);
-        this.cache.delete(key({ x: b.x, y: b.y - 1, z: b.z }));
-        this.cache.delete(key(b));
-        this.cache.delete(key({ x: b.x, y: b.y + 1, z: b.z }));
+        const k0 = key({ x: b.x, y: b.y - 1, z: b.z });
+        const k1 = key(b);
+        const k2 = key({ x: b.x, y: b.y + 1, z: b.z });
+        this.cache.delete(k0); this.handles.delete(k0);
+        this.cache.delete(k1); this.handles.delete(k1);
+        this.cache.delete(k2); this.handles.delete(k2);
+        this.memo.delete("w" + k1); this.memo.delete("t" + k1);
         return this.safe(b);
     }
     invalidate(p) {
@@ -102,6 +137,11 @@ export class Terrain {
         this.cache.delete(k);
         this.handles.delete(k);
         this.memo.clear();
+    }
+    _scanMemo = new Map();
+    _scanMemoKey(origin, radius, tick) {
+        const p = floor(origin);
+        return `${p.x},${p.y},${p.z}|${radius}|${tick}`;
     }
     constructor(dimension) {
         this.dimension = dimension;
@@ -434,7 +474,11 @@ export class Terrain {
     threatInfo(bot, owner) {
         const now = this.now();
         const m = this._threat;
-        if (m && m.bot === bot && m.owner === owner && (m.tick === now || (m.info.count === 0 && now - m.tick >= 0 && now - m.tick < 3))) {
+        // 3-tick grace for non-empty and empty snapshots alike: hostiles move
+        // slightly in the window, but this is what keeps one getEntities()
+        // query serving the whole arbiter/survival/camp crowd instead of
+        // re-scanning the query volume every single tick.
+        if (m && m.bot === bot && m.owner === owner && now - m.tick >= 0 && now - m.tick < 3) {
             return { ...m.info, list: m.info.list.slice() };
         }
         const loc = bot.location;
@@ -462,8 +506,14 @@ export class Terrain {
 
     /**
      * Scan for ores in radius, returns positions of matching ore types.
+     * Throttled: same centre+radius within 10 ticks returns cached hits so a burst
+     * of callers (miner + deepMiner + awareness) does not re-scan the same volume.
      */
     scanOres(origin, radius, predicate, budget = 512) {
+        const tick = this.now();
+        const k = this._scanMemoKey(origin, radius, tick - (tick % 10)) + "|" + budget;
+        const cached = this._scanMemo.get(k);
+        if (cached) return cached.found.slice();
         const p = floor(origin);
         const fx = origin.x - p.x, fy = origin.y - p.y, fz = origin.z - p.z;
         const offsets = sphereOffsets(radius);
@@ -473,11 +523,11 @@ export class Terrain {
             if (used++ > budget) break;
             const pt = { x: p.x + o.x, y: p.y + o.y, z: p.z + o.z };
             const c = this.read(pt);
-            if (c && predicate(c.type, pt)) found.push(pt);
+            if (c && predicate(c.type, pt, c)) found.push(pt);
         }
-        // Offsets are nearest-first from the cell; re-sort by the true origin
-        // only among hits (tiny list) so results match the old ordering.
         if (fx || fy || fz) found.sort((a, b) => distance(a, origin) - distance(b, origin));
+        this._scanMemo.set(k, { found: found.slice(), predicate });
+        if (this._scanMemo.size > 32) this._scanMemo.delete(this._scanMemo.keys().next().value);
         return found;
     }
 }
@@ -510,18 +560,18 @@ export class BlockScan {
         this.offsets = getSortedOffsets(radius);
         this.points = null; // lazy computed only if needed, else use offsets directly
     }
-    next(terrain, predicate, budget = 384) {
-        // Fast path: iterate offsets directly without creating points array
+    next(terrain, predicate, budget = 96) {
+        // Throttled: 96 cells per tick (was 384) — keeps 60fps while still covering the cylinder in ~5 ticks.
         const origin = this.origin;
         while (budget-- > 0 && this.cursor < this.offsets.length) {
             const off = this.offsets[this.cursor++];
             const p = { x: origin.x + off.x, y: origin.y + off.y, z: origin.z + off.z };
             if (terrain.read) {
                 const c = terrain.read(p);
-                if (c && predicate(c.type, p)) return p;
+                if (c && predicate(c.type, p, c)) return p;
             } else {
                 const b = terrain.block(p);
-                if (b && predicate(b.typeId, p)) return p;
+                if (b && predicate(b.typeId, p, b)) return p;
             }
         }
         return undefined;

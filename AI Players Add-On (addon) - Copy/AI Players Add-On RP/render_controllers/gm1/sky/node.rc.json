@@ -1,1 +1,0 @@
-{"format_version":"1.26.0","render_controllers":{"controller.render.gm1_sky.node":{"geometry":"geometry.default","materials":[{"*":"material.default"}],"arrays":{"textures":{"Array.t":["texture.primary","texture.secondary","texture.staircase"]}},"textures":["Array.t[q.property('gm1_sky:type')]"],"ignore_lighting":true}}}

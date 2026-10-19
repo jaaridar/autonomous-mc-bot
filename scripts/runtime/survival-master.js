@@ -4,6 +4,7 @@ import { assessFallDepth, assessFoodReserves, composeCapabilities, detectScenari
 import { Direction, world } from "@minecraft/server";
 import { bedTarget } from "../core/recipes.js";
 import { toolTier } from "../core/world.js";
+import { foodFacts } from "./inventory.js";
 import { findBoat } from "./world.js";
 /**
  * Survival Master - world-class handler for all 80 bedrock.dev scenarios.
@@ -49,7 +50,7 @@ export class SurvivalMaster {
         try {
             // These fields must carry real values: every one of them was undefined
             // before, so composeCapabilities could never report anything.
-            const foodReserves = assessFoodReserves(context.counts, { hunger: context.hunger, health: context.hp });
+            const foodReserves = assessFoodReserves(context.counts, { hunger: context.hunger, health: context.hp, facts: foodFacts(Object.keys(context.counts)) });
             const caps = composeCapabilities({
                 health: context.hp,
                 hunger: context.hunger,

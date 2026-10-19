@@ -1,4 +1,4 @@
-import { world } from "@minecraft/server";
+import { DisplaySlotId, world } from "@minecraft/server";
 import { floor, distance } from "../core/math.js";
 
 /**
@@ -26,7 +26,7 @@ export class UI {
             this.objective = obj;
             // Set display slot sidebar if not already
             try {
-                sb.setObjectiveAtDisplaySlot("sidebar", { objective: obj });
+                sb.setObjectiveAtDisplaySlot(DisplaySlotId.Sidebar, { objective: obj });
             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         } catch (e) {
             console.warn("[Verdant UI] Scoreboard init failed: " + e);
@@ -55,7 +55,7 @@ export class UI {
                 obj = sb.getObjective("verdant");
                 if (!obj) obj = sb.addObjective("verdant", "Verdant Bot");
                 this.objective = obj;
-                try { sb.setObjectiveAtDisplaySlot("sidebar", { objective: obj }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { sb.setObjectiveAtDisplaySlot(DisplaySlotId.Sidebar, { objective: obj }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             if (!obj) return;
 
@@ -190,14 +190,15 @@ export class UI {
             // Actionbar shows current action + health
             const actionBar = `§a[${mode}] §f${reason} §c♥${Math.round(hp)} §6🍗${Math.round(hunger)}`;
 
+            // Actionbar is the native path on every supported engine
+            // (setActionBar since 1.20+, and the bot's min set is 1.21.120):
+            // there is deliberately no titleraw runCommand fallback - it
+            // duplicated this line and carried an injection surface through
+            // ownerName.
             try {
                 owner.onScreenDisplay.setActionBar(actionBar);
-            } catch {
-                // Fallback to title for older versions
-                try {
-                    b.sim.dimension.runCommand(`titleraw @a[name="${b.ownerName}"] actionbar {"rawtext":[{"text":"${actionBar.replace(/"/g, '\\"')}"}]}`);
-                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
+            catch { console.warn("[Verdant UI] actionbar unavailable"); }
 
             // If reason changed significantly, also tell in chat every 200 ticks for spectating
             if (tick % 200 === 0) {

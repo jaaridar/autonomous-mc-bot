@@ -11,7 +11,13 @@ import { fileURLToPath } from "node:url";
 import { composeCapabilities, evaluateCapability, CAPABILITIES } from "../scripts/core/survival.js";
 import { decomposeMission, analyzeRequirements, isAnyLog } from "../scripts/core/progression.js";
 import { fromJson, toJson, blank, upsertSpot, nearestSpot, removeSpot, setDeath, setHome, summary, sanitize } from "./load/scripts/core/memory.js";
-import { Drops } from "./load/scripts/runtime/looting.js";
+import { blockedTask, TaskFault } from "../scripts/core/arbiter.js";
+import { chooseLoot } from "./load/scripts/core/knowledge.js";
+import { Drops, isContainerBlock } from "./load/scripts/runtime/looting.js";
+import { VillageDirector } from "./load/scripts/runtime/village.js";
+// The load copy wires @minecraft/server to the same index.js file, so
+// __harness here IS the engine instance the pack modules run against.
+import { __harness } from "./load/node_modules/@minecraft/server/index.js";
 
 function memoryTests() {
     let pass = 0, fail = 0;
@@ -236,12 +242,187 @@ function flushTests() {
     return fails;
 }
 
+/**
+ * Village locate ladder (runtime/village.js VillageDirector.locateVillageBiome):
+ *   1. primary - Dimension.getGeneratedStructures probes on an outward-growing
+ *      grid (module 2.4.0-beta / Bedrock 1.21.120+); a hit IS a village.
+ *   2. fallback - seed-derived biome patch via calculateClosestBiomeFromSeed
+ *      (location, biome) on 2.9.0, else findClosestBiome (biome, location)
+ *      on older engines - the arg-order swap was the old silent no-op.
+ * Also covers the search throttle, the throw-driven probe disable, and the
+ * graceful scroll-off when every finder is missing.
+ */
+function villageLocatorTests() {
+    let fails = 0;
+    const ok = (cond, name) => {
+        console.log((cond ? "pass" : "FAIL") + " " + name);
+        if (!cond) fails++;
+    };
+    const fresh = (loc) => {
+        __harness.reset();
+        const dim = __harness.engine.dimension("minecraft:overworld");
+        const rec = [];
+        return {
+            d: new VillageDirector({ sim: { location: { ...loc }, dimension: dim }, record: (m) => rec.push(m) }),
+            dim, rec,
+        };
+    };
+
+    {
+        // 1) primary finder: a getGeneratedStructures hit IS the village.
+        //    Ring 1's nearest vertex (64,64,-64) sits 90 blocks from the
+        //    footprint centred at (128,64,-128) with radius 100: first hit.
+        const { d, rec } = fresh({ x: 0, y: 64, z: 0 });
+        __harness.setStructure({ x: 128, y: 64, z: -128 }, "minecraft:village_plains", 100);
+        const first = d.locateVillageBiome(1000);
+        ok(!!first && first.probe === true && first.biome === "minecraft:village_plains", "ring-1 probe point inside the footprint reports a village hit");
+        ok(!!first && Math.hypot(first.pos.x - 128, first.pos.z + 128) <= 100, "the probe point sits inside the structure's footprint");
+        ok(d.locateVillageBiome(1200) === first, "search throttle returns the cached lead between cycles");
+        ok(rec.some((m) => m.includes("Village locate: village_plains")), "hit is recorded on the owner feed");
+    }
+
+    {
+        // 2) engines without the new bindings: corrected findClosestBiome order
+        const { d, dim } = fresh({ x: 100, y: 64, z: 100 });
+        dim.getGeneratedStructures = undefined; // pre-1.21.120 engine
+        dim.calculateClosestBiomeFromSeed = undefined; // pre-2.9.0 module
+        __harness.setBiome({ x: 400, y: 64, z: 100 }, "minecraft:plains", 96);
+        ok(d.probeGeneratedStructures(500) === null, "probes report nothing when the binding is absent");
+        const lead = d.locateVillageBiome(500);
+        ok(!!lead && !lead.probe && lead.biome === "minecraft:plains" && lead.pos.x === 400 && lead.pos.z === 100, "biome fallback uses findClosestBiome(biome, location) and finds the seeded patch");
+        ok(d.locateVillageBiome(900) === lead, "throttle returns the same cached lead between searches");
+        dim.findClosestBiome = undefined; // no biome finder at all
+        ok(d.locateVillageBiome(1100) === null, "missing every finder degrades to null without throwing");
+    }
+
+    {
+        // 3) repeatedly throwing locator disables probes; biome search takes over
+        const { d, dim, rec } = fresh({ x: 0, y: 64, z: 0 });
+        // A village sits in ring 1's first cell - probes WOULD find it if they ran.
+        __harness.setStructure({ x: 64, y: 64, z: -64 }, "minecraft:village_desert", 200);
+        __harness.setBiome({ x: 900, y: 64, z: 0 }, "minecraft:desert", 96);
+        dim.getGeneratedStructures = () => { throw new Error("chunk unloaded"); };
+        const l1 = d.locateVillageBiome(1000);
+        ok(!!l1 && !l1.probe && l1.biome === "minecraft:desert" && l1.pos.x === 900, "with probes failing, the biome finder serves the lead instead");
+        ok(d._probeFails >= 8, "consecutive throws crossed the probe-disable threshold");
+        ok(rec.some((m) => m.includes("unusable") && m.includes("biome search takes over")), "owner is told the primary finder was retired");
+        const l2 = d.locateVillageBiome(1600);
+        ok(!!l2 && l2.biome === "minecraft:desert", "after the threshold, searches go straight to the biome finder");
+    }
+
+    console.log(fails ? "LOCATOR FAILED: " + fails : "village locator tests passed");
+    return fails;
+}
+
+/**
+ * Chest handling (core/knowledge.js chooseLoot + runtime/looting.js
+ * isContainerBlock): full-drain planning (every useful stack the bag can
+ * hold, junk only when roomy, merges ride free) and component-first
+ * container detection for every chest type Mojang ships.
+ */
+function chestLootTests() {
+    let fails = 0;
+    const ok = (cond, name) => {
+        console.log((cond ? "pass" : "FAIL") + " " + name);
+        if (!cond) fails++;
+    };
+    const stack = (typeId, amount = 1) => ({ typeId, amount });
+    const kinds = (idxs, chest) => new Set(idxs.map((i) => chest[i]?.typeId));
+
+    {
+        // 1) full-drain: every useful stack rides into the room the bag has.
+        const chest = [
+            stack("minecraft:diamond", 2),
+            stack("minecraft:diamond", 1),
+            stack("minecraft:iron_ingot", 3),
+            stack("minecraft:bread", 4),
+            stack("minecraft:stick", 6), // junk
+        ];
+        const picked = kinds(chooseLoot(chest, {}, 6, null), chest);
+        ok(chooseLoot(chest, {}, 6, null).length === 4, "with 6 free slots the plan takes all 4 useful stacks (2 diamond + iron ingot + bread)");
+        ok(picked.has("minecraft:diamond") && picked.has("minecraft:iron_ingot") && picked.has("minecraft:bread"), "the chosen types are the useful ones");
+        ok(!picked.has("minecraft:stick"), "junk stays behind when the bag is tight (junk budget 0 at budget 4)");
+    }
+    {
+        // 2) mergeable stacks ride free even into a full bag.
+        const chest = [stack("minecraft:diamond", 5)];
+        const r = chooseLoot(chest, { "minecraft:diamond": 9 }, 0, null);
+        ok(r.length === 1 && r[0] === 0, "a stack that merges into a carried partial stack is taken even at zero free slots");
+    }
+    {
+        // 3) junk only when the bag is roomy.
+        const chest = [
+            stack("minecraft:gold_ingot", 4),
+            stack("minecraft:gold_ingot", 1),
+            stack("minecraft:apple", 3),
+            stack("minecraft:rotten_flesh", 4),
+            stack("minecraft:rotten_flesh", 2),
+            stack("minecraft:rotten_flesh", 1),
+        ];
+        const roomy = kinds(chooseLoot(chest, {}, 12, null), chest);
+        ok(roomy.has("minecraft:rotten_flesh"), "with 12 free slots the bag is roomy enough to also strip junk");
+        const tight = kinds(chooseLoot(chest, {}, 5, null), chest);
+        ok(!tight.has("minecraft:rotten_flesh"), "a tight bag leaves junk in the chest");
+        ok(tight.has("minecraft:gold_ingot") && tight.has("minecraft:apple") && tight.size === 2, "a tight bag still takes the valuable gold + useful apple");
+    }
+    {
+        // 4) every container the engine exposes is lootable - component first.
+        const comp = () => ({});
+        const none = () => undefined;
+        ok(isContainerBlock({ typeId: "minecraft:copper_chest", getComponent: comp }), "copper chest detected via the inventory component (no id table to update)");
+        ok(isContainerBlock({ typeId: "minecraft:white_shulker_box", getComponent: comp }), "coloured shulker box detected via the component");
+        ok(isContainerBlock({ typeId: "minecraft:barrel", getComponent: comp }), "barrel detected via the component");
+        ok(isContainerBlock({ typeId: "minecraft:trapped_chest" }), "trapped chest detected via the id fallback when no binding exists");
+        ok(!isContainerBlock({ typeId: "minecraft:decorated_pot", getComponent: none }), "decorated pot is not planned as a chest");
+        ok(!isContainerBlock({ typeId: "minecraft:ender_chest", getComponent: none }), "ender chest is skipped: its contents are not block-local");
+        ok(!isContainerBlock({ typeId: "minecraft:oak_planks", getComponent: none }), "plain building blocks are not containers");
+    }
+
+    console.log(fails ? "CHESTLOOT FAILED: " + fails : "chest loot planning tests passed");
+    return fails;
+}
+
+
+// core/arbiter.js blockedTask(): the recovery ladder behind blockTask(). An
+// UNEXPECTED throw (not a TaskFault) used to park the task as "manual" forever -
+// the "!bot auto had to be pressed" loop. It now rides a bounded retry ladder.
+function blockedTaskTests() {
+    let pass = 0, fail = 0;
+    const check = (name, cond) => { if (cond) pass++; else { fail++; console.log("FAIL: " + name); } };
+
+    // "retry": bounded backoff ladder that never gives up (40, 80, ... capped at 1200 ticks).
+    const delayOf = (recovery, attempt) => blockedTask("why", recovery, attempt, 1000).retryAt - 1000;
+    check("retry attempt 1 retries in 40 ticks", delayOf("retry", 1) === 40);
+    check("retry attempt 2 retries in 80 ticks", delayOf("retry", 2) === 80);
+    check("retry ladder caps at 1200 ticks", delayOf("retry", 40) === 1200);
+    check("plain retry never turns into manual", blockedTask("why", "retry", 40, 0).recovery === "retry");
+
+    // "retry-bounded": five clean retries, then an honest handover to the owner.
+    const bounded = (attempt) => blockedTask("why", "retry-bounded", attempt, 0);
+    check("bounded attempts 1-5 still retry", [1, 2, 3, 4, 5].every((a) => bounded(a).recovery === "retry" && bounded(a).retryAt !== undefined));
+    check("bounded attempt 6 stops retrying (manual)", bounded(6).recovery === "manual" && bounded(6).retryAt === undefined);
+    check("only the capped round is flagged", bounded(6).capped === true && [1, 2, 3, 4, 5].every((a) => bounded(a).capped === false));
+
+    // "manual": genuine owner decisions never self-recover - only capping produces it for bounded faults.
+    check("manual never self-recovers", blockedTask("why", "manual", 1, 0).retryAt === undefined && blockedTask("why", "manual", 40, 0).recovery === "manual");
+
+    // TaskFault without an explicit recovery stays owner-facing (CRITICAL equipment rollback, component missing).
+    check("TaskFault default recovery is manual", new TaskFault("critical").recovery === "manual");
+    check("TaskFault keeps an explicit retry", new TaskFault("late", "retry").recovery === "retry");
+
+    console.log(`\n${pass} passed, ${fail} failed`);
+    return fail;
+}
+
 
 const sections = [
     ["persistent memory schema", memoryTests],
     ["survival capabilities + goal decomposition", capabilityTests],
     ["walkable regex guard", walkableGuard],
     ["drop-flush (Drops.flush)", flushTests],
+    ["village locate ladder", villageLocatorTests],
+    ["chest loot planning", chestLootTests],
+    ["blocked-task recovery ladder", blockedTaskTests],
 ];
 let failedSections = 0;
 for (const [name, fn] of sections) {
