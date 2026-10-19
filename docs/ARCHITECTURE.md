@@ -19,7 +19,7 @@ Two rules carry most of the design:
 - **runtime only adapts.** Decisions (tables, scoring, phases, plans) live in
   core; runtime performs ticks, block reads and native calls.
 
-## core/ — engine-free logic (12 modules)
+## core/ — engine-free logic (13 modules)
 
 | Module | Job |
 |---|---|
@@ -27,6 +27,8 @@ Two rules carry most of the design:
 | `world.js` | block taxonomy (passable/solid/falling/hazard), ore Y-levels, MINE table, hostiles/ranged/explosive, food sets, tool tiers, branch-mining patterns |
 | `knowledge.js` | item/block info, mob tactics, structure signatures, "retain important" scoring, danger/goal prioritisation, death-recovery plan |
 | `recipes.js` | crafting + smelting dependency resolver, food/fuel tables, rollback-safe stack transfer |
+| `acquire.js` | acquisition routes for items with no recipe: mined blocks (filtered through MINE so a route never claims an unreachable drop) and mob drops (see docs/MIGRATION.md) |
+| `craft-plan.js` | recipe-graph planner (`planCraft`/`firstMissingBase`) over `data/recipes.js`, extended at runtime by the harvested `data/recipes-efficient.js` |
 | `navigation.js` | A* search with parkour edges (sprint jump, jump-up, big drops, bridge cost) |
 | `arbiter.js` | task arbiter (which director acts now) + the `TaskFault`/`blockedTask` contract |
 | `progression.js` | goal decomposition (`decomposeMission`), requirement analysis, speedrun phases/checklist |

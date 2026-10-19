@@ -15,6 +15,12 @@ import { blockedTask, TaskFault } from "../scripts/core/arbiter.js";
 import { chooseLoot } from "./load/scripts/core/knowledge.js";
 import { Drops, isContainerBlock } from "./load/scripts/runtime/looting.js";
 import { VillageDirector } from "./load/scripts/runtime/village.js";
+import { RECIPES_BY_OUTPUT, SMELT_MAP, TAG_RESOLUTIONS } from "../scripts/core/data/recipes.js";
+import { EFFICIENT_RECIPE_LIST, EFFICIENT_SMELTS } from "../scripts/core/data/recipes-efficient.js";
+import { ACQUIRE } from "../scripts/core/data/acquire.js";
+import { nextStep } from "../scripts/core/recipes.js";
+import { expansionRecipeFor, planCraft, smeltSource } from "../scripts/core/craft-plan.js";
+import { acquireRoute, mineBlocksFor } from "../scripts/core/acquire.js";
 // The load copy wires @minecraft/server to the same index.js file, so
 // __harness here IS the engine instance the pack modules run against.
 import { __harness } from "./load/node_modules/@minecraft/server/index.js";
@@ -415,6 +421,90 @@ function blockedTaskTests() {
 }
 
 
+// Efficient-Bot port (tools/migrate/extract-efficient-bot.mjs): the harvested
+// recipe/acquire data must stay honest - concrete ids only, no phantom craft
+// loops, no route that claims loot the miner cannot reach. These tests pin the
+// curation rules and the nextStep/planCraft integration.
+function efficientPortTests() {
+    let pass = 0, fail = 0;
+    const check = (name, cond) => { if (cond) pass++; else { fail++; console.log("FAIL: " + name); } };
+    const PSEUDO = new Set(["minecraft:planks", "minecraft:logs", "minecraft:dye", "minecraft:boat", "minecraft:chest_boat", "minecraft:wool", "minecraft:wooden_slab", "minecraft:fence_gate", "minecraft:sign", "minecraft:wooden_door"]);
+
+    // 1) Recipe hygiene.
+    check("expansion has real coverage", EFFICIENT_RECIPE_LIST.length >= 200);
+    check("every expansion output is a concrete item", EFFICIENT_RECIPE_LIST.every((r) => /^minecraft:[a-z0-9_]+$/.test(r.out) && !PSEUDO.has(r.out)));
+    check("every expansion ingredient is concrete or a family", EFFICIENT_RECIPE_LIST.every((r) => r.in.length > 0 && r.in.every(([id, n]) => (id.startsWith("family:") || /^minecraft:[a-z0-9_]+$/.test(id)) && n >= 1)));
+    check("expansion never shadows Verdant's own recipes", EFFICIENT_RECIPE_LIST.every((r) => !RECIPES_BY_OUTPUT[r.out]));
+
+    // 2) Family references resolve.
+    const familyRefs = new Set(EFFICIENT_RECIPE_LIST.flatMap((r) => r.in.map(([id]) => id)).filter((id) => id.startsWith("family:")));
+    check("family references resolve", familyRefs.size > 0 && [...familyRefs].every((f) => Array.isArray(TAG_RESOLUTIONS[f]) && TAG_RESOLUTIONS[f].length > 0));
+
+    // 3) No craft recipe duplicates a smelt output (iron_ingot <- iron_block
+    //    would need iron_ingots: a planning loop, not a recipe).
+    const smeltOutputs = new Set([...Object.values(SMELT_MAP), ...Object.values(EFFICIENT_SMELTS)]);
+    check("no craft recipe duplicates a smelt output", EFFICIENT_RECIPE_LIST.every((r) => !smeltOutputs.has(r.out)));
+
+    // 4) Smelt sanity.
+    check("glass smelts from canonical sand", smeltSource("minecraft:glass") === "minecraft:sand");
+    check("native smelt is preferred", smeltSource("minecraft:iron_ingot") === "minecraft:raw_iron");
+    const TOOLISH = /_(axe|pickaxe|shovel|hoe|sword|helmet|chestplate|leggings|boots|spear)$/;
+    check("no tool recycling smelts", Object.keys(EFFICIENT_SMELTS).every((raw) => !TOOLISH.test(raw)));
+    check("no ore-block smelts", Object.keys(EFFICIENT_SMELTS).every((raw) => !/_ore$/.test(raw)));
+
+    // 5) nextStep: mob drops and mined blocks become acquire steps.
+    const s1 = nextStep("minecraft:string", 1, {}, true);
+    check("string acquires from spiders", s1.kind === "acquire" && s1.method === "kill" && s1.mobs.includes("minecraft:spider"));
+    const s2 = nextStep("minecraft:bone", 1, {}, true);
+    check("bone acquires from skeletons", s2.kind === "acquire" && s2.mobs.includes("minecraft:skeleton"));
+    const s3 = nextStep("minecraft:clay_ball", 2, {}, true);
+    check("clay_ball acquires by mining clay", s3.kind === "acquire" && s3.blocks.includes("minecraft:clay") && s3.count >= 2);
+    const s4 = nextStep("minecraft:sand", 1, {}, true);
+    check("sand acquires by mining sand", s4.kind === "acquire" && s4.blocks.includes("minecraft:sand"));
+    const s5 = nextStep("minecraft:wheat_seeds", 1, {}, true);
+    check("seeds acquire from grass", s5.kind === "acquire" && s5.blocks.some((b) => b.includes("grass") || b.endsWith("fern")));
+
+    // 6) Expansion recipes flow through nextStep and the executor adapter.
+    const c1 = nextStep("minecraft:chest", 1, { "minecraft:oak_planks": 8 }, true);
+    check("chest crafts from held planks", c1.kind === "craft" && c1.item === "minecraft:chest");
+    const c2 = nextStep("minecraft:chest", 1, { "minecraft:oak_planks": 8 }, false);
+    check("chest without a table plans the table", c2.kind === "craft" && c2.item === "minecraft:crafting_table");
+    const chestRecipe = expansionRecipeFor("minecraft:chest");
+    check("chest expansion recipe is executor-shaped", chestRecipe.output === "minecraft:chest" && chestRecipe.amount === 1 && chestRecipe.ingredients["#planks"] === 8 && chestRecipe.table === true);
+
+    // 7) Honest refusals: chance drops the miner does not model stay blocked.
+    check("flint stays blocked (chance drop)", nextStep("minecraft:flint", 1, {}, true).kind === "blocked");
+    check("melon item has no route (block drops slices)", acquireRoute("minecraft:melon") === null && nextStep("minecraft:melon", 1, {}, true).kind === "blocked");
+
+    // 8) Tool gating: obsidian needs a diamond pickaxe before the route opens.
+    check("obsidian route waits for the diamond pickaxe", acquireRoute("minecraft:obsidian", { "minecraft:iron_pickaxe": 1 })?.needTool === "minecraft:diamond_pickaxe");
+    check("obsidian route opens with the diamond pickaxe", acquireRoute("minecraft:obsidian", { "minecraft:diamond_pickaxe": 1 })?.needTool === null);
+    const o1 = nextStep("minecraft:obsidian", 1, { "minecraft:diamond_pickaxe": 1 }, true);
+    check("obsidian nextStep is the acquire step", o1.kind === "acquire" && o1.blocks.includes("minecraft:obsidian"));
+    check("obsidian never acquires bare-handed", nextStep("minecraft:obsidian", 1, { "minecraft:wooden_pickaxe": 1 }, true).kind !== "acquire");
+
+    // 9) Block routes exist only when the MINE table yields the item.
+    check("mineBlocksFor clay", mineBlocksFor("minecraft:clay_ball").includes("minecraft:clay"));
+    check("mineBlocksFor sand", mineBlocksFor("minecraft:sand").includes("minecraft:sand"));
+    check("mineBlocksFor sugar_cane", mineBlocksFor("minecraft:sugar_cane").includes("minecraft:sugar_cane"));
+    check("sugarcane id repair landed", ACQUIRE["minecraft:sugar_cane"] !== undefined && ACQUIRE["minecraft:sugarcane"] === undefined);
+
+    // 10) planCraft executes the expansion graph without loops.
+    const p1 = planCraft("minecraft:chest", { "minecraft:oak_planks": 8 });
+    check("planCraft chest succeeds with held planks", p1.ok && p1.steps.some((st) => st.kind === "craft" && st.out === "minecraft:chest"));
+    const p2 = planCraft("minecraft:acacia_planks", { "minecraft:acacia_log": 1 });
+    check("planCraft concrete planks from their log", p2.ok && p2.steps.some((st) => st.out === "minecraft:acacia_planks"));
+    const p3 = planCraft("minecraft:white_wool", { "minecraft:string": 4 });
+    check("planCraft wool from string", p3.ok && p3.steps.some((st) => st.out === "minecraft:white_wool"));
+    let threw = 0;
+    for (const r of EFFICIENT_RECIPE_LIST) { try { planCraft(r.out, {}); } catch { threw++; } }
+    check("no expansion output breaks the planner", threw === 0);
+
+    console.log(`\n${pass} passed, ${fail} failed`);
+    return fail;
+}
+
+
 const sections = [
     ["persistent memory schema", memoryTests],
     ["survival capabilities + goal decomposition", capabilityTests],
@@ -423,6 +513,7 @@ const sections = [
     ["village locate ladder", villageLocatorTests],
     ["chest loot planning", chestLootTests],
     ["blocked-task recovery ladder", blockedTaskTests],
+    ["efficient-bot port (recipes, acquire, smelts)", efficientPortTests],
 ];
 let failedSections = 0;
 for (const [name, fn] of sections) {

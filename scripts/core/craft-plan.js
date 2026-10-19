@@ -12,13 +12,44 @@
 import {
     INGREDIENT_TO_RESULT, RECIPES_BY_OUTPUT, SMELT_MAP, STONE_FAMILY, TAG_RESOLUTIONS, WOOD_FAMILIES,
 } from "./data/recipes.js";
+import { EFFICIENT_RECIPE_LIST, EFFICIENT_SMELTS } from "./data/recipes-efficient.js";
 
 export const PLANK_FAMILIES = WOOD_FAMILIES.map((f) => f.planks);
 export const LOG_VARIANTS = WOOD_FAMILIES.flatMap((f) => [f.log, f.strippedLog, f.wood, f.strippedWood]).filter(Boolean);
 
-/** Recipe(s) producing an item, or undefined. */
+// Efficient-Bot port: 240 harvested recipes that widen the graph without
+// touching the curated data. Indexed by output and consulted only when the
+// migrated data has nothing for the item.
+const EXPANSION_BY_OUTPUT = {};
+for (const r of EFFICIENT_RECIPE_LIST)
+    (EXPANSION_BY_OUTPUT[r.out] ??= []).push(r);
+
+/** Recipe(s) producing an item, or undefined. Curation order: data, then expansion. */
 export function recipesFor(itemId) {
-    return RECIPES_BY_OUTPUT[itemId];
+    return RECIPES_BY_OUTPUT[itemId] ?? EXPANSION_BY_OUTPUT[itemId];
+}
+
+const TAG_KEYS = {
+    "family:planks": "#planks",
+    "family:logs": "#logs",
+    "family:stone": "#cobble",
+};
+
+/**
+ * Executor-shaped recipe from the expansion: core/recipes.js craft() consumes
+ * `{ output, amount, ingredients: { "#planks": 4, ... } }`, so family ids are
+ * mapped onto the existing wildcard keys.
+ */
+export function expansionRecipeFor(itemId) {
+    const r = EXPANSION_BY_OUTPUT[itemId]?.[0];
+    if (!r)
+        return null;
+    const ingredients = {};
+    for (const [id, n] of r.in) {
+        const key = TAG_KEYS[id] ?? id;
+        ingredients[key] = (ingredients[key] ?? 0) + n;
+    }
+    return { output: itemId, amount: r.n, ingredients, table: r.table };
 }
 
 export function requiresTable(itemId) {
@@ -54,12 +85,22 @@ export function resolveResult(resultId, ingredientId) {
     return INGREDIENT_TO_RESULT[ingredientId] ?? resultId;
 }
 
-/** Raw material that smelts into `itemId`, or null. */
+/** Raw material that smelts into `itemId`, or null. Data first, then expansion. */
 export function smeltSource(itemId) {
+    const candidates = [];
     for (const [raw, cooked] of Object.entries(SMELT_MAP))
         if (cooked === itemId)
-            return raw;
-    return null;
+            candidates.push(raw);
+    if (candidates.length === 0)
+        for (const [raw, cooked] of Object.entries(EFFICIENT_SMELTS))
+            if (cooked === itemId)
+                candidates.push(raw);
+    if (candidates.length === 0)
+        return null;
+    // Multiple raw sources (sand and red_sand both tick to glass): prefer the
+    // canonical short id over the exotic variant.
+    candidates.sort((a, b) => a.length - b.length || a.localeCompare(b));
+    return candidates[0];
 }
 
 /**

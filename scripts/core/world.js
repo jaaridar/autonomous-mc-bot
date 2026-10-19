@@ -351,6 +351,25 @@ for (const [block, drops] of [
     ["warped_hyphae", "warped_stem"],
     ["bamboo_block", "bamboo_block"],
     ["bamboo_mosaic", "bamboo_mosaic"],
+    // Efficient-Bot port: flowers and moss - cheap hand harvests that unlock
+    // the dye and moss recipes the expansion adds.
+    ["dandelion", "dandelion"],
+    ["poppy", "poppy"],
+    ["blue_orchid", "blue_orchid"],
+    ["allium", "allium"],
+    ["azure_bluet", "azure_bluet"],
+    ["red_tulip", "red_tulip"],
+    ["orange_tulip", "orange_tulip"],
+    ["white_tulip", "white_tulip"],
+    ["pink_tulip", "pink_tulip"],
+    ["oxeye_daisy", "oxeye_daisy"],
+    ["cornflower", "cornflower"],
+    ["lily_of_the_valley", "lily_of_the_valley"],
+    ["sunflower", "sunflower"],
+    ["lilac", "lilac"],
+    ["rose_bush", "rose_bush"],
+    ["peony", "peony"],
+    ["moss_block", "moss_block"],
 ]) {
     MINE["minecraft:" + block] = {
         drops: "minecraft:" + drops,
@@ -362,6 +381,11 @@ for (const [block, drops] of [
 MINE["#logs"] = { drops: "#logs", tool: "axe", tier: 0 };
 MINE["minecraft:gravel"] = { drops: "minecraft:gravel", tool: "shovel", tier: 0 };
 MINE["minecraft:dirt"] = { drops: "minecraft:dirt", tool: "shovel", tier: 0 };
+// Efficient-Bot port: soft blocks the acquire table routes to (sand for glass,
+// clay for bricks, dripstone for building).
+MINE["minecraft:sand"] = { drops: "minecraft:sand", tool: "shovel", tier: 0 };
+MINE["minecraft:red_sand"] = { drops: "minecraft:red_sand", tool: "shovel", tier: 0 };
+MINE["minecraft:clay"] = { drops: "minecraft:clay_ball", tool: "shovel", tier: 0 };
 MINE["minecraft:crying_obsidian"] = { drops: "minecraft:crying_obsidian", tool: "pickaxe", tier: 4 };
 MINE["minecraft:obsidian"] = { drops: "minecraft:obsidian", tool: "pickaxe", tier: 4 };
 for (const [block, drops, tier] of [
@@ -373,6 +397,7 @@ for (const [block, drops, tier] of [
     ["diorite", "diorite", 1],
     ["granite", "granite", 1],
     ["tuff", "tuff", 1],
+    ["pointed_dripstone", "pointed_dripstone", 1],
     ["coal_ore", "coal", 1],
     ["deepslate_coal_ore", "coal", 1],
     ["copper_ore", "raw_copper", 2],

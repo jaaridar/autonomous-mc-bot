@@ -1,5 +1,7 @@
 // One module now: core/recipes.js + core/survival.js + core/transfer.js (see docs/ARCHITECTURE.md).
 import { toolTier } from "./world.js";
+import { expansionRecipeFor } from "./craft-plan.js";
+import { acquireRoute } from "./acquire.js";
 
 // ---------------------------------------------------------------- recipes.js
 
@@ -245,25 +247,48 @@ export function nextStep(target, amount, stock, table, seen = new Set()) {
         return { kind: "gather", item: "#logs", count: Math.max(short, gatherBatch("#logs")) };
     }
     const r = RECIPES.find((r) => r.output === target);
-    if (!r) {
-        const tier = GATHER_TIER[target];
-        if (tier !== undefined) {
-            const hasTool = Object.keys(stock).some((k) => k.endsWith("_pickaxe") && stock[k] > 0 && toolTier(k) >= tier);
-            if (!hasTool) return nextStep(id(tier <= 1 ? "wooden_pickaxe" : tier === 2 ? "stone_pickaxe" : "iron_pickaxe"), 1, stock, table, seen);
-            return { kind: "gather", item: target, count: Math.max(amount - amountOf(stock, target), gatherBatch(target)) };
+    if (r) {
+        if (r.table && !table) {
+            if ((stock[id("crafting_table")] ?? 0) > 0) return { kind: "placeTable" };
+            return nextStep(id("crafting_table"), 1, stock, table, seen);
         }
-        // Fallback: if it looks like a log, gather #logs instead of blocking
-        if (String(target).includes("_log") || String(target).includes("_stem") || String(target).includes("bamboo")) {
-            return { kind: "gather", item: "#logs", count: Math.max(amount - amountOf(stock, "#logs"), gatherBatch("#logs")) };
+        for (const [type, n] of Object.entries(r.ingredients)) if (amountOf(stock, type) < n) return nextStep(type, n, stock, table, seen);
+        return { kind: "craft", item: target };
+    }
+    const tier = GATHER_TIER[target];
+    if (tier !== undefined) {
+        const hasTool = Object.keys(stock).some((k) => k.endsWith("_pickaxe") && stock[k] > 0 && toolTier(k) >= tier);
+        if (!hasTool) return nextStep(id(tier <= 1 ? "wooden_pickaxe" : tier === 2 ? "stone_pickaxe" : "iron_pickaxe"), 1, stock, table, seen);
+        return { kind: "gather", item: target, count: Math.max(amount - amountOf(stock, target), gatherBatch(target)) };
+    }
+    // Efficient-Bot port: known world sources. A mob drop (string from a
+    // spider) beats a contrived recipe (string from a cobweb), so mob routes
+    // are consulted before the harvested recipes; block routes only exist when
+    // the miner's MINE table can actually reach the item.
+    const route = acquireRoute(target, stock);
+    if (route?.kind === "mob") {
+        const short = Math.max(amount - amountOf(stock, target), 0);
+        return { kind: "acquire", item: target, method: route.method, mobs: route.mobs, count: Math.max(short, 1) };
+    }
+    const expansion = expansionRecipeFor(target);
+    if (expansion) {
+        if (expansion.table && !table) {
+            if ((stock[id("crafting_table")] ?? 0) > 0) return { kind: "placeTable" };
+            return nextStep(id("crafting_table"), 1, stock, table, seen);
         }
-        return { kind: "blocked", reason: `No acquisition skill for ${target}; supply it manually.` };
+        for (const [type, n] of Object.entries(expansion.ingredients)) if (amountOf(stock, type) < n) return nextStep(type, n, stock, table, seen);
+        return { kind: "craft", item: target };
     }
-    if (r.table && !table) {
-        if ((stock[id("crafting_table")] ?? 0) > 0) return { kind: "placeTable" };
-        return nextStep(id("crafting_table"), 1, stock, table, seen);
+    if (route?.kind === "block") {
+        if (route.needTool) return nextStep(route.needTool, 1, stock, table, seen);
+        const count = Math.max(amount - amountOf(stock, target), gatherBatch(target), 1);
+        return { kind: "acquire", item: target, method: route.method, blocks: route.blocks, count };
     }
-    for (const [type, n] of Object.entries(r.ingredients)) if (amountOf(stock, type) < n) return nextStep(type, n, stock, table, seen);
-    return { kind: "craft", item: target };
+    // Fallback: if it looks like a log, gather #logs instead of blocking
+    if (String(target).includes("_log") || String(target).includes("_stem") || String(target).includes("bamboo")) {
+        return { kind: "gather", item: "#logs", count: Math.max(amount - amountOf(stock, "#logs"), gatherBatch("#logs")) };
+    }
+    return { kind: "blocked", reason: `No acquisition skill for ${target}; supply it manually.` };
 }
 
 // ---------------------------------------------------------------- survival.js

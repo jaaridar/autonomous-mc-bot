@@ -563,3 +563,41 @@ Fix (all in `bot.js`, `m.returning` branch):
 - Worlds re-synced: full 86-file refresh (world copies were older revisions);
   hashes now identical across workspace + `41XyVhZFztw=`, `GIlG3GVSpfA=`,
   `R-MXmy0oSpg=`. `/reload` or world re-entry required.
+
+## Efficient-Bot port - 1.3.0 (2026-10-19) - recipes + honest acquisition routes
+
+Ported what fits from github.com/Efficient123/Efficient-Bot (commit 29fff0e7).
+Full write-up: docs/MIGRATION.md.
+
+- Data companions (generated, attribution headers): `core/data/recipes-efficient.js`
+  (231 crafting-table recipes / 224 outputs, +12 smelt pairs) and
+  `core/data/acquire.js` (68 item -> source routes, 16 mob drops). Extractor:
+  `tools/migrate/extract-efficient-bot.mjs` (re-run to regenerate; prints skip stats).
+- Curation: concrete ids only; pseudo ids (planks/logs/boat/wool/dye, generic
+  sign/fence_gate/wooden_door) dropped; typos repaired (darkoak_sign, sugarcane);
+  recipes whose output the furnace already produces dropped (ingot loops);
+  tool/ore smelts dropped; a block route is offered only when MINE actually
+  drops the item (flint stays blocked; apple/melon stay blocked).
+- Core: new `core/acquire.js` (mineBlocksFor + acquireRoute with tool gating);
+  `craft-plan.js` recipesFor/smeltSource consult the companions (data wins) and
+  export `expansionRecipeFor()` in executor shape; `nextStep()` order is
+  hand recipe -> GATHER_TIER -> mob route -> expansion recipe -> block route ->
+  log fallback -> blocked.
+- Runtime: `bot.craft()` falls back to expansionRecipeFor (new items are
+  executable, not just plannable); `obtain()` executes the new `acquire` step -
+  block routes reuse the miner, mob routes run find/chase/melee/wait-for-drop
+  (settings.hunting gate, 2400-tick honest timeout -> blockedTask, counts the
+  bag, never assumes kill credit); `cancelWork()` clears the acquire state.
+- MINE gained sand/red_sand/clay/moss_block/pointed_dripstone + common flowers
+  so the new routes have a real basis.
+- Skipped (documented in MIGRATION.md): HPA*/superDistant pathfinding,
+  spatialIdentifier, fake mine/place + explore/biomeLoc, stonecutter stations,
+  loot/brush routes, engine-facing code (upstream targets 2.8.0-beta/1.26).
+- Upstream ships NO LICENSE; only factual data was re-authored, no code copied.
+
+### Verified
+- `node tools/run-all.mjs` - all gates + unit + skills + must-fail fixture pass;
+  new tests.mjs section "efficient-bot port (recipes, acquire, smelts)":
+  32 passed, 0 failed (hygiene, family refs, smelt shadowing, nextStep
+  integration, tool gating, honest refusals, planCraft over every output).
+- manifest 1.2.9 -> 1.3.0 (name/description updated).

@@ -1,5 +1,6 @@
 import { Arbiter, TaskFault, blockedTask } from "../core/arbiter.js";
 import { needsQuickTool } from "../core/combat.js";
+import { expansionRecipeFor } from "../core/craft-plan.js";
 import { retainScore } from "../core/knowledge.js";
 import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, horizontal, key } from "../core/math.js";
 import { sanitizePrefs } from "../core/memory.js";
@@ -961,7 +962,7 @@ export class Bot {
             if (!colour) throw Error("No 3 wool of one colour in the bag (beds cannot mix colours).");
             item = colour;
         }
-        const r = RECIPES.find((r) => r.output === item);
+        const r = RECIPES.find((r) => r.output === item) ?? expansionRecipeFor(item);
         if (!r) throw Error("Recipe not supported.");
         try {
             craft(this.bag, r, batches, this.terrain.tableNear(this.sim.location));
@@ -3746,7 +3747,7 @@ export class Bot {
         this.bag.weapon(); this.sim.lookAtEntity(golem); this.sim.attackEntity(golem); run.lastHit = tick; run.hits++; run.backoffUntil = tick + 28;
     }
     home() { return this.memory?.home() ?? this.anchor ?? this.sim.location; }
-    cancelWork() { this.stopActions(); this.mining = undefined; this.workKey = ""; this.explorer.reset(); }
+    cancelWork() { this.stopActions(); this.mining = undefined; this.acquire = undefined; this.workKey = ""; this.explorer.reset(); }
     // Ultra efficient counts cache per tick
     getCountsCached(tick) {
         if (this._countsCacheTick !== tick) {
@@ -3772,6 +3773,7 @@ export class Bot {
         }
         if (amountOf(this.getCountsCached(tick), target) >= amount) { this.cancelWork(); return true; }
         if (this.mining) { if (this.mine(this.mining, tick)) { this.mining = undefined; this.stopActions(); } return false; }
+        if (this.acquire) { this.acquireStep(tick); return false; }
 
         // GOAL DECOMPOSITION: structured hierarchy with tagged requirements
         try {
@@ -3789,7 +3791,8 @@ export class Bot {
         const tableBlock = this.tablePosition ? this.terrain.block(this.tablePosition) : undefined;
         if (tableBlock && tableBlock.typeId !== id("crafting_table")) this.tablePosition = undefined;
         const step = nextStep(target, amount, this.getCountsCached(tick), nearTable || !!this.tablePosition);
-        if (step.kind === "craft" && RECIPES.find((r) => r.output === step.item)?.table && !nearTable && this.tablePosition) {
+        const stepRecipe = RECIPES.find((r) => r.output === step.item) ?? expansionRecipeFor(step.item);
+        if (step.kind === "craft" && stepRecipe?.table && !nearTable && this.tablePosition) {
             const spots = CARDINAL.map((d) => add(this.tablePosition, d));
             const chosen = spots.find((p) => this.terrain.safe(p)) ?? spots[0];
             if (this.nav.go(center(chosen), tick) !== "failed") { this.reason = "Returning to remembered crafting table"; return false; }
@@ -3801,6 +3804,7 @@ export class Bot {
             case "done": return true;
             case "blocked": this.blockTask(step.reason); break;
             case "gather": this.mining = this.newMining(step.count, undefined, step.item); break;
+            case "acquire": this.beginAcquire(step, tick); break;
             case "craft": this.craft(step.item); break;
             case "placeTable": this.placeTable(tick); break;
         }
@@ -3841,6 +3845,77 @@ export class Bot {
         try { this.sim.lookAtBlock(this.host.relative(ground)); } catch {}
         if (!this.sim.useItemInSlotOnBlock(slot, this.host.relative(ground))) { this.blockTask("Table placement rejected."); return; }
         this.pendingTable = { p, tick };
+    }
+    /**
+     * Acquisition (Efficient-Bot port). core/recipes.js returns
+     * { kind: "acquire", blocks | mobs } for items with no recipe: block
+     * routes reuse the miner (the MINE table decides reachability), mob routes
+     * run an honest find/chase/melee/loot loop. The step is only complete when
+     * the count in the bag has actually risen - never assumed kill credit.
+     */
+    beginAcquire(step, tick) {
+        if (step.blocks) { this.mining = this.newMining(step.count, undefined, step.item); return; }
+        if (!this.settings.hunting) { this.blockTask(`Hunting is disabled; cannot gather ${step.item.replace("minecraft:", "")} from mobs.`); return; }
+        const mobs = step.mobs ?? [];
+        this.acquire = {
+            item: step.item, mobs: new Set(mobs), need: step.count,
+            start: amountOf(this.getCountsCached(tick), step.item),
+            since: tick, target: undefined, targetSince: 0, blocked: new Map(),
+            lastAttack: 0, dropAt: 0, dropPos: undefined,
+        };
+        this.reason = `Hunting ${mobs.map((m) => m.replace("minecraft:", "")).join("/")} for ${step.item.replace("minecraft:", "")}`;
+    }
+    acquireStep(tick) {
+        const a = this.acquire;
+        if (!a) return;
+        const gained = amountOf(this.getCountsCached(tick), a.item) - a.start;
+        if (gained >= a.need) { this.record(`Acquired ${a.item} x${gained} from mobs`); this.acquire = undefined; return; }
+        if (tick - a.since > 2400) {
+            const mob = (a.mobs.values().next().value ?? "target").replace("minecraft:", "");
+            this.acquire = undefined;
+            this.blockTask(`No ${mob} reachable to get ${a.item.replace("minecraft:", "")}; giving up honestly.`);
+            return;
+        }
+        if (a.target && (!a.target.isValid || (a.target.getComponent("minecraft:health")?.currentValue ?? 1) <= 0)) {
+            a.dropPos = { ...a.target.location }; a.dropAt = tick + 30; a.target = undefined; this.nav.reset();
+        }
+        if (tick < a.dropAt) {
+            this.reason = "Waiting for the drop";
+            if (a.dropPos) this.navTo(a.dropPos, tick, 1);
+            return;
+        }
+        if (!a.target) {
+            let best; let bestD = Infinity;
+            for (const e of this.sim.dimension.getEntities({ location: this.sim.location, maxDistance: 32, families: ["mob"] })) {
+                if (!e.isValid || !a.mobs.has(e.typeId) || (a.blocked.get(e.id) ?? 0) > tick) continue;
+                const d = distance(e.location, this.sim.location);
+                if (d < bestD) { bestD = d; best = e; }
+            }
+            if (best) { a.target = best; a.targetSince = tick; }
+            else {
+                const mob = (a.mobs.values().next().value ?? "target").replace("minecraft:", "");
+                this.reason = `Searching for ${mob} (${a.item.replace("minecraft:", "")})`;
+                this.explorer.step(this.sim.location, this.home(), tick, this.terrain, this.nav, Math.min(96, this.settings.range ?? 96));
+                return;
+            }
+        }
+        const t = a.target;
+        if (tick - a.targetSince > 600) { a.blocked.set(t.id, tick + 1200); a.target = undefined; this.nav.reset(); return; }
+        const gap = distance(this.sim.location, t.location);
+        if (gap > 2.4) {
+            this.reason = `Chasing ${t.typeId.replace("minecraft:", "")} (${Math.round(gap)} blocks)`;
+            const r = this.navTo(t.location, tick, 2.2);
+            if (r === "failed" || r === "blocked") { a.blocked.set(t.id, tick + 600); a.target = undefined; }
+            return;
+        }
+        this.nav.reset();
+        if (!this.terrain.line(this.sim.getHeadLocation(), t.getHeadLocation())) { a.blocked.set(t.id, tick + 200); a.target = undefined; return; }
+        if (tick - a.lastAttack < 14) return;
+        this.bag.weapon();
+        this.sim.lookAtEntity(t);
+        try { this.sim.attackEntity(t); } catch (e) { this.fault(e); }
+        a.lastAttack = tick;
+        this.reason = `Hunting ${t.typeId.replace("minecraft:", "")}`;
     }
     mission() {
         const at = (p) => `(${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)})`;
