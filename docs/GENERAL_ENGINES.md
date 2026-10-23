@@ -1,11 +1,11 @@
-# Verdant Bot — general engines (v1.3.0)
+# Verdant Bot — general engines (v1.3.1)
 
 The bot used to answer "what do I do about this mob / this item / this danger?"
 with tables and if-chains: 40 mob branches in combat, ~60 handwritten recipes,
 80 named survival scenarios. That works until the case is new — a mob the table
 has not seen, an item nobody added, two dangers at once.
 
-v1.3.0 replaces the tables with four small engines that take inputs and compute
+v1.3.1 replaces the tables with four small engines that take inputs and compute
 an answer. Nothing here invents game content: they choose *which* real action to
 take, using what the world actually reports.
 
@@ -17,7 +17,7 @@ core/needs.js ────────┘ survival: which need is most urgent an
 ```
 
 All four are pure (no `@minecraft/*`), which is why they can be tested exhaustively
-offline. `tools/general.test.mjs` covers 114 cases.
+offline. `tools/general.test.mjs` covers 126 cases.
 
 ---
 
@@ -128,7 +128,37 @@ The runtime uses it: `core/recipes.js` merges the generated book into `RECIPES`,
 "unsupported"), and `obtain()` executes a new `smelt` step through the survival
 director. `!bot recipe <item>` prints the plan in chat.
 
-## 4. Survival: `core/needs.js`
+## 4. Autonomous Nether expedition: `core/expedition.js` + `runtime/expedition.js`
+
+`!bot auto` already starts survival mode; v1.3.1 adds an expedition director to
+that loop, so the bot does not need a manual `!bot nether` command. Every 40
+ticks it assesses whether the trip is safe and useful. `core/expedition.js` is
+the pure readiness model: it checks health, food, pickaxe tier, ignition, an
+obsidian/known-portal/bucket path, hostiles, water/lava/fire/fall, dimension,
+trip state, cooldown, and the operator's `autoNether` setting. It returns an
+ordered blocker list and a preparation plan. `runtime/expedition.js` only
+initiates a trip when that model is ready and the combat planner does not advise
+retreat. It delegates portal discovery/build/light/transit/return to the
+existing `PortalTraveler` rather than duplicating those mechanisms.
+
+The default readiness threshold is intentionally conservative: health ≥14,
+food ≥6 items, a stone-tier-or-better pickaxe, and a real ignition route. A
+bucket + water qualifies as a way to make obsidian; otherwise the bot needs 10
+obsidian or a known portal. During preparation, survival and its existing
+resource/crafting directors remain in charge; the expedition director never
+fabricates materials or mines through an unsafe hazard. It does not abandon an
+active mining task or walk away from nearby hostiles. Trips are separated by a
+cooldown to avoid repeated portal churn. `!bot status` includes readiness,
+blockers, provisions, trips and failures; `!bot config nether off` suppresses
+autonomous starts (manual `!bot nether` remains available).
+
+The design goal is to remove the human launch step, not to claim guaranteed
+success: the Minecraft engine may reject a block interaction, portal transit
+may require the travel fallback, and a world can contain an unresolvable
+terrain/portal situation. In those cases the existing anti-stuck and travel
+retry logic reports the failure; no offline test can prove live-world success.
+
+## 5. Survival: `core/needs.js`
 
 Instead of 80 named scenarios, the engine ranks **needs by severity**:
 

@@ -109,7 +109,7 @@ vanilla way — by walking over them:
 - Only items inside loaded chunks are visible; beyond the ticking area and the
   owner's loaded chunks the script cannot see the world at all.
 
-## General engines (v1.3.0)
+## General engines (v1.3.1)
 
 The bot no longer answers "what now?" from tables of special cases. Four pure
 engines decide, and the runtime executes:
@@ -171,7 +171,22 @@ long trips and dead ends to a second, wider planner inspired by
 `!bot config pathdig off` / `pathbridge off` stop the planner from proposing
 tunnels or bridges; `!bot config parkour off` disables gap jumps.
 
-## Autonomous Nether travel (v1.2.8)
+## Autonomous Nether travel (v1.3.1)
+
+When `!bot auto` is running, the expedition director can start the trip on its
+own; no `!bot nether` command is needed. It waits for the bot to be healthy,
+fed, equipped with a stone-tier pickaxe and able to ignite a portal, and for
+nearby threats/hazards to clear. It then hands control to the same verified
+portal traveler used by the manual command. Use `!bot status` to inspect its
+readiness and blockers; `!bot config nether off` disables autonomous starts.
+
+This is autonomous *attempting*, not an absolute guarantee: Bedrock may reject
+interactions, portal generation/transit is engine-owned, and no live world is
+available in this repository to prove the whole trip succeeds on every terrain.
+Failed steps are reported and retried with backoff; the bot does not fabricate
+items or bypass hazards.
+
+### Portal traveler implementation (v1.2.8)
 
 `!bot nether` (or the speedrun director once it has obsidian and ignition) runs
 a real trip with no further input:
@@ -287,7 +302,7 @@ jump-over options, dig/bridge/pillar edges, budgets, slicing, smoothing and the
 anti-stuck ladder. `tools/travel.test.mjs` (88 tests) covers portal geometry and
 validation, anchor/arrival selection, travel decisions, the pathfinder service
 and navigator handoff, and a full fake-engine build → light → enter → arrive →
-return Nether round trip. `tools/general.test.mjs` (114 tests) covers mob
+return Nether round trip. `tools/general.test.mjs` (126 tests) covers mob
 inference, the combat planner (single mobs, swarms, archers, creepers, bosses,
 modded monsters), the generated recipe book and acquisition plans, the needs
 engine, and the runtime wiring.

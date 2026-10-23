@@ -1,5 +1,5 @@
 /**
- * Offline tests for the general engines added in v1.3.0:
+ * Offline tests for the general engines added in v1.3.1:
  *   core/mobs.js        declarative + inferred mob knowledge
  *   core/combat-plan.js damage-race engagement planner for arbitrary groups
  *   core/recipe-book.js generated recipes and the acquisition graph
@@ -32,6 +32,8 @@ import {
     SMELT,
 } from "./load/scripts/core/recipe-book.js";
 import { rankNeeds, NeedsEngine, NEEDS } from "./load/scripts/core/needs.js";
+import { assessExpedition, provisionStep, pickaxeTier, foodCount } from "./load/scripts/core/expedition.js";
+import { ExpeditionDirector } from "./load/scripts/runtime/expedition.js";
 import { findRecipe as mergedRecipe, nextStep, RECIPES } from "./load/scripts/core/recipes.js";
 import { getMobStat } from "./load/scripts/core/combat.js";
 import { isAnyLog } from "./load/scripts/core/recipes.js";
@@ -379,6 +381,55 @@ const needCtx = (over = {}) => ({
     check("wiring: combat evaluate returns a plan", !!evalRes.plan && typeof evalRes.plan.action === "string", evalRes.plan?.action);
     check("wiring: combat keeps the legacy fields", typeof evalRes.shouldRetreat === "boolean" && !!evalRes.assessment);
     check("wiring: no hostiles means hold", evalRes.plan.action === "hold", evalRes.plan.action);
+}
+
+// Autonomous Nether expedition readiness is a pure model; it must not leave
+// until essentials and local safety constraints are satisfied.
+{
+    const readyCtx = { counts: { "minecraft:stone_pickaxe": 1, "minecraft:flint_and_steel": 1, "minecraft:obsidian": 10, "minecraft:bread": 8 }, health: 20, maxHealth: 20, dimension: "minecraft:overworld", tick: 1000, hostiles: 0, allowNether: true };
+    const ready = assessExpedition(readyCtx);
+    check("expedition: ready when equipped, fed, healthy", ready.ready === true, ready.reason);
+    check("expedition: stone pickaxe is tier 2", pickaxeTier(readyCtx.counts) === 2);
+    check("expedition: food counts stack amounts", foodCount(readyCtx.counts) === 8);
+    const unsafe = assessExpedition({ ...readyCtx, hostiles: 2 });
+    check("expedition: nearby hostiles block departure", !unsafe.ready && unsafe.blockers[0].id === "combat");
+    const missing = assessExpedition({ ...readyCtx, counts: { "minecraft:bread": 1 }, health: 8 });
+    check("expedition: reports provision blockers", !missing.ready && missing.blockers.some((b) => b.id === "pickaxe"));
+    check("expedition: provision is executable step", provisionStep(missing)?.action === "eat");
+    check("expedition: no cross-dimension escape", !assessExpedition({ ...readyCtx, dimension: "minecraft:the_end" }).ready);
+    check("expedition: active travel suppresses duplicate trip", !assessExpedition({ ...readyCtx, travelActive: true }).ready);
+    const bucketCtx = { ...readyCtx, counts: { "minecraft:stone_pickaxe": 1, "minecraft:flint_and_steel": 1, "minecraft:bucket": 1, "minecraft:bread": 8 } };
+    check("expedition: bucket is a valid obsidian path", assessExpedition(bucketCtx).blockers.every((b) => b.id !== "obsidian"));
+    check("expedition: disabling auto Nether is honored", !assessExpedition({ ...readyCtx, allowNether: false }).ready);
+}
+
+// Runtime director delegates a safe departure to the existing PortalTraveler.
+{
+    let starts = 0;
+    const sim = {
+        location: { x: 0, y: 64, z: 0 },
+        dimension: { id: "minecraft:overworld" },
+        isInWater: false, isOnFire: false, isOnGround: true,
+        getComponent: (id) => id === "minecraft:health" ? { currentValue: 20, effectiveMax: 20 } : undefined,
+    };
+    const bot = {
+        mode: "survival", paused: false, blocked: false,
+        settings: { autoNether: true, assistedCrafting: true },
+        sim, mining: undefined, deepMiner: { active: false },
+        bag: {
+            counts: () => ({ "minecraft:stone_pickaxe": 1, "minecraft:flint_and_steel": 1, "minecraft:obsidian": 10, "minecraft:bread": 8 }),
+            hasFood: () => true,
+        },
+        terrain: { threatInfo: () => ({ list: [] }), typeAt: () => "minecraft:air" },
+        memory: { nearest: () => undefined },
+        travel: { active: false, state: "idle" },
+        travelTo: () => { starts++; return "started"; },
+        record: () => {}, tell: () => {},
+    };
+    const director = new ExpeditionDirector(bot);
+    check("expedition wiring: safe survival mode starts travel autonomously", director.tick(40) === true && starts === 1, director.reason);
+    const disabled = new ExpeditionDirector({ ...bot, settings: { autoNether: false } });
+    check("expedition wiring: disabled mode does not start travel", disabled.tick(40) === false);
 }
 
 console.log(`\ngeneral engines: ${pass} passed, ${fail} failed`);

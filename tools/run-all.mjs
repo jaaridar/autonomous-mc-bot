@@ -26,7 +26,7 @@ const steps = [
     { name: "core unit tests", file: "test.mjs" },
     { name: "pathfinder + anti-stuck tests (A*/bidir, dig/bridge/pillar, recovery ladder)", file: "pathfinder.test.mjs" },
     { name: "portal travel + pathfinder service tests", file: "travel.test.mjs" },
-    { name: "general engines (mobs, combat plan, recipe book, needs)", file: "general.test.mjs" },
+    { name: "general engines (mobs, combat plan, recipe book, needs, expedition)", file: "general.test.mjs" },
     { name: "brain layer tests (offline toy world + fuzz + mutation)", file: "brain.test.mjs" },
     { name: "survival capability tests", file: "test-capabilities.mjs" },
     { name: "walkable regex guard", file: "walkable.mjs" },

@@ -20,6 +20,7 @@ import { PathfinderService } from "./pathfinder.js";
 import { PortalTraveler } from "./portal-travel.js";
 import { StuckRecovery } from "./stuck-recovery.js";
 import { NetherExplorer } from "./nether-explore.js";
+import { ExpeditionDirector } from "./expedition.js";
 import { OVERWORLD, NETHER } from "../core/portal.js";
 // New advanced modules
 import { Builder } from "./builder.js";
@@ -109,6 +110,7 @@ export class Bot {
             pathDig: true,
             pathBridge: true,
             crossDimension: true,
+            autoNether: true,
         };
         Object.assign(this.settings, sanitizePrefs(memory?.prefs()) ?? {});
         this.mode = "idle";
@@ -200,6 +202,7 @@ export class Bot {
         this.nav.dig = (cell, tick) => this.digCell(cell, tick);
         this.travel = new PortalTraveler(this);
         this.netherExplore = new NetherExplorer(this);
+        this.expedition = new ExpeditionDirector(this);
         this.stuckRecovery = new StuckRecovery(this);
         this.lastDimension = sim.dimension.id;
         this.dimensionChanges = 0;
@@ -791,7 +794,6 @@ export class Bot {
         try { if (this.travel.tick(tick)) return; } catch (_e) { this.fault(_e); }
         // Nether behaviour once we are actually there (resources, leash, return).
         try { if (this.netherExplore.tick(tick)) return; } catch (_e) { this.fault(_e); }
-
         // World-class awareness: scan surroundings, remember important (iron ore, sheep, lava pools, structures)
         // STAGGERED: the directors self-throttle, but are not even consulted every tick.
         if (tick % 10 === 0) { try { this.awareness.tick(tick); } catch (_e) { this.fault(_e); } }
@@ -862,6 +864,9 @@ export class Bot {
             const shouldTickSurvival = (tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || (this.survivalMaster.fallStartY !== null);
             if (shouldTickSurvival && this.survivalMaster.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
+
+        // Autonomous expedition runs after survival emergencies have first refusal.
+        try { if (this.expedition?.tick(tick)) return; } catch (_e) { this.fault(_e); }
 
         // QUICK TOOL PRIORITY #1 - NEVER FIGHT BARE HAND
         if (tick - this.lastQuickToolCheck > 40) {
@@ -2964,6 +2969,7 @@ export class Bot {
             uptimeTicks: system.currentTick - this.startedTick, stage: this.stage, events: this.log,
             advanced: { deepMining: this.deepMiner.active ? this.deepMiner.phase : "inactive", lootingTrips: this.looting.trips, builder: this.builder.canBuild ? "ready" : "no-blocks" },
             travel: this.travel.report(),
+            expedition: this.expedition?.report?.() ?? null,
             pathfinder: this.pathfinder.report(),
             combat: this.combat?.planSummary ?? null,
             needs: this.survivalMaster?.lastNeed || null,

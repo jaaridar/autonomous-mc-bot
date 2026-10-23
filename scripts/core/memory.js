@@ -94,6 +94,7 @@ const BOOL_PREFS = [
     "pathDig",
     "pathBridge",
     "crossDimension",
+    "autoNether",
 ];
 /** Whitelisted, type-checked operator preferences; unknown keys are dropped. */
 export function sanitizePrefs(raw) {

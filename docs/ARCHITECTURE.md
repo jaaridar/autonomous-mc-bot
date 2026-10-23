@@ -1,4 +1,4 @@
-# Verdant Bot — architecture v1.3.0 General Engines + Pathfinder + Autonomous Nether
+# Verdant Bot — architecture v1.3.1 General Engines + Pathfinder + Autonomous Nether
 
 Where things live, who owns what, and the rules that keep the bot honest.
 If you are adding a feature, find its layer here first.
@@ -19,10 +19,11 @@ If you are adding a feature, find its layer here first.
   - `memory.js` — persistent memory schema, prefs sanitization
   - `survival.js` — food fuel tables
   - `recovery.js`, `transfer.js`, `commands.js`
-  - **NEW v1.3.0 General engines (see `docs/GENERAL_ENGINES.md`):**
+  - **NEW v1.3.1 General engines (see `docs/GENERAL_ENGINES.md`):**
     - `mobs.js` — archetype table (melee/brute/archer/crossbow/bomber/leaper/teleporter/fire_ranged/flying_bomber/potion/summoner/flyer/aquatic/turret/splitter/swarm/heavy/boss), ordered name inference and engine `type_family` hints for unknown/modded ids, traits + drops per mob, `dropIndex` for the item graph
     - `combat-plan.js` — `normalizeThreats`, `threatTiming` (arrival/dps), `evaluateGroup` (incomingDps, burst, ttk, ttd, confidence, shield mitigation, melee queueing), `focusScore` kill order, `escapeVector`, `surrounded`, `planEngagement` (engage/kite/shield_advance/cover/retreat/flee/tower/hold)
     - `recipe-book.js` — generated recipe families (tools × materials, armour × materials, 12 woods, 16 wool colours, utility blocks), `SMELT` table, `matchesTag`, `sources`, `plan` (virtual-inventory acquisition graph: craft/smelt/gather/kill/loot), `explain`
+    - `expedition.js` — pure readiness model for autonomous Nether departures: health/food/tools/ignition/portal path/threats/cooldowns; `runtime/expedition.js` provisions via existing skills and starts PortalTraveler only after safety gates pass
     - `needs.js` — 14 needs with formula severities (breathe/lava/burning/falling/suffocating/combat/heal/starving/exposure/darkness/tooling/unarmed/inventory/lost), capability filtering, `rankNeeds`, `NeedsEngine` (arbiter hysteresis + cooldowns + emergency pre-emption)
   - **v1.2.8 Pathfinding & travel:**
     - `pathfinder.js` — safety-checked A* + bidirectional A* adapted from nox7's Pathfinder (Apache-2.0). `checkSafety` (IsSafe / CanSafelyFallFrom / CanSafelyJumpOnto), option surface (ignore, passable overrides, unjumpable types, Y-axis flood, dig/bridge/pillar edges), `PathFinder`/`BidirectionalPathFinder` with closed sets and generator slicing, `planPath`, `smoothPath`, bounded best-effort partials
@@ -166,7 +167,7 @@ If you are adding a feature, find its layer here first.
   verified. Teleport is used only as the portal-link fallback for a simulated
   player, not to skip survival work.
 
-## General decision flow (v1.3.0)
+## General decision flow (v1.3.1)
 
 ```
 threat eval ──> combat-plan.planEngagement ──> stance executed by Combat
