@@ -10,7 +10,8 @@ If you are adding a feature, find its layer here first.
   - `policy.js` — MINE table, hazards, hostiles, food
   - `recipes.js` — crafting, smelting dependencies
   - `ores.js` — ore Y-levels, bulk detection
-  - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, big drops, bridge cost)
+  - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, big drops, bridge cost); ignore-list, soul-sand penalty, fence/wall cannot-jump-over when strictSafety
+  - `pathfinder.js` — nox7-style bidirectional A* (meet-in-the-middle), BlockSafetyChecker port, chooseSearchMode, unstuckAction, relabelPath. Engine-free.
   - `blocks.js` — exhaustive Bedrock block taxonomy (passable, solid, falling, hazard, climbable, value scoring, obstruction detection)
   - `combat.js` — mob stats, threat scoring, tactics (kite/rush/retreat/pillar), strafe, crit windows
   - `loot.js` — chest loot scoring, valuable detection, junk filtering, upgrade logic
@@ -20,7 +21,7 @@ If you are adding a feature, find its layer here first.
   - `survival.js` — food fuel tables
   - `recovery.js`, `transfer.js`, `commands.js`
   - **NEW v1.2 Nether Speedrun:**
-    - `nether-strategy.js` — ROUTES ground_lava/cave_lava/ruined_portal/gather_ignition, evaluators with score distance size danger water, chooseNetherRoute time/feasibility balance, shouldRecalculate triggers village/ruined/lava_pool/useful_chest/hostile_group/obstacle, verifyPortalAction for 5 milestones
+    - `nether-strategy.js` — ROUTES ground_lava/cave_lava/ruined_portal/gather_ignition, evaluators with score distance size danger water, chooseNetherRoute time/feasibility balance, shouldRecalculate triggers village/ruined/lava_pool/useful_chest/hostile_group/obstacle, planPortalEntry walk-in state machine, verifyPortalAction for 5 milestones
     - `village-strategy.js` — VILLAGE_BENEFITS scores, FOOD_EFFICIENCY hay 90 bread 85, evaluateVillage distance penalty/bonus benefits, shouldCraftBedIndependently 3 wool + 3 planks sheep handling, evaluateVillageVsNetherRoute comparison
     - `golem-strategy.js` — GOLEM_STATS health 100 dmg 14 range 2.5 knockback 1.5 drop 3-5 iron, 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, evaluateGolemFight iron deficit health equipment terrain blocks water, chooseBestGolemStrategy, shouldDisengage, collectIronDrops bucket priority
     - `food-strategy.js` — FOOD_VALUES 12 foods, thresholds critical 6 low 10-14 safe 18, assessFoodReserves totalHunger/saturation, shouldEatBeforeFight dangerous fight check, shouldAvoidCombat critical health multiple mobs, prioritizeEscapeCoverSurvival, adjustTacticForHostile 10 mob types, reassessAfterDamage
@@ -32,7 +33,7 @@ If you are adding a feature, find its layer here first.
 
 - `scripts/runtime/` — engine adapters and the brain:
   - `bot.js` — the brain v6: tick order, mode dispatch, task objects, integrates all advanced modules including Nether speedrun world-class: survivalMaster -> quick tool #1 -> death recovery -> food readiness adaptive recalc -> nether director -> village director -> golem director -> food director -> bucket director -> structure loot -> lava pool portal opportunity -> threat eval escape/retreat/eat/combat -> mode dispatch, obstruction clearing, scaffolding, retain important
-  - `navigation.js` — `Navigator`: rolling-horizon A* with parkour + bridging awareness, loop detection, threat avoidance, builder integration
+  - `navigation.js` — `Navigator`: rolling-horizon A* / bidirectional A* (mid-range), parkour + bridging, swim-to-shore instead of failing in water, unstuck (jump/sidestep/pillar/dig), ignore exhausted cells, loop detection, threat avoidance, builder integration
   - `builder.js` — `Builder`: bridging (find support, place with sneak), pillaring (jump-place), scaffolding, torch placement, obstruction clearing, portal frame 4x5 interior 2x3 min 10 full 14
   - `combat.js` — `Combat`: tactical fighting (rush for ranged, retreat for creeper, kite for heavy, group positioning, crit jump, strafe)
   - `looting.js` — `Looting`: scored chest scanning (16 blocks), home avoidance, valuable-first withdraw, village detection via entities
@@ -49,7 +50,7 @@ If you are adding a feature, find its layer here first.
   - `foraging.js` — animal hunting
   - `inventory.js` / `hands.js` / `equipment.js` / `furnace.js` / `host.js` / `memory.js` / `exploration.js`
   - **NEW v1.2 Nether Speedrun:**
-    - `nether.js` — `NetherDirector`: world-class Nether entry decision system, bucket milestone check, water fill, ignition prefer-before-commit, evaluateNetherRoutes ground/cave/ruined/missing ignition, executeRoute build_portal_ground_lava/build_portal_cave_lava/repair_ruined_portal/gather_ignition, placeWaterOnLava water+source=obsidian, repairRuinedPortalFrame, buildPortal, ignitePortal, tryFillWaterBucket, countObsidianAround, hasCryingObsidianAround, findFlatGround, checkNewDiscoveries, getTimeOfDay
+    - `nether.js` — `NetherDirector`: world-class Nether entry decision system, bucket milestone check, water fill, ignition prefer-before-commit, evaluateNetherRoutes ground/cave/ruined/missing ignition, executeRoute build_portal_ground_lava/build_portal_cave_lava/repair_ruined_portal/gather_ignition, placeWaterOnLava water+source=obsidian, repairRuinedPortalFrame, buildPortal, ignitePortal, walkIntoPortal (stand in nether_portal, wait for teleport, retry), handleInNether (lava escape, keep working without the owner), tryFillWaterBucket, countObsidianAround, hasCryingObsidianAround, findFlatGround, checkNewDiscoveries, getTimeOfDay
     - `village.js` — `VillageDirector`: village-first strategy, min equipment for safe progression, food beds hay bales crafting loot, food sources best combo accessibility saturation hunger time efficiency, loot useful chests without wasting low-value, beds skip night when useful safe, wool wood craft bed independently sheep handling, compare distance risks vs immediate Nether route, findNearestVillage 128 with budget 800 block checks fast path awareness/structures, tryLocateVillage via /locate when permitted else legit detection, hay bale, bed, sheep, weapon tier
     - `golem.js` — `GolemDirector`: iron golem combat risk management, recognize golem evaluate fighting worthwhile iron equipment health terrain time, only when benefit justifies risk reliable combat plan, understand attack range movement LOS knockback ability reach elevated, evaluate protected elevated position terrain separation, avoid fall damage unexpected block access hostile hazards, reassess health positioning continuously disengage if unsafe, collect iron drops bucket priority, never mandatory if safer faster route, 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, hill doorway detection, platform building, retreat spot, safer faster route check
     - `food.js` — `FoodDirector`: food healing combat readiness, maintain sufficient exploration sprinting combat emergency recovery, track hunger health saturation availability replacement, before dangerous fight eat when necessary when safe, avoid critical health insufficient resources unless no safer alternative, prioritize escape cover survival vs multiple hostile unfavorable, recognize every hostile adjust tactics attack pattern range movement environmental advantages, after damage reassess
@@ -75,8 +76,11 @@ If you are adding a feature, find its layer here first.
 ## Movement rules v1.2
 
 - `Navigator` now supports: walk, step, drop, bigdrop (1-3), jump (1-gap), sprintjump (2-gap), jumpup, bridge (cost 8).
+- Mid-range goals (7–radius blocks) use **bidirectional A*** (nox7 Pathfinder); short hops stay direct; long trips stay rolling-horizon unidirectional; towers stay unidirectional.
+- Water no longer fails the search: swim to the nearest standable shore toward the goal.
+- Unstuck: jump, sidestep, pillar, dig-front, then ignore the exhausted cell and replan (up to 6 retries). Fences/walls are not jump-onto (strictSafety).
 - `allowBridge` true when builder has blocks; bridging tries to find solid neighbor support.
-- Loop detection: 5+ revisits in 6s or 8-11s travel with <1.5 approach.
+- Loop detection: 5+ revisits in 6s or 8-11s travel with <1.5 approach; now unstucks and replans before giving up.
 - `navTo(goal)` searches rings around goal (compass + 2x + up/down) for standable cells.
 - `Builder` owns all placement: `placeAt(target, anchor, {sneak, allowHazard, blockType})`, `bridge(dir)`, `pillar()`, `scaffoldTo()`, `buildPortalFrame(basePos)` 4x5 interior 2x3 min 10 full 14.
 - `Parkour` assists jumps: `canJumpGap`, `canStepUp`, `jump`, `sprintJump`, `climbIfNeeded`.

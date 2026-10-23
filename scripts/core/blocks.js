@@ -48,6 +48,16 @@ export const LEAVES_RE = /(leaves$)/;
 // Crops
 export const CROP_RE = /(wheat|carrots|potatoes|beetroots|melon_stem|pumpkin_stem|sweet_berry_bush|cocoa)/;
 
+/**
+ * Blocks an entity can never jump onto (fences, walls, panes). Standing on
+ * these traps the hitbox. From the nox7 Pathfinder BlockSafetyChecker
+ * TypeIdsThatCannotBeJumpedOver idea.
+ */
+export const CANNOT_JUMP_OVER_RE = /(_fence$|_fence_gate$|_wall$|iron_bars|_pane$|chain$|anvil|end_rod|lightning_rod|bell$|lantern$|stonecutter|grindstone|brewing_stand|hopper$|cauldron|azalea$)/;
+
+/** Slow / sticky support the pathfinder should prefer to walk around. */
+export const SLOW_TERRAIN_RE = /(soul_sand|soul_soil|honey_block|cobweb|sweet_berry_bush|slime_block)/;
+
 export function isPassable(typeId) {
     if (!typeId) return true;
     if (typeId === "minecraft:air" || typeId === "minecraft:cave_air" || typeId === "minecraft:void_air") return true;

@@ -31,3 +31,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+------------------------------------------------------------------------------
+Pathfinding techniques (bidirectional A*, block-safety classification:
+walk / safe-fall / jump-onto / cliff / cannot-jump-over fences) adapted from:
+
+  mc-bedrock-script-utilities Pathfinder + BlockSafetyChecker
+  https://github.com/nox7/mc-bedrock-script-utilities
+  Apache License 2.0
+  Copyright the mc-bedrock-script-utilities authors
+
+The original TypeScript sources are not vendored. The algorithms were
+reimplemented against this pack's engine-free cell model in
+scripts/core/pathfinder.js (see that file's header). The Apache License 2.0
+may be obtained from http://www.apache.org/licenses/LICENSE-2.0.

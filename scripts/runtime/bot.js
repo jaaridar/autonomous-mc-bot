@@ -199,6 +199,7 @@ export class Bot {
         this.previousThreatCount = 0;
         this.faultResumeAt = 0;
         this.lastErrorTick = 0;
+        try { this.lastDim = sim.dimension?.id ?? "minecraft:overworld"; } catch { this.lastDim = "minecraft:overworld"; }
         sim.addTag("verdant.bot");
         this.record("spawned advanced bot v2.0 nether speedrun world-class");
     }
@@ -716,18 +717,32 @@ export class Bot {
         // UI update - scoreboard + actionbar for spectating
         try { this.ui?.tick(tick); } catch (_e) { this.fault(_e); }
 
-        // Now supports full-game speedrun Overworld -> Nether -> End
-        if (owner.dimension.id !== this.sim.dimension.id) {
-            // Owner and bot in different dimensions - pause to avoid unattended mutation, but record
-            if (tick % 200 === 0) this.record(`Dimension mismatch: bot in ${this.sim.dimension.id}, owner in ${owner.dimension.id} - waiting for owner`);
-            // Only pause if owner is in overworld and bot in nether/end without owner following - actually allow if both in same non-overworld
-            if (this.sim.dimension.id === "minecraft:overworld" || owner.dimension.id === "minecraft:overworld") {
-                // One in overworld, one not - wait but don't shutdown permanently, retry
-                this.reason = `Dimension mismatch bot ${this.sim.dimension.id} vs owner ${owner.dimension.id} - waiting`;
-                return;
+        // Autonomous dimension travel: the bot walks through portals on its own.
+        // Owner being in another dimension is expected (they stay in the overworld
+        // while Verdant enters the Nether) — do not pause.
+        try {
+            const dim = this.sim.dimension;
+            const dimId = dim?.id;
+            if (dimId && dimId !== this.lastDim) {
+                this.lastDim = dimId;
+                this.terrain.dimension = dim;
+                try { this.terrain.cache?.clear?.(); this.terrain.handles?.clear?.(); this.terrain.memo?.clear?.(); } catch { /* ignore */ }
+                this.nav.dimension = dimId;
+                this.nav.reset();
+                this.record(`dimension change -> ${dimId}`);
+                if (dimId === "minecraft:nether") {
+                    this.nether.enteredNether = true;
+                    this.tell("Entered the Nether on my own.");
+                    this.reason = "Nether reached — surviving";
+                } else if (dimId === "minecraft:the_end") {
+                    this.tell("Entered the End.");
+                }
             }
-        }
-        // Allow all dimensions: overworld, nether, end - for full-game speedrun
+            if (this.nav) this.nav.dimension = dimId ?? this.nav.dimension;
+            if (owner.dimension.id !== dimId && tick % 200 === 0) {
+                this.record(`split dimensions: bot ${dimId}, owner ${owner.dimension.id} — continuing autonomously`);
+            }
+        } catch (_e) { this.fault(_e); }
         this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
 

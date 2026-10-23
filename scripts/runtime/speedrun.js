@@ -45,6 +45,7 @@ export class SpeedrunDirector {
         this.villageChecked = false;
         this.adaptiveRecalcCount = 0;
         this.verified = new Map();
+        this.portalIgnited = false;
     }
 
     reset(tick) {
@@ -65,6 +66,7 @@ export class SpeedrunDirector {
         this.villageChecked = false;
         this.adaptiveRecalcCount = 0;
         this.verified.clear();
+        this.portalIgnited = false;
     }
 
     phaseName() {
@@ -425,6 +427,22 @@ export class SpeedrunDirector {
 
     enterNether(tick, counts) {
         const b = this.bot;
+        try {
+            if (b.sim.dimension?.id === "minecraft:nether") {
+                b.reason = "Speedrun: IN THE NETHER - primary objective achieved";
+                if (!this.verified.has("nether_entry")) {
+                    b.record("NETHER ENTRY SUCCESS - primary objective achieved");
+                    this.verified.set("nether_entry", tick);
+                }
+                return true;
+            }
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+
+        if (this.portalIgnited) {
+            b.nether.ignited = true;
+            return b.nether.walkIntoPortal(tick);
+        }
+
         const hasFlintAndSteel = (counts["minecraft:flint_and_steel"] ?? 0) > 0;
         const hasFireCharge = (counts["minecraft:fire_charge"] ?? 0) > 0;
 
@@ -439,7 +457,6 @@ export class SpeedrunDirector {
             return false;
         }
 
-        // Verify ignition
         const slot = hasFlintAndSteel ? b.bag.find(s => s.typeId === "minecraft:flint_and_steel") : b.bag.find(s => s.typeId === "minecraft:fire_charge");
         if (slot < 0) return false;
 
@@ -451,14 +468,11 @@ export class SpeedrunDirector {
             const ok = b.sim.useItemInSlot(selected);
             this.ignitionTries++;
             if (ok) {
-                b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved, verify success`;
-                try { b.sim.moveToLocation(b.host.relative(center(interior))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-                // Verify entry
-                const verify = verifyPortalAction("ignite_portal", "ignited", counts);
-                if (verify.success) {
-                    b.record("NETHER ENTRY SUCCESS - primary objective achieved");
-                }
-                return true;
+                this.portalIgnited = true;
+                b.nether.ignited = true;
+                b.nether.portalPos = portalPos;
+                b.reason = `Speedrun: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Walking in`;
+                return b.nether.walkIntoPortal(tick) || true;
             }
             if (this.ignitionTries > 5) {
                 b.reason = "Speedrun: ignition failed after 5 attempts, checking frame";

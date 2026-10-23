@@ -24,6 +24,7 @@ const steps = [
     { name: "no-undef gate (missing imports + this.<field> typos)", file: "undef.mjs", args: ["scripts"] },
     { name: "import scan", file: "imports.mjs", args: ["scripts"] },
     { name: "core unit tests", file: "test.mjs" },
+    { name: "pathfinder (bidirectional A*, safety, unstuck, portal walk)", file: "pathfinder.test.mjs" },
     { name: "brain layer tests (offline toy world + fuzz + mutation)", file: "brain.test.mjs" },
     { name: "survival capability tests", file: "test-capabilities.mjs" },
     { name: "walkable regex guard", file: "walkable.mjs" },

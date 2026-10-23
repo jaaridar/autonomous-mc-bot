@@ -108,14 +108,16 @@ vanilla way — by walking over them:
 ## Performance notes
 
 - Memory writes only when information changed (per-sighting deduplication).
-- Terrain reads are cached; planner is time-sliced (A* steps per tick, not a
-  blocking search).
+- Terrain reads are cached; planner is time-sliced (A* / bidirectional A*
+  steps per tick, not a blocking search).
 - The observer sweep is bounded and staggered across ticks.
 
 ## Current limits
 
-- **Overworld only.** Nether/End travel is planned but not implemented; the bot
-  pauses rather than guess around dimensions.
+- **Nether entry is implemented.** The bot gathers iron, a bucket, water,
+  obsidian and flint-and-steel, builds or repairs a portal, ignites it and
+  walks in — and keeps working if you stay in the overworld. End-dimension
+  combat (dragon, boats-on-obsidian) is still planned.
 - Combat is melee with retreat logic; bow/shield work is planned.
 - No farming, enchanting, potions or villager trading yet.
 - A world reload ends the simulated player; see "Persistent memory".
@@ -128,7 +130,7 @@ structures/verdant/host.mcstructure   GameTest host structure
 scripts/
   main.js                      chat commands, event wiring, tick loop
   core/                        engine-free logic (unit-testable)
-    math, commands, policy, recipes, ores, navigation, survival, recovery, transfer, memory
+    math, commands, policy, recipes, ores, navigation, pathfinder, survival, recovery, transfer, memory
   runtime/                     engine-bound components
     bot, drops, scouting, host, navigation, mining, world, inventory, equipment,
     escape, furnace, foraging, exploration, survival, hands, memory
