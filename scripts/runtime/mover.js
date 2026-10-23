@@ -96,8 +96,16 @@ export class Mover {
 
     /** leftRight, forwardBack in player-local space. */
     moveRelative(leftRight, forward, speed = 1) {
-        return this.call("moveRelative", leftRight, forward, speed) !== undefined
-            || typeof this.sim.moveRelative === "function";
+        if (typeof this.sim.moveRelative !== "function") return false;
+        this.call("moveRelative", leftRight, forward, speed);
+        return true;
+    }
+
+    /** World-space direction (SimulatedPlayer.move). */
+    move(direction, speed = 1) {
+        if (typeof this.sim.move !== "function") return false;
+        this.call("move", direction, speed);
+        return true;
     }
 
     /**
@@ -118,6 +126,11 @@ export class Mover {
             : dest;
         if (this.walkTo(target, 1)) return "swim";
         if (this.moveRelative(0, 1, 1)) return "swim";
+        if (here) {
+            const dx = dest.x - here.x, dz = dest.z - here.z;
+            const len = Math.hypot(dx, dz) || 1;
+            if (this.move({ x: dx / len, y: headInWater ? 0.4 : 0, z: dz / len }, 1)) return "swim";
+        }
         return "swim";
     }
 }
