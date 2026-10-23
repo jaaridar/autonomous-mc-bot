@@ -1,6 +1,7 @@
 import { add, floor, distance, key, UP, DOWN, CARDINAL, COMPASS } from "../core/math.js";
 import { standable } from "../core/navigation.js";
-import { HAZARDS, HOSTILES, RANGED, EXPLOSIVE, threatRank } from "../core/policy.js";
+import { HAZARDS, HOSTILES } from "../core/policy.js";
+import { isHostile as isHostileMob, describe as describeMob } from "../core/mobs.js";
 
 const THREAT_RADIUS = 18;
 const NEAR6 = [UP, DOWN, ...CARDINAL];
@@ -382,6 +383,22 @@ export class Terrain {
      * get a copy, so mutating the result (think() prepends the attacker) can
      * not leak into the cache.
      */
+    /**
+     * Is this entity a threat? Vanilla ids are known; anything else is judged by
+     * the engine's own type family, so modded hostiles are not invisible.
+     */
+    hostileEntity(e) {
+        if (HOSTILES.has(e.typeId)) return true;
+        try {
+            if (e.matches?.({ families: ["monster"] })) return true;
+        } catch { /* older/newer engines may not support matches() */ }
+        try {
+            const family = e.getComponent?.("minecraft:type_family");
+            if (family?.hasTypeFamily?.("monster")) return true;
+        } catch { /* component may be unavailable on this entity */ }
+        return isHostileMob(e.typeId) && !/villager|golem/.test(e.typeId);
+    }
+
     threatInfo(bot, owner) {
         const now = this.now();
         const m = this._threat;
@@ -390,7 +407,7 @@ export class Terrain {
         }
         const loc = bot.location;
         const list = this.dimension.getEntities({ location: loc, maxDistance: THREAT_RADIUS + 4 })
-            .filter((e) => HOSTILES.has(e.typeId) && e.isValid &&
+            .filter((e) => this.hostileEntity(e) && e.isValid &&
                 (distance(e.location, loc) <= THREAT_RADIUS || (owner && distance(e.location, owner.location) <= 12)))
             .map((e) => ({ e, d: distance(e.location, loc) }))
             .sort((a, b) => a.d - b.d)
@@ -398,12 +415,14 @@ export class Terrain {
         let ranged = 0, explosive = 0, melee = 0, closest = Infinity, bombNear = false, underFire = false;
         for (const { e, d } of list) {
             if (d < closest) closest = d;
-            const rank = threatRank(e.typeId);
-            if (rank === 3) explosive++;
-            else if (rank === 2) ranged++;
+            // Trait-derived ranks: a modded ranged mob counts as ranged without
+            // being added to any list.
+            const profile = describeMob(e.typeId, { monster: true });
+            if (profile.explosive) explosive++;
+            else if (profile.ranged) ranged++;
             else melee++;
-            if (d < 5 && EXPLOSIVE.has(e.typeId)) bombNear = true;
-            if (d > 3 && RANGED.has(e.typeId)) underFire = true;
+            if (d < 5 && profile.explosive) bombNear = true;
+            if (d > 3 && profile.ranged) underFire = true;
         }
         const entities = list.map((x) => x.e);
         const info = { list: entities, nearest: entities[0], count: entities.length, ranged, explosive, melee, closest, bombNear, underFire };

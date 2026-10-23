@@ -18,6 +18,13 @@ before plus the Phase-0 fixes. See "Integration" for exactly what is left and wh
 > still not the running no-progress ladder — do not read the two as the same code.
 > `runtime/portal-travel.js` also owns Nether entry/return now, so item 6 below
 > ("delete the duplicate Nether planner") is still open for `speedrun.js` only.
+>
+> **v1.3.0** adds the general engines in `docs/GENERAL_ENGINES.md`
+> (`mobs.js`, `combat-plan.js`, `recipe-book.js`, `needs.js`). `needs.js` covers
+> the same ground as `drives.js` + `stuck.js` but is wired into the runtime
+> (`survival-master.js` runs it first); `brain/` remains the offline planner and
+> test bed it has always been. When the director chain is finally replaced, the
+> arbiter here is the intended target — `needs.js` already reuses it.
 
 ## Parts
 

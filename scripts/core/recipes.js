@@ -1,4 +1,16 @@
 import { toolTier } from "./policy.js";
+import {
+    findRecipe as findBookRecipe,
+    allRecipes as allBookRecipes,
+    smeltSources,
+    plan as planAcquisition,
+    explain as explainRecipe,
+    bookSize,
+    SMELT,
+    matchesTag,
+    WOODS as BOOK_WOODS,
+    WOOLS as BOOK_WOOLS,
+} from "./recipe-book.js";
 export const id = (s) => (s.includes(":") ? s : `minecraft:${s}`);
 const recipe = (output, amount, ingredients, table = false) => ({
     output: id(output),
@@ -47,8 +59,9 @@ export const WOOLS = [
 export function isAnyLog(typeId) {
     if (!typeId) return false;
     const t = String(typeId);
-    // Direct suffix check - ultra fast path
-    if (t.endsWith("_log") || t.endsWith("_stem") || t.endsWith("_wood") || t.endsWith("_hyphae") || t.includes("bamboo")) return true;
+    // Suffix check only: `bamboo` is a valid log but `bamboo_door` is not.
+    if (t === "minecraft:bamboo" || t === "minecraft:bamboo_block") return true;
+    if (t.endsWith("_log") || t.endsWith("_stem") || t.endsWith("_wood") || t.endsWith("_hyphae")) return true;
     // Fallback to WOODS list
     return WOODS.some((w) => t === id(w + "_log") || t === id(w + "_stem") || t === id(w + "_wood") || t === id(w + "_hyphae") || t === id(w + "_planks") || t === id("stripped_" + w + "_log"));
 }
@@ -140,6 +153,24 @@ export const RECIPES = [
     recipe("shield", 1, { "#planks": 6, iron_ingot: 1 }, true),
     recipe("bread", 1, { wheat: 3 }, true),
 ];
+/**
+ * Recipes the generated book knows that the curated list does not (copper and
+ * gold tools, every wood variant of doors/fences, beds in all 16 colours...).
+ * Static entries win on conflict, so behaviour for the old set is unchanged.
+ */
+for (const r of allBookRecipes()) {
+    if (!RECIPES.some((known) => known.output === r.output)) RECIPES.push(r);
+}
+
+/** Look a recipe up in the curated list, then in the generated book. */
+export function findRecipe(item) {
+    if (!item) return undefined;
+    return RECIPES.find((r) => r.output === item) ?? findBookRecipe(item);
+}
+
+/** Generated knowledge, re-exported for commands and diagnostics. */
+export { smeltSources, planAcquisition as planRecipe, explainRecipe as explainItem, bookSize, SMELT, matchesTag, BOOK_WOODS, BOOK_WOOLS };
+
 export function counts(inv) {
     const out = {};
     for (let i = 0; i < inv.size; i++) {
@@ -224,8 +255,17 @@ export function nextStep(target, amount, stock, table, seen = new Set()) {
         const short = Math.ceil((amount - amountOf(stock, target)) / 4);
         return { kind: "gather", item: "#logs", count: Math.max(short, gatherBatch("#logs")) };
     }
-    const r = RECIPES.find((r) => r.output === target);
+    const r = findRecipe(target);
     if (!r) {
+        // A furnace product (ingot, glass, cooked food): gather the input and
+        // hand the smelting to the survival director instead of failing.
+        const smelt = smeltSources(target)[0];
+        if (smelt) {
+            const batches = Math.max(1, Math.ceil((amount - amountOf(stock, target)) / smelt.amount));
+            const inputHave = amountOf(stock, smelt.input);
+            if (inputHave < batches) return nextStep(smelt.input, batches, stock, table, seen);
+            return { kind: "smelt", input: smelt.input, output: target, batches };
+        }
         const tier = GATHER_TIER[target];
         if (tier !== undefined) {
             const hasTool = Object.keys(stock).some((k) => k.endsWith("_pickaxe") && stock[k] > 0 && toolTier(k) >= tier);

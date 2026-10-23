@@ -1,56 +1,56 @@
 {
-  "format_version": 2,
-  "header": {
-    "name": "Verdant Bot 1.2.8 \u2022 Bedrock 1.21.114 \u2022 Autonomous Nether + Pathfinder",
-    "description": "1.2.8 PATHFINDER + FULLY AUTONOMOUS NETHER: new safety-checked A*/bidirectional A* core (core/pathfinder.js, adapted from nox7's Apache-2.0 Pathfinder technique) with closed-set duplicate suppression, BFS-free generator slicing, ignore/passable/jump-over option lists, Y-axis flood, dig/bridge/pillar edges, node budgets with best-effort partial routes and string-pulled smoothing. runtime/pathfinder.js gives the navigator a wide planner for long trips and after dead ends. New escalating anti-stuck ladder (core/anti-stuck.js + runtime/stuck-recovery.js): classifies suffocation/lava/drowning/cage/loop/stall/no-path/unloaded/portal, then replan -> dig/bridge/pillar -> relocate -> retreat -> honest safe pause. Fully autonomous dimension travel (core/portal.js + runtime/portal-travel.js): finds or builds a portal from real obsidian, lights it, walks in, verifies transit, falls back to the portal's own 1:8 coordinate link with a safe-arrival search, remembers the origin frame and can always return. Terrain, navigator and caches follow the bot between dimensions; crossDimension lets it keep working while the owner is elsewhere. Nether explorer gathers quartz/gold/fortress loot within a leash, returns when hurt/hungry/done. New commands: nether, overworld, travel, whereami, path; config pathdig/pathbridge/travel. 161 new offline tests (73 pathfinder/anti-stuck, 88 travel/service incl. a full fake-engine nether round trip). Keeps 1.2.7 SPEEDRUN FIX and the 1.2.6 efficiency work (A* 1200/r24, staggered directors, cached terrain/inventory) plus the 1.2.4 brain layer, 1.2.3 movement and 1.2.2 mining strategy.",
-    "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
-    "version": [
-      1,
-      2,
-      8
-    ],
-    "min_engine_version": [
-      1,
-      21,
-      114
-    ]
-  },
-  "modules": [
-    {
-      "type": "data",
-      "uuid": "9dfd46cd-74e7-4bc1-a3be-a13098a5f764",
-      "version": [
-        1,
-        2,
-        8
-      ]
+    "format_version": 2,
+    "header": {
+        "name": "Verdant Bot 1.3.0 \u2022 Bedrock 1.21.114 \u2022 General Engines + Nether + Pathfinder",
+        "description": "1.3.0 GENERAL ENGINES - one architecture instead of per-case hardcoding. MOBS: core/mobs.js describes any entity by archetype (melee/brute/archer/bomber/leaper/teleporter/fire/flying/potion/summoner/heavy/boss/...), infers unknown and modded ids from name patterns and the engine's type_family, and exposes drops for the item graph. COMBAT: core/combat-plan.js plans real engagements from arithmetic - incoming dps, burst, time-to-die vs time-to-kill, kill order by damage-per-second-of-effort, surround detection, escape vectors - for any number of attackers; runtime/combat.js executes stances (engage/kite/shield_advance/cover/retreat/flee/tower) instead of 40 per-mob branches. RECIPES: core/recipe-book.js generates 263 recipes from families (every wood door/fence/trapdoor/bed colour, every tool and armour material) plus smelting, and an acquisition graph that plans bucket = logs -> planks -> table -> iron -> furnace -> smelt -> craft, hunts mob drops, and reports honest blocks. !bot recipe <item> prints the plan. SURVIVAL: core/needs.js ranks needs by severity (breathe, lava, burning, falling, suffocation, combat, heal, starving, exposure, darkness, tooling, unarmed, inventory, lost) with capability filtering, hysteresis and cooldowns; SurvivalMaster runs it before the legacy 80 scenarios, which stay as a backstop. Keeps 1.2.8 pathfinder + fully autonomous Nether travel (build/light/enter/link/return) and the 1.2.6/1.2.7 efficiency and speedrun work. 114 new offline tests (tools/general.test.mjs); the full suite passes.",
+        "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
+        "version": [
+            1,
+            3,
+            0
+        ],
+        "min_engine_version": [
+            1,
+            21,
+            114
+        ]
     },
-    {
-      "type": "script",
-      "language": "javascript",
-      "entry": "scripts/main.js",
-      "uuid": "2547de70-aaa2-4a2e-bd7c-91be2a224d7c",
-      "version": [
-        1,
-        2,
-        8
-      ]
-    }
-  ],
-  "dependencies": [
-    {
-      "module_name": "@minecraft/server",
-      "version": "2.3.0-beta"
-    },
-    {
-      "module_name": "@minecraft/server-gametest",
-      "version": "1.0.0-beta"
-    }
-  ],
-  "metadata": {
-    "authors": [
-      "Verdant contributors"
+    "modules": [
+        {
+            "type": "data",
+            "uuid": "9dfd46cd-74e7-4bc1-a3be-a13098a5f764",
+            "version": [
+                1,
+                3,
+                0
+            ]
+        },
+        {
+            "type": "script",
+            "language": "javascript",
+            "entry": "scripts/main.js",
+            "uuid": "2547de70-aaa2-4a2e-bd7c-91be2a224d7c",
+            "version": [
+                1,
+                3,
+                0
+            ]
+        }
     ],
-    "license": "MIT"
-  }
+    "dependencies": [
+        {
+            "module_name": "@minecraft/server",
+            "version": "2.3.0-beta"
+        },
+        {
+            "module_name": "@minecraft/server-gametest",
+            "version": "1.0.0-beta"
+        }
+    ],
+    "metadata": {
+        "authors": [
+            "Verdant contributors"
+        ],
+        "license": "MIT"
+    }
 }

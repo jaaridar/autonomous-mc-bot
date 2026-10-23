@@ -4,7 +4,8 @@ An experimental scripted survival bot for Minecraft Bedrock (1.21.114). It runs 
 real simulated player through the GameTest framework and drives it with a
 purpose-built brain: mining, crafting, smelting, foraging, defence, escape,
 exploration — and now wide bidirectional pathfinding, an escalating anti-stuck
-ladder and fully autonomous Overworld ⇄ Nether travel.
+ladder, fully autonomous Overworld ⇄ Nether travel, and general engines for
+combat, crafting and survival that compute an answer instead of looking one up.
 
 Everything the bot earns is earned in-game. Nothing is fabricated, duplicated or
 teleported into the inventory, and every action is verified against the world
@@ -108,6 +109,38 @@ vanilla way — by walking over them:
 - Only items inside loaded chunks are visible; beyond the ticking area and the
   owner's loaded chunks the script cannot see the world at all.
 
+## General engines (v1.3.0)
+
+The bot no longer answers "what now?" from tables of special cases. Four pure
+engines decide, and the runtime executes:
+
+- **Any mob, any group.** `core/mobs.js` classifies a mob by *how it fights*
+  (melee / archer / bomber / leaper / teleporter / fire / flying / summoner /
+  heavy / boss …). Vanilla ids map to archetypes; unknown and modded ids are
+  inferred from their name and from the engine's own `type_family`, so
+  `mymod:ice_zombie` is a hostile zombie and an unrecognised monster is still a
+  monster.
+- **Fights are arithmetic.** `core/combat-plan.js` computes incoming damage per
+  second, the worst burst in range, time-to-die and time-to-kill, then picks a
+  stance: engage, kite, advance behind a shield, build cover, take high ground,
+  retreat or flee. Kill order is "most damage per second of effort". Five
+  skeletons, ten zombies in a cave, or a creeper hidden behind a wall need no
+  new branches — the numbers produce the answer. `!bot fight` prints it.
+- **Crafting is generated.** `core/recipe-book.js` derives 263 recipes from
+  families (every tool and armour material, all 12 wood variants, all 16 bed
+  colours, utility blocks) plus a smelting table — and, more importantly, an
+  **acquisition graph**: `!bot recipe bucket` prints the real chain (logs →
+  planks → table → iron → furnace → smelt → craft). Items with no recipe resolve
+  to a mob drop, a block drop, a chest, or an honest "blocked" reason.
+- **Survival is ranked, not scripted.** `core/needs.js` scores 14 needs from
+  actual values (air, health, hunger, fall distance, threats) with capability
+  filtering, hysteresis and emergency pre-emption, and returns one executable
+  action. `runtime/survival-master.js` runs it before the legacy 80-scenario
+  chain, which remains as a backstop.
+
+Adding a case is now data, not code: one archetype entry, one wood colour, one
+`NEEDS` definition. Details and the extension table: `docs/GENERAL_ENGINES.md`.
+
 ## Pathfinding (v1.2.8)
 
 The navigator keeps its cheap rolling-horizon A* for short walks, and now hands
@@ -198,8 +231,10 @@ ladder is exhausted the bot says exactly why and pauses instead of thrashing.
   transport the simulated player itself. It searches for a safe landing, but it
   cannot guarantee terrain generation around an arbitrary link point — it will
   carve/land on a platform instead.
-- Combat is melee with retreat logic; bow/shield work is planned.
-- No farming, enchanting, potions or villager trading yet.
+- Combat is melee with shield, cover, tower and retreat stances. Bows and
+  crossbows are known to the item book but not yet used as a weapon.
+- No enchanting, potions or villager trading yet; farming is limited to
+  harvesting what already grows.
 - A world reload ends the simulated player; see "Persistent memory".
 
 ## Repo layout
@@ -211,13 +246,16 @@ scripts/
   main.js                      chat commands, event wiring, tick loop
   core/                        engine-free logic (unit-testable)
     math, commands, policy, recipes, ores, navigation, survival, recovery, transfer, memory,
-    pathfinder (safety-checked A*/bidirectional), anti-stuck (recovery ladder), portal (geometry/linking)
+    pathfinder (safety-checked A*/bidirectional), anti-stuck (recovery ladder), portal (geometry/linking),
+    mobs (archetypes + inference), combat-plan (damage-race engagement planner), recipe-book (generated
+    recipes + acquisition graph), needs (severity-ranked survival)
   runtime/                     engine-bound components
     bot, drops, scouting, host, navigation, mining, world, inventory, equipment,
     escape, furnace, foraging, exploration, survival, hands, memory,
     pathfinder (wide planner service), portal-travel, stuck-recovery, nether-explore
 docs/COMMANDS.md               full command reference
 docs/PATHFINDING.md            planner, anti-stuck ladder, portal travel internals
+docs/GENERAL_ENGINES.md        mobs, combat planning, recipes, survival needs
 docs/ARCHITECTURE.md           layer map and module contracts
 docs/BRAIN.md                  offline planning layer (not the running ladder)
 docs/FULL_GAME_SPEEDRUN_ROADMAP.md   what is done and what is still planned
@@ -249,4 +287,7 @@ jump-over options, dig/bridge/pillar edges, budgets, slicing, smoothing and the
 anti-stuck ladder. `tools/travel.test.mjs` (88 tests) covers portal geometry and
 validation, anchor/arrival selection, travel decisions, the pathfinder service
 and navigator handoff, and a full fake-engine build → light → enter → arrive →
-return Nether round trip.
+return Nether round trip. `tools/general.test.mjs` (114 tests) covers mob
+inference, the combat planner (single mobs, swarms, archers, creepers, bosses,
+modded monsters), the generated recipe book and acquisition plans, the needs
+engine, and the runtime wiring.

@@ -6,65 +6,68 @@
  * Provides threat evaluation, tactical decisions, dodge patterns.
  */
 import { MOB_ADAPTIVE, adaptTactic, getBlockInfo, getItemInfo } from "./knowledge.js";
+import { describe, archetypeOf } from "./mobs.js";
+import { MOB_ARCHETYPE } from "./mobs.js";
 
-export const MOB_STATS = {
-    "minecraft:zombie": { damage: 3, speed: 0.23, range: 1.5, tactic: "kite", priority: 1, fear: 3, groupFear: 0.4, kite: true },
-    "minecraft:zombie_villager": { damage: 3, speed: 0.23, range: 1.5, tactic: "kite", priority: 1, fear: 3, groupFear: 0.4, kite: true },
-    "minecraft:husk": { damage: 3, speed: 0.23, range: 1.5, tactic: "kite", priority: 1, fear: 4, groupFear: 0.4, kite: true, hunger: true },
-    "minecraft:drowned": { damage: 3, speed: 0.23, range: 8, tactic: "cover_rush", priority: 2, fear: 5, groupFear: 0.5, cover: true },
-    "minecraft:skeleton": { damage: 4, speed: 0.25, range: 16, tactic: "cover_rush", priority: 6, fear: 6, groupFear: 0.8, cover: true, strafe: true, shield: true },
-    "minecraft:stray": { damage: 4, speed: 0.25, range: 16, tactic: "cover_rush", priority: 7, fear: 7, groupFear: 0.8, cover: true, strafe: true, shield: true, slow: true },
-    "minecraft:bogged": { damage: 4, speed: 0.25, range: 16, tactic: "cover_rush", priority: 7, fear: 7, groupFear: 0.8, cover: true, strafe: true, shield: true, poison: true },
-    "minecraft:wither_skeleton": { damage: 8, speed: 0.25, range: 1.5, tactic: "kite", priority: 7, fear: 7, groupFear: 0.6, wither: true },
-    "minecraft:creeper": { damage: 22, speed: 0.25, range: 3, tactic: "retreat", priority: 10, fear: 10, groupFear: 0.5, retreat: true, explosive: true },
-    "minecraft:spider": { damage: 2, speed: 0.32, range: 1.5, tactic: "strafe", priority: 2, fear: 4, groupFear: 0.5, kite: true, climb: true },
-    "minecraft:cave_spider": { damage: 2, speed: 0.32, range: 1.5, tactic: "strafe", priority: 4, fear: 6, groupFear: 0.6, poison: true, kite: true },
-    "minecraft:enderman": { damage: 7, speed: 0.32, range: 3, tactic: "low_roof", priority: 5, fear: 7, groupFear: 0.3, water: true, lowRoof: true, noEyeContact: true, teleport: true },
-    "minecraft:witch": { damage: 6, speed: 0.25, range: 10, tactic: "rush", priority: 8, fear: 8, groupFear: 0.7, cover: true, potion: true },
-    "minecraft:blaze": { damage: 6, speed: 0.3, range: 16, tactic: "dodge_rush", priority: 8, fear: 8, groupFear: 1.2, cover: true, strafe: true, fire: true, flying: true },
-    "minecraft:ghast": { damage: 12, speed: 0.2, range: 32, tactic: "cover", priority: 9, fear: 9, groupFear: 1.5, cover: true, explosive: true, flying: true },
-    "minecraft:phantom": { damage: 6, speed: 0.4, range: 2, tactic: "timed", priority: 6, fear: 6, groupFear: 0.8, cover: true, flying: true },
-    "minecraft:slime": { damage: 3, speed: 0.2, range: 1.5, tactic: "kite", priority: 1, fear: 2, groupFear: 0.3, kite: true },
-    "minecraft:magma_cube": { damage: 4, speed: 0.2, range: 1.5, tactic: "kite", priority: 2, fear: 4, groupFear: 0.4, fire: true },
-    "minecraft:silverfish": { damage: 1, speed: 0.25, range: 1, tactic: "kite", priority: 2, fear: 3, groupFear: 0.8, swarm: true },
-    "minecraft:endermite": { damage: 2, speed: 0.25, range: 1, tactic: "kite", priority: 2, fear: 3, groupFear: 0.5 },
-    "minecraft:iron_golem": { damage: 14, speed: 0.25, range: 2.5, tactic: "pillar", priority: 9, fear: 9, groupFear: 1.0, pillar: true, heavy: true },
-    "minecraft:ravager": { damage: 12, speed: 0.3, range: 2.5, tactic: "pillar", priority: 9, fear: 9, groupFear: 1.0, pillar: true, heavy: true },
-    "minecraft:warden": { damage: 30, speed: 0.3, range: 4, tactic: "flee", priority: 10, fear: 10, groupFear: 2.0, noFight: true, boss: true },
-    "minecraft:ender_dragon": { damage: 10, speed: 0.5, range: 5, tactic: "flee", priority: 10, fear: 10, groupFear: 2.0, noFight: true, boss: true, flying: true },
-    "minecraft:wither": { damage: 8, speed: 0.3, range: 20, tactic: "flee", priority: 10, fear: 10, groupFear: 2.0, boss: true, flying: true, explosive: true },
-    "minecraft:piglin_brute": { damage: 8, speed: 0.3, range: 2, tactic: "kite", priority: 7, fear: 7, groupFear: 0.8, heavy: true },
-    "minecraft:evoker": { damage: 6, speed: 0.25, range: 12, tactic: "rush", priority: 8, fear: 8, groupFear: 0.8, summon: true },
-    "minecraft:evocation_illager": { damage: 6, speed: 0.25, range: 12, tactic: "rush", priority: 8, fear: 8, groupFear: 0.8, summon: true },
-    "minecraft:vindicator": { damage: 7, speed: 0.28, range: 1.5, tactic: "kite", priority: 6, fear: 6, groupFear: 0.7, heavy: true },
-    "minecraft:pillager": { damage: 4, speed: 0.25, range: 12, tactic: "cover_rush", priority: 5, fear: 5, groupFear: 0.7, cover: true, strafe: true },
-    "minecraft:guardian": { damage: 6, speed: 0.3, range: 12, tactic: "cover", priority: 6, fear: 6, groupFear: 0.6, cover: true },
-    "minecraft:elder_guardian": { damage: 8, speed: 0.3, range: 12, tactic: "flee", priority: 8, fear: 8, groupFear: 1.0, boss: true },
-    "minecraft:shulker": { damage: 4, speed: 0, range: 16, tactic: "cover", priority: 6, fear: 6, groupFear: 0.5, cover: true, levitation: true },
-    "minecraft:hoglin": { damage: 6, speed: 0.3, range: 2, tactic: "pillar", priority: 6, fear: 6, groupFear: 0.6, heavy: true },
-    "minecraft:zoglin": { damage: 8, speed: 0.3, range: 2, tactic: "pillar", priority: 7, fear: 7, groupFear: 0.7, heavy: true },
-    "minecraft:piglin": { damage: 4, speed: 0.25, range: 2, tactic: "kite", priority: 3, fear: 4, groupFear: 0.5 },
-    "minecraft:vex": { damage: 5, speed: 0.35, range: 1.5, tactic: "strafe", priority: 6, fear: 6, groupFear: 0.7, flying: true, fast: true },
-};
+const KNOWN = Object.keys(MOB_ARCHETYPE);
+
+/**
+ * Legacy stat view over `core/mobs.js`. Everything here is derived, so a mob the
+ * table has never seen still gets sensible damage/speed/fear values instead of
+ * silently falling through to a default melee blob.
+ *
+ * Kept as a plain object because older modules index it directly.
+ */
+const profiles = new Map();
+
+export const MOB_STATS = {};
+for (const id of KNOWN) {
+    const full = `minecraft:${id}`;
+    profiles.set(full, describe(full));
+    MOB_STATS[full] = statFromProfile(profiles.get(full));
+}
+
+/** Flatten a mob description into the legacy stat shape. */
+function statFromProfile(p) {
+    const trait = (t) => p.traits.includes(t);
+    return {
+        damage: p.damage,
+        speed: p.speed,
+        range: p.reach,
+        tactic: p.tactic,
+        priority: p.priority,
+        fear: p.terror,
+        groupFear: p.groupFear,
+        noFight: p.noFight,
+        boss: trait("boss"),
+        explosive: p.explosive,
+        flying: p.flying,
+        ranged: p.ranged,
+        cover: trait("ranged") || trait("flying"),
+        strafe: trait("fast") || trait("ranged"),
+        shield: trait("ranged"),
+        kite: p.archetype === "melee" || p.archetype === "leaper",
+        water: trait("water_weak"),
+        lowRoof: trait("teleport"),
+        teleport: trait("teleport"),
+        heavy: trait("heavy"),
+        fast: trait("fast"),
+        swarm: trait("swarm"),
+        fire: trait("fire"),
+        potion: trait("potion"),
+        summon: trait("summon"),
+        pillar: p.archetype === "heavy",
+        poison: trait("poison"),
+        wither: false,
+        levitation: trait("levitation"),
+        climb: trait("climb"),
+    };
+}
 
 export function getMobStat(typeId) {
-    if (MOB_STATS[typeId]) return MOB_STATS[typeId];
-    // ADAPTIVE: for unknown mobs, infer from name
-    const isRanged = MOB_ADAPTIVE.isRanged(typeId);
-    const isExplosive = MOB_ADAPTIVE.isExplosive(typeId);
-    const isBoss = MOB_ADAPTIVE.isBoss(typeId);
-    const isFlying = MOB_ADAPTIVE.isFlying(typeId);
-    const isEnderman = MOB_ADAPTIVE.isEnderman(typeId);
-    const isFast = MOB_ADAPTIVE.isFast(typeId);
-
-    if (isBoss) return { damage: 15, speed: 0.3, range: 4, tactic: "flee", priority: 10, fear: 10, groupFear: 2.0, noFight: true, boss: true };
-    if (isEnderman) return { damage: 7, speed: 0.32, range: 3, tactic: "low_roof", priority: 5, fear: 7, groupFear: 0.3, water: true, lowRoof: true, teleport: true };
-    if (isExplosive) return { damage: 20, speed: 0.25, range: 3, tactic: "retreat", priority: 10, fear: 10, groupFear: 0.5, explosive: true };
-    if (isRanged) return { damage: 4, speed: 0.25, range: 16, tactic: "cover_rush", priority: 6, fear: 6, groupFear: 0.8, cover: true, strafe: true, shield: true };
-    if (isFlying) return { damage: 5, speed: 0.35, range: 8, tactic: "cover", priority: 6, fear: 6, groupFear: 0.6, cover: true, flying: true };
-    if (isFast) return { damage: 3, speed: 0.35, range: 1.5, tactic: "pillar", priority: 4, fear: 5, groupFear: 0.5, fast: true };
-    // Default melee
-    return { damage: 3, speed: 0.25, range: 1.5, tactic: "kite", priority: 2, fear: 4, groupFear: 0.5, kite: true };
+    const id = String(typeId ?? "");
+    if (!profiles.has(id)) profiles.set(id, describe(id));
+    return statFromProfile(profiles.get(id));
 }
 
 export function combatThreatScore(entities, botPos) {

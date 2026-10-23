@@ -1,7 +1,7 @@
 import { system, world, EntityComponentTypes, Direction, } from "@minecraft/server";
 import { add, floor, key, distance, away, horizontal, CARDINAL, COMPASS, UP, DOWN, center, } from "../core/math.js";
 import { MINE, priority, toolTier, diggable, RANGED, EXPLOSIVE, HOSTILES as MOB_DEFENCE, } from "../core/policy.js";
-import { RECIPES, craft, id, nextStep, matches, amountOf, bedTarget, } from "../core/recipes.js";
+import { RECIPES, craft, id, nextStep, matches, amountOf, bedTarget, findRecipe } from "../core/recipes.js";
 import { isUndergroundOre, isBulk } from "../core/ores.js";
 import { sanitizePrefs } from "../core/memory.js";
 import { Bag, NativeInventory } from "./inventory.js";
@@ -649,7 +649,7 @@ export class Bot {
             if (!colour) throw Error("No 3 wool of one colour in the bag (beds cannot mix colours).");
             item = colour;
         }
-        const r = RECIPES.find((r) => r.output === item);
+        const r = findRecipe(item);
         if (!r) throw Error("Recipe not supported.");
         craft(this.bag, r, batches, this.terrain.tableNear(this.sim.location));
         this.record(`craft:${item} x${r.amount * batches}`);
@@ -2884,7 +2884,7 @@ export class Bot {
         const tableBlock = this.tablePosition ? this.terrain.block(this.tablePosition) : undefined;
         if (tableBlock && tableBlock.typeId !== id("crafting_table")) this.tablePosition = undefined;
         const step = nextStep(target, amount, this.getCountsCached(tick), nearTable || !!this.tablePosition);
-        if (step.kind === "craft" && RECIPES.find((r) => r.output === step.item)?.table && !nearTable && this.tablePosition) {
+        if (step.kind === "craft" && findRecipe(step.item)?.table && !nearTable && this.tablePosition) {
             const spots = CARDINAL.map((d) => add(this.tablePosition, d));
             const chosen = spots.find((p) => this.terrain.safe(p)) ?? spots[0];
             if (this.nav.go(center(chosen), tick) !== "failed") { this.reason = "Returning to remembered crafting table"; return false; }
@@ -2898,6 +2898,11 @@ export class Bot {
             case "gather": this.mining = this.newMining(step.count, undefined, step.item); break;
             case "craft": this.craft(step.item); break;
             case "placeTable": this.placeTable(tick); break;
+            case "smelt":
+                // The survival director already owns furnace placement and
+                // fuel; this is the same path the bucket/iron code uses.
+                try { this.autonomy.produce(step.input, step.batches, tick); } catch (_e) { this.fault(_e); }
+                break;
         }
         return false;
     }
@@ -2960,6 +2965,8 @@ export class Bot {
             advanced: { deepMining: this.deepMiner.active ? this.deepMiner.phase : "inactive", lootingTrips: this.looting.trips, builder: this.builder.canBuild ? "ready" : "no-blocks" },
             travel: this.travel.report(),
             pathfinder: this.pathfinder.report(),
+            combat: this.combat?.planSummary ?? null,
+            needs: this.survivalMaster?.lastNeed || null,
             stuck: this.stuckRecovery.report(),
             netherTrip: this.netherExplore.report()
         };

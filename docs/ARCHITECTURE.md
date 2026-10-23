@@ -1,4 +1,4 @@
-# Verdant Bot — architecture v1.2.8 Pathfinder + Autonomous Nether
+# Verdant Bot — architecture v1.3.0 General Engines + Pathfinder + Autonomous Nether
 
 Where things live, who owns what, and the rules that keep the bot honest.
 If you are adding a feature, find its layer here first.
@@ -19,7 +19,12 @@ If you are adding a feature, find its layer here first.
   - `memory.js` — persistent memory schema, prefs sanitization
   - `survival.js` — food fuel tables
   - `recovery.js`, `transfer.js`, `commands.js`
-  - **NEW v1.2.8 Pathfinding & travel:**
+  - **NEW v1.3.0 General engines (see `docs/GENERAL_ENGINES.md`):**
+    - `mobs.js` — archetype table (melee/brute/archer/crossbow/bomber/leaper/teleporter/fire_ranged/flying_bomber/potion/summoner/flyer/aquatic/turret/splitter/swarm/heavy/boss), ordered name inference and engine `type_family` hints for unknown/modded ids, traits + drops per mob, `dropIndex` for the item graph
+    - `combat-plan.js` — `normalizeThreats`, `threatTiming` (arrival/dps), `evaluateGroup` (incomingDps, burst, ttk, ttd, confidence, shield mitigation, melee queueing), `focusScore` kill order, `escapeVector`, `surrounded`, `planEngagement` (engage/kite/shield_advance/cover/retreat/flee/tower/hold)
+    - `recipe-book.js` — generated recipe families (tools × materials, armour × materials, 12 woods, 16 wool colours, utility blocks), `SMELT` table, `matchesTag`, `sources`, `plan` (virtual-inventory acquisition graph: craft/smelt/gather/kill/loot), `explain`
+    - `needs.js` — 14 needs with formula severities (breathe/lava/burning/falling/suffocating/combat/heal/starving/exposure/darkness/tooling/unarmed/inventory/lost), capability filtering, `rankNeeds`, `NeedsEngine` (arbiter hysteresis + cooldowns + emergency pre-emption)
+  - **v1.2.8 Pathfinding & travel:**
     - `pathfinder.js` — safety-checked A* + bidirectional A* adapted from nox7's Pathfinder (Apache-2.0). `checkSafety` (IsSafe / CanSafelyFallFrom / CanSafelyJumpOnto), option surface (ignore, passable overrides, unjumpable types, Y-axis flood, dig/bridge/pillar edges), `PathFinder`/`BidirectionalPathFinder` with closed sets and generator slicing, `planPath`, `smoothPath`, bounded best-effort partials
     - `anti-stuck.js` — `classifySituation` (suffocating/lava/drowning/swimming/caged/loop/failing/unloaded/no_path/portal_ready), `planRecovery` filtered by capability, `StuckWatchdog` with progress baselines, oscillation detection, per-action cooldowns and an exhaustion signal
     - `portal.js` — 4×5 frame geometry (10 required + 4 optional corners), validation, 1:8 coordinate linking, anchor and safe-arrival search, portal action decision, nether target scoring, return-to-overworld decision
@@ -38,7 +43,7 @@ If you are adding a feature, find its layer here first.
   - `bot.js` — the brain v6: tick order, mode dispatch, task objects, integrates all advanced modules including Nether speedrun world-class: survivalMaster -> quick tool #1 -> death recovery -> food readiness adaptive recalc -> nether director -> village director -> golem director -> food director -> bucket director -> structure loot -> lava pool portal opportunity -> threat eval escape/retreat/eat/combat -> mode dispatch, obstruction clearing, scaffolding, retain important
   - `navigation.js` — `Navigator`: rolling-horizon A* with parkour + bridging awareness, loop detection, threat avoidance, builder integration
   - `builder.js` — `Builder`: bridging (find support, place with sneak), pillaring (jump-place), scaffolding, torch placement, obstruction clearing, portal frame 4x5 interior 2x3 min 10 full 14
-  - `combat.js` — `Combat`: tactical fighting (rush for ranged, retreat for creeper, kite for heavy, group positioning, crit jump, strafe)
+  - `combat.js` — `Combat`: executes the `combat-plan.js` stance (engage/kite/shield_advance/cover/retreat/flee/tower); per-mob knowledge is limited to trait-driven execution detail (enderman low roof, fire mobs and water)
   - `looting.js` — `Looting`: scored chest scanning (16 blocks), home avoidance, valuable-first withdraw, village detection via entities
   - `parkour.js` — `Parkour`: gap detection, step-up, sprint jump, ladder/vine climb, bridge assist
   - `deepminer.js` — `DeepMiner`: shaft -> branch (branchPattern) -> vein (clusterVeins flood-fill) -> ascend, with drop collection, torching
@@ -160,6 +165,26 @@ If you are adding a feature, find its layer here first.
   consumes a real flint and steel / fire charge, and every placement/ignition is
   verified. Teleport is used only as the portal-link fallback for a simulated
   player, not to skip survival work.
+
+## General decision flow (v1.3.0)
+
+```
+threat eval ──> combat-plan.planEngagement ──> stance executed by Combat
+                 (dps / ttk / ttd / burst)       (engage, kite, cover, ...)
+
+survival master ──> needs.assess ──> generic action (surface, eat, shelter, ...)
+                     │
+                     └─ nothing urgent? ──> legacy 80-scenario chain (backstop)
+
+obtain(item) ──> recipes.nextStep ──> recipe-book.findRecipe
+                    │                    └─ generated family + smelting
+                    ├─ gather  (mine/farm)
+                    ├─ craft   (only real ingredients, rollback-safe)
+                    └─ smelt   (survival director owns the furnace)
+```
+
+`!bot recipe <item>` prints the acquisition plan, `!bot fight` the current
+engagement, and `!bot status` now carries `combat` and `needs`.
 
 ## Honesty contract
 

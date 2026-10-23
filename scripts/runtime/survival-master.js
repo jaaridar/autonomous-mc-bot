@@ -8,6 +8,8 @@ import { composeCapabilities, CAPABILITIES, evaluateCapability } from "../core/s
 import { shouldRecalculateAdaptive, handlePlanFailure, verifyAction } from "../core/adaptive-planning.js";
 import { detectScenario, bestActionForContext, assessFallDepth, assessNightThreat, resourcePriority, shelterFailurePlan, multiRiskPriority, ALL_SCENARIOS } from "../core/survival-scenarios.js";
 import { retainScore, isCritical } from "../core/knowledge.js";
+import { NeedsEngine } from "../core/needs.js";
+import { planEngagement } from "../core/combat-plan.js";
 import { Direction } from "@minecraft/server";
 
 export class SurvivalMaster {
@@ -30,12 +32,20 @@ export class SurvivalMaster {
         this.torchMarkers = [];
         this.oxygenWarnings = 0;
         this.lastHeal = 0;
+        // General response engine. It runs before the legacy 80-scenario chain:
+        // anything it can name and fix is fixed by arithmetic, and the scenario
+        // table is only a backstop for the leftovers.
+        this.needs = new NeedsEngine();
+        this.lastNeed = "";
+        this.genericActions = 0;
     }
 
     reset() {
         this.currentScenario = null;
         this.fallStartY = null;
         this.torchMarkers = [];
+        this.needs?.reset();
+        this.lastNeed = "";
     }
 
     tick(tick) {
@@ -43,6 +53,14 @@ export class SurvivalMaster {
         this.lastAssess = tick;
 
         const context = this.buildContext(tick);
+
+        // GENERAL PASS: needs -> one executable action. Everything it handles is
+        // decided from values (health, air, hunger, danger) and capabilities,
+        // not from a scenario name.
+        try {
+            const acted = this.generalResponse(context, tick);
+            if (acted !== undefined) return acted;
+        } catch (e) { console.warn("[Verdant] needs engine " + String(e?.message ?? e).slice(0, 200)); }
 
         // FIX: compose capabilities - mix of two situations should not fall through
         try {
@@ -1944,6 +1962,206 @@ export class SurvivalMaster {
             }
         }
         return false;
+    }
+
+    /** Build the context the needs engine understands from the scenario context. */
+    needsContext(ctx, tick) {
+        const sim = this.sim;
+        const p = ctx.p;
+        const freeSlots = this.bag.container?.emptySlotsCount ?? 9;
+        const counts = ctx.counts ?? {};
+        const health = sim.getComponent("minecraft:health");
+        const threats = ctx.threats ?? [];
+        const pos = sim.location ?? { x: p.x + 0.5, y: p.y, z: p.z + 0.5 };
+        let combat;
+        try {
+            combat = planEngagement(threats, {
+                hp: ctx.hp,
+                maxHp: health?.effectiveMax ?? 20,
+                armor: this.combat?.estimateArmor?.() ?? 0,
+                food: ctx.hunger,
+                botPos: pos,
+                has: {
+                    weapon: ctx.hasWeapon,
+                    shield: this.bag.find((s) => s.typeId === "minecraft:shield") >= 0,
+                    blocks: ctx.hasBlocks,
+                    water: ctx.hasWater,
+                    food: this.bag.hasFood(),
+                },
+                openings: COMPASS.filter((d) => this.terrain.safe(add(p, d))),
+            });
+        } catch { combat = undefined; }
+        const hpRatio = ctx.hp / Math.max(1, health?.effectiveMax ?? 20);
+        // Air supply is only exposed on some engine versions; the severity model
+        // is dominated by "head is under water" either way.
+        let air = 300;
+        try {
+            const breathable = sim.getComponent("minecraft:breathable");
+            air = breathable?.airSupply ?? 300;
+        } catch { air = 300; }
+        if (!Number.isFinite(air)) air = 300;
+        return {
+            hp: ctx.hp,
+            maxHp: health?.effectiveMax ?? 20,
+            hunger: ctx.hunger,
+            air,
+            headInWater: this.terrain.headInWater(sim),
+            inWater: !!sim.isInWater,
+            inLava: /lava/.test(this.terrain.typeAt(p) ?? ""),
+            nearLava: ctx.nearLava,
+            onFire: !!sim.isOnFire,
+            fallDistance: this.fallStartY ? Math.max(0, this.fallStartY - pos.y) : 0,
+            headBlocked: !this.terrain.read(add(p, UP))?.passable,
+            canDig: !!this.bag.hasTool("pickaxe", 0) || ctx.hasBlocks,
+            canBuild: !!ctx.hasBlocks,
+            hasWater: ctx.hasWater,
+            hasTorch: ctx.hasTorch,
+            hasFood: this.bag.hasFood(),
+            hasWeapon: ctx.hasWeapon,
+            canCraft: !!this.bot.settings?.assistedCrafting,
+            freeSlots,
+            safe: threats.length === 0 && !ctx.nearLava && !ctx.onLedge,
+            hostileCount: threats.length,
+            night: ctx.time === "night" || ctx.time === "sunset",
+            underground: p.y < 50,
+            sheltered: !!this.shelterPos && distance(this.shelterPos, p) < 8,
+            shelterKnown: !!this.shelterPos,
+            lightLevel: undefined,
+            toolDurabilityLow: ctx.lowDurability,
+            stuckLevel: this.bot.stuckRecovery?.watchdog?.level ?? 0,
+            combatSeverity: combat ? Math.max(0, Math.min(1, 1 - combat.confidence)) * (hpRatio < 0.5 ? 1.15 : 1) * (combat.action === "retreat" || combat.action === "flee" ? 1 : 0.35) : 0,
+            combatAction: combat?.action,
+            combatReason: combat?.reason,
+            preyNear: false,
+            hasFishingRod: this.bag.find?.((s) => /fishing_rod$/.test(s.typeId)) >= 0,
+        };
+    }
+
+    /**
+     * Run the general engine. Returns true/false when it owned the tick, or
+     * undefined when it has nothing to say (legacy scenarios then run).
+     */
+    generalResponse(ctx, tick) {
+        const needCtx = this.needsContext(ctx, tick);
+        const pick = this.needs.assess(needCtx, tick);
+        if (!pick) return undefined;
+        this.lastNeed = `${pick.id}:${pick.severity.toFixed(2)}`;
+        if (needCtx.combatSeverity >= 0.85 || pick.id === "breathe" || pick.id === "lava") {
+            // Emergencies are logged only when they change: this runs every second.
+            const sig = `${pick.id}:${pick.action}`;
+            if (sig !== this._lastGenericSig) this.bot.record(`Needs: ${pick.reason} -> ${pick.action}`);
+            this._lastGenericSig = sig;
+        }
+        const acted = this.executeNeed(pick, needCtx, ctx, tick);
+        if (acted === undefined) return undefined;
+        this.genericActions++;
+        this.bot.reason = `Needs: ${pick.action} (${pick.reason})`;
+        return acted;
+    }
+
+    /** Map a generic action onto a real engine action. */
+    executeNeed(pick, needCtx, ctx, tick) {
+        const sim = this.sim;
+        const p = ctx.p;
+        const threats = this.terrain.threatInfo(sim, this.bot.owner());
+        switch (pick.action) {
+            case "surface":
+                try { sim.jump(); } catch { /* engine may reject */ }
+                if (this.terrain.headInWater(sim)) {
+                    const cur = sim.location;
+                    try { sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true }); } catch { /* rejected */ }
+                }
+                return true;
+            case "climb_out":
+                if (this.builder?.pillar?.(tick) === "placed") return true;
+                return this.escapeLava(tick);
+            case "run":
+                return this.escapeLava(tick);
+            case "cool_lava":
+                return this.placeWater(tick);
+            case "douse":
+                if (this.placeWater(tick)) return true;
+                return this.escapeLava(tick);
+            case "water_clutch":
+                return this.waterClutch(tick);
+            case "land_safe":
+                return this.waterClutch(tick) || this.blockUnder(tick);
+            case "dig_out": {
+                const head = add(p, UP);
+                const feet = p;
+                const dig = (cell) => {
+                    const r = this.bot.digCell(cell, tick);
+                    return r === "digging" || r === "open";
+                };
+                if (dig(head)) return true;
+                if (this.terrain.read(p)?.passable === false && dig(feet)) return true;
+                return undefined;
+            }
+            case "disengage":
+                this.bot.retreat(threats, tick);
+                return true;
+            case "eat":
+                this.bot.eat(tick);
+                return true;
+            case "shelter":
+                return this.bot.camp(tick);
+            case "go_shelter":
+                if (this.shelterPos) {
+                    this.bot.navTo(center(this.shelterPos), tick, 1);
+                    return true;
+                }
+                return undefined;
+            case "light_area": {
+                const support = add(p, DOWN);
+                return this.bot.placeTorch(support) ? true : undefined;
+            }
+            case "rearm": {
+                const weapon = this.bot.equipment?.hasWeapon?.() ? undefined : "minecraft:stone_sword";
+                if (!weapon) return undefined;
+                try { this.bot.obtain(weapon, 1, tick); return true; } catch { return undefined; }
+            }
+            case "dump_inventory":
+                try { this.bot.resource?.organizeIfNeeded?.(); return true; } catch { return undefined; }
+            default:
+                // "rest", "hunt", "fish", "unstick": other directors own them.
+                return undefined;
+        }
+    }
+
+    /** Place water at our feet (extinguish / break a fall / cool lava). */
+    placeWater(tick) {
+        const slot = this.bag.find((s) => s.typeId === "minecraft:water_bucket");
+        if (slot < 0) return undefined;
+        try {
+            const p = floor(this.sim.location);
+            const selected = this.bag.select(slot);
+            const target = add(p, DOWN);
+            this.sim.lookAtBlock(this.host.relative(center(target)));
+            if (this.sim.useItemInSlotOnBlock?.(selected, this.host.relative(center(target)), Direction.Up)) return true;
+            if (this.sim.useItemInSlot(selected)) return true;
+        } catch { /* engine may reject placing water here */ }
+        return undefined;
+    }
+
+    /** Move away from lava toward the nearest safe ground. */
+    escapeLava(tick) {
+        const p = floor(this.sim.location);
+        const safe = this.findSafeSpotAwayFromCliff?.(p, 6);
+        if (safe) {
+            this.bot.navTo(center(safe), tick, 1);
+            return true;
+        }
+        return undefined;
+    }
+
+    /** Place a block underneath (used when a fall cannot be clutched with water). */
+    blockUnder(tick) {
+        if (!this.builder?.canBuild) return undefined;
+        const p = floor(this.sim.location);
+        const below = add(p, DOWN);
+        if (this.terrain.solid(below)) return undefined;
+        const r = this.builder.placeAt(below, add(p, { x: 1, y: 0, z: 0 }), { sneak: true, autoAnchor: true });
+        return r === "placed" ? true : undefined;
     }
 
     waterClutch(tick) {

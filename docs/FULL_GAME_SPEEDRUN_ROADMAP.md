@@ -2,9 +2,22 @@
 
 Goal: refactor architecture for autonomous bot to speedrun **entire Minecraft** (Overworld → Nether → End → Dragon) without breaking existing things, following documentation (core pure, runtime thin, bounded budgets, no circular deps, verification suite must pass, honesty contract, safety model).
 
-Current baseline: **v1.2.8** — full-game pathfinder + autonomous Nether travel.
+Current baseline: **v1.3.0** — general engines (mobs, combat planning, recipes,
+needs) + pathfinder + autonomous Nether travel.
 `node tools/run-all.mjs` runs core 26, pathfinder/anti-stuck 73, travel/service 88,
-brain 72, survival 5, walkable 121, drop-flush, perf 56 and the no-undef gate, all green.
+general 114, brain 72, survival 5, walkable 121, drop-flush, perf 56 and the
+no-undef gate, all green.
+
+Since v1.2.8 the "hardcoded" layer is being removed:
+
+* `core/mobs.js` — one archetype table + name/family inference, so every mob
+  (including modded ones) has stats, traits and drops.
+* `core/combat-plan.js` — fights decided from damage arithmetic for any group
+  size (engage / kite / shield_advance / cover / tower / retreat / flee).
+* `core/recipe-book.js` — 263 generated recipes plus an acquisition graph, so an
+  item the curated table never listed still resolves to real steps.
+* `core/needs.js` — survival needs ranked by severity; the legacy 80 scenarios
+  are now a backstop that can be deleted piece by piece.
 
 Since v1.2.0 the Nether is no longer a paused dimension:
 
