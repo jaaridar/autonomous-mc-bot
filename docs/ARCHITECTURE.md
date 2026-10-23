@@ -12,6 +12,7 @@ If you are adding a feature, find its layer here first.
   - `ores.js` — ore Y-levels, bulk detection
   - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, big drops, bridge cost); ignore-list, soul-sand penalty, fence/wall cannot-jump-over when strictSafety
   - `pathfinder.js` — nox7-style bidirectional A* (meet-in-the-middle), BlockSafetyChecker port, chooseSearchMode, unstuckAction, relabelPath. Engine-free.
+  - `mover.js` — chooseDrive (swim vs vanilla navigateToLocation vs custom A*), shouldAbortMine (time/HP/hunger/flood), stillUnderground. Engine-free.
   - `blocks.js` — exhaustive Bedrock block taxonomy (passable, solid, falling, hazard, climbable, value scoring, obstruction detection)
   - `combat.js` — mob stats, threat scoring, tactics (kite/rush/retreat/pillar), strafe, crit windows
   - `loot.js` — chest loot scoring, valuable detection, junk filtering, upgrade logic
@@ -33,7 +34,8 @@ If you are adding a feature, find its layer here first.
 
 - `scripts/runtime/` — engine adapters and the brain:
   - `bot.js` — the brain v6: tick order, mode dispatch, task objects, integrates all advanced modules including Nether speedrun world-class: survivalMaster -> quick tool #1 -> death recovery -> food readiness adaptive recalc -> nether director -> village director -> golem director -> food director -> bucket director -> structure loot -> lava pool portal opportunity -> threat eval escape/retreat/eat/combat -> mode dispatch, obstruction clearing, scaffolding, retain important
-  - `navigation.js` — `Navigator`: rolling-horizon A* / bidirectional A* (mid-range), parkour + bridging, swim-to-shore instead of failing in water, unstuck (jump/sidestep/pillar/dig), ignore exhausted cells, loop detection, threat avoidance, builder integration
+  - `mover.js` — `Mover`: SimulatedPlayer.swim/stopSwimming, navigateToLocation/navigateToLocations, moveToLocation, moveRelative; all loc args through host.relative
+  - `navigation.js` — `Navigator`: vanilla navigateToLocation on walkable ground, A* for parkour/bridge, sim.swim() in water (not jump-only), unstuck (jump/sidestep/pillar/dig), ignore exhausted cells, loop detection, threat avoidance, builder integration
   - `builder.js` — `Builder`: bridging (find support, place with sneak), pillaring (jump-place), scaffolding, torch placement, obstruction clearing, portal frame 4x5 interior 2x3 min 10 full 14
   - `combat.js` — `Combat`: tactical fighting (rush for ranged, retreat for creeper, kite for heavy, group positioning, crit jump, strafe)
   - `looting.js` — `Looting`: scored chest scanning (16 blocks), home avoidance, valuable-first withdraw, village detection via entities
@@ -77,7 +79,9 @@ If you are adding a feature, find its layer here first.
 
 - `Navigator` now supports: walk, step, drop, bigdrop (1-3), jump (1-gap), sprintjump (2-gap), jumpup, bridge (cost 8).
 - Mid-range goals (7–radius blocks) use **bidirectional A*** (nox7 Pathfinder); short hops stay direct; long trips stay rolling-horizon unidirectional; towers stay unidirectional.
-- Water no longer fails the search: swim to the nearest standable shore toward the goal.
+- Water no longer fails the search: `sim.swim()` + look + jump-to-surface toward the nearest standable shore.
+- Walkable ground uses `navigateToLocation` / `navigateToLocations` (vanilla mob pathfinder around trees/stairs); parkour and bridging stay on custom A* + `moveToLocation`.
+- Mining always returns to the surface: stall/time/HP/flood set `wantsOut` and pillar/dig/nav out — never `"done"` while still underground.
 - Unstuck: jump, sidestep, pillar, dig-front, then ignore the exhausted cell and replan (up to 6 retries). Fences/walls are not jump-onto (strictSafety).
 - `allowBridge` true when builder has blocks; bridging tries to find solid neighbor support.
 - Loop detection: 5+ revisits in 6s or 8-11s travel with <1.5 approach; now unstucks and replans before giving up.

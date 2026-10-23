@@ -1,6 +1,8 @@
 import { floor, horizontal, distance, center, key, add, CARDINAL } from "../core/math.js";
 import { PathSearch } from "../core/navigation.js";
 import { BidirectionalPathSearch, chooseSearchMode, unstuckAction } from "../core/pathfinder.js";
+import { chooseDrive } from "../core/mover.js";
+import { Mover } from "./mover.js";
 
 /**
  * Advanced Navigator: rolling-horizon A* with parkour, bridging, pillaring awareness.
@@ -49,11 +51,17 @@ export class Navigator {
         this.swimSince = undefined;
         this.unsafeSince = undefined;
         this.didUnstuck = false;
+        this.mover = new Mover(sim, host);
+        this.nativeIssued = false;
+        this.noNativeUntil = 0;
     }
 
     reset() {
         try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         try { this.sim.isSprinting = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        if (!this.sim.isInWater) {
+            try { this.mover?.stopSwim(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
         this.target = undefined;
         this.search = undefined;
         this.path = [];
@@ -68,6 +76,7 @@ export class Navigator {
         this.swimSince = undefined;
         this.unsafeSince = undefined;
         this.didUnstuck = false;
+        this.nativeIssued = false;
         // keep this.ignore — the next attempt at the same goal should skip the cell we died on
     }
 
@@ -109,6 +118,7 @@ export class Navigator {
         this.corridor = [];
         this.waypoint = 0;
         this.lastIssued = -1;
+        this.nativeIssued = false;
         this.lastProgress = tick;
         this.segmentStart = tick;
         this.lastPosition = { ...this.sim.location };
@@ -170,8 +180,7 @@ export class Navigator {
 
     /**
      * In water the A* start cell is "unsafe" (water is a hazard), so we must
-     * not fail the search. Swim toward the nearest standable shore, preferring
-     * the side that still approaches the goal.
+     * not fail the search. Uses SimulatedPlayer.swim() + look + jump-to-surface.
      */
     swimToward(goal, tick) {
         const p = floor(this.sim.location);
@@ -187,15 +196,14 @@ export class Navigator {
                 }
             }
         }
-        try { this.sim.jump(); } catch { /* ignore */ }
+        let headInWater = false;
+        try { headInWater = !!this.terrain.headInWater?.(this.sim); } catch { /* ignore */ }
         const dest = best ? center(best) : goal;
-        try {
-            this.sim.moveToLocation(this.host.relative(dest), { speed: 1, faceTarget: true });
-        } catch { /* ignore */ }
+        this.mover.swimToward(dest, { headInWater, tick });
         this.reason = best
-            ? `Swimming to shore at ${best.x},${best.y},${best.z} then pathing`
-            : "Swimming toward goal — no shore in range";
-        if (tick - this.swimSince > 240) return this.fail("Could not leave water");
+            ? `Swimming (sim.swim) to shore at ${best.x},${best.y},${best.z}`
+            : "Swimming (sim.swim) toward goal — no shore in range";
+        if (tick - this.swimSince > 400) return this.fail("Could not leave water");
         return "running";
     }
 
@@ -305,6 +313,7 @@ export class Navigator {
             return this.swimToward(goal, tick);
         }
         this.swimSince = undefined;
+        try { this.mover.stopSwim(); } catch { /* ignore */ }
         const startFloor = floor(this.sim.location);
         const startSafe = this.terrain.safe(startFloor) || this.terrain.safe({ x: startFloor.x, y: startFloor.y - 1, z: startFloor.z });
         if (!startSafe) {
@@ -327,6 +336,40 @@ export class Navigator {
         // standable straight line - just walk there, no A* at all.
         const directResult = this.tryDirect(goal, tick);
         if (directResult) return directResult;
+        if (this.nativeIssued) {
+            if (horizontal(this.sim.location, goal) < 0.9 && Math.abs(this.sim.location.y - goal.y) < 1.3) {
+                this.reset();
+                return "done";
+            }
+            if (this.lastPosition && distance(this.sim.location, this.lastPosition) > 0.2) {
+                this.lastProgress = tick;
+                this.lastPosition = { ...this.sim.location };
+            }
+            if (tick - this.lastProgress > 60) {
+                this.nativeIssued = false;
+                this.noNativeUntil = tick + 80;
+                this.unstuck(tick);
+            } else {
+                this.reason = "Vanilla navigateToLocation in progress";
+                return "running";
+            }
+        }
+        if (!this.nativeIssued && !this.search && !this.path.length && this.sim.isOnGround && tick >= this.noNativeUntil) {
+            const remaining = horizontal(this.sim.location, goal);
+            const vert = Math.abs(this.sim.location.y - goal.y);
+            if (remaining > 1.2 && remaining <= 24 && vert <= 4) {
+                const speed = this.fast || this.urgent ? 1 : 0.65;
+                if (this.mover.navigateTo(goal, speed)) {
+                    this.nativeIssued = true;
+                    this.target = { ...goal };
+                    this.lastProgress = tick;
+                    this.lastPosition = { ...this.sim.location };
+                    this.reason = "Vanilla navigateToLocation around terrain";
+                    return "running";
+                }
+                this.noNativeUntil = tick + 40;
+            }
+        }
         // Retarget only when the goal really moved: a walking owner used to
         // trigger a full replan every 12 ticks. The threshold grows with the
         // remaining distance (owner moving 3 blocks barely matters at 40).
@@ -436,6 +479,20 @@ export class Navigator {
             return "running";
         }
 
+        if (this.nativeIssued) {
+            if (horizontal(this.sim.location, goal) < 0.9 && Math.abs(this.sim.location.y - goal.y) < 1.3) {
+                this.reset();
+                return "done";
+            }
+            if (tick - this.lastProgress > 60) {
+                this.nativeIssued = false;
+                this.noNativeUntil = tick + 80;
+                this.unstuck(tick);
+                this.replan(tick);
+            }
+            return "running";
+        }
+
         if (this.lastIssued !== this.waypoint) {
             // Smoothing: combine collinear walks
             const first = this.waypoint;
@@ -456,6 +513,28 @@ export class Navigator {
             }
             this.corridor = this.path.slice(first, end + 1);
             this.lastIssued = this.waypoint;
+
+            const drive = chooseDrive({
+                inWater: false,
+                onGround: this.sim.isOnGround !== false,
+                kinds: this.corridor.map((p) => p.kind),
+                nativeBanned: tick < this.noNativeUntil,
+            });
+            if (drive === "native_route") {
+                const nSpeed = this.fast || this.urgent ? 1 : 0.65;
+                const pts = this.corridor.map((p) => center(p));
+                if (pts.length >= 2 && this.mover.navigateRoute(pts, nSpeed)) {
+                    this.nativeIssued = true;
+                    this.reason = "Vanilla navigateToLocations along walk";
+                    return "running";
+                }
+                if (this.mover.navigateTo(center(w), nSpeed)) {
+                    this.nativeIssued = true;
+                    this.reason = "Vanilla navigateToLocation";
+                    return "running";
+                }
+                this.noNativeUntil = tick + 40;
+            }
 
             const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
             const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;

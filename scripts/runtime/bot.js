@@ -41,6 +41,7 @@ import { UI } from "./ui.js";
 import { Arbiter, REASON_CODES } from "../core/arbiter.js";
 import { decomposeMission, analyzeRequirements, isAnyLog, HIERARCHY } from "../core/goal-decomposition.js";
 import { shouldRecalculateAdaptive, verifyAction, handlePlanFailure, preserveEmergencyResources } from "../core/adaptive-planning.js";
+import { stillUnderground } from "../core/mover.js";
 
 /** Blocks the observer sweep records for the persistent memory. */
 const OBSERVED = new Map([
@@ -154,6 +155,7 @@ export class Bot {
         this.terrain = new Terrain(sim.dimension);
         this.terrain.clock = () => system.currentTick;
         this.nav = new Navigator(sim, host, this.terrain);
+        this.mover = this.nav.mover;
         this.escaper = new Escaper(this);
         this.miner = new Miner(this);
         this.drops = new Drops(this);
@@ -560,13 +562,30 @@ export class Bot {
                 const r = this.deepMiner.ascend(tick);
                 this.reason = this.deepMiner.reason;
                 if (r === "surface") {
+                    const loc = floor(this.sim.location);
+                    if (stillUnderground(loc, this.deepMiner.site?.origin)) {
+                        this.deepMiner.wantsOut = true;
+                        this.reason = "Claimed surface but still underground — climbing";
+                        return "continue";
+                    }
                     const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
                     this.deepMiner.reset();
                     this.miner.reset();
                     if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
                     return "done";
                 }
-                if (r === "stalled") { this.record("DeepMiner stalled: " + this.deepMiner.reason + ", retrying"); this.deepMiner.reset(); this.miner.reset(); return "done"; }
+                if (r === "stalled") {
+                    this.deepMiner.wantsOut = true;
+                    this.record("DeepMiner stalled: " + this.deepMiner.reason + " — still climbing");
+                    if (stillUnderground(floor(this.sim.location), this.deepMiner.site?.origin)) {
+                        const e = this.deepMiner.emergencyExit(tick);
+                        this.reason = this.deepMiner.reason;
+                        if (e !== "surface") return "continue";
+                    }
+                    this.deepMiner.reset();
+                    this.miner.reset();
+                    return "done";
+                }
                 return "continue";
             }
             // Scan for ores to feed deepMiner
@@ -589,12 +608,28 @@ export class Bot {
             const r = this.miner.ascend(tick);
             this.reason = this.miner.reason;
             if (r === "surface") {
+                const loc = floor(this.sim.location);
+                if (stillUnderground(loc, this.miner.site?.origin)) {
+                    this.miner.wantsOut = true;
+                    this.reason = "Claimed surface but still underground — climbing";
+                    return "continue";
+                }
                 const why = wantedOut ? "No vein found on that shaft." : full && !met ? "Inventory full underground." : "";
                 this.miner.reset();
                 if (why) { this.record(why + " Climbed out; retrying robustly"); this.taskStart = tick; return "done"; }
                 return "done";
             }
-            if (r === "stalled") { this.record("Miner stalled: " + this.miner.reason + ", retrying"); this.miner.reset(); return "done"; }
+            if (r === "stalled") {
+                this.miner.wantsOut = true;
+                this.record("Miner stalled: " + this.miner.reason + " — still climbing");
+                if (stillUnderground(floor(this.sim.location), this.miner.site?.origin)) {
+                    const e = this.miner.emergencyExit(tick);
+                    this.reason = this.miner.reason;
+                    if (e !== "surface") return "continue";
+                }
+                this.miner.reset();
+                return "done";
+            }
             return "continue";
         }
         if (met) return "done";
@@ -746,24 +781,18 @@ export class Bot {
         this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
 
-        // ANTI-DROWN: if in water, immediately handle swimming - never drown
+        // ANTI-DROWN: SimulatedPlayer.swim() — jump-only never surfaces in deep water
         if (this.sim.isInWater) {
-            // Force swimming behavior - jump every tick to stay at surface
-            if (tick % 5 === 0) {
-                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-            }
-            // If head in water, urgent surface
             try {
-                if (this.terrain.headInWater(this.sim)) {
-                    this.reason = "In water head submerged - urgent surfacing - anti-drown swimming fix";
-                    try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-                    const cur = this.sim.location;
-                    try {
-                        this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
-                    } catch (_e) { this.fault(_e); }
-                    // Try boat immediately when drowning
-                    const boatRes = this.escaper.boat(tick);
-                    if (boatRes) return;
+                const cur = this.sim.location;
+                const head = !!this.terrain.headInWater(this.sim);
+                const shore = this.terrain.shoreNear(cur, 32);
+                const dest = shore ? center(shore.cell) : { x: cur.x, y: cur.y + 2, z: cur.z };
+                this.mover.swimToward(dest, { headInWater: head, tick });
+                if (head) {
+                    this.reason = "In water — sim.swim() surfacing";
+                    if (this.escaper.boat(tick)) return;
+                    return;
                 }
             } catch (_e) { this.fault(_e); }
         }
@@ -1623,25 +1652,22 @@ export class Bot {
      * - Deep mining delegates to AdvancedMiner / DeepMiner
      */
     mine(m, tick) {
-        // ANTI-DROWN: if in water while mining, surface first - never drown
+        // ANTI-DROWN: mining never continues while swimming — sim.swim() to shore/surface
         if (this.sim.isInWater) {
-            try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-            if (this.terrain.headInWater(this.sim)) {
-                this.reason = "Mining interrupted - in water head submerged, surfacing - anti-drown";
-                const cur = this.sim.location;
-                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                const boatRes = this.escaper.boat(tick);
-                if (boatRes) return false;
-                return false;
+            const cur = this.sim.location;
+            const head = !!this.terrain.headInWater(this.sim);
+            const shore = this.terrain.shoreNear(cur, 32);
+            const dest = shore ? center(shore.cell) : { x: cur.x, y: cur.y + 2, z: cur.z };
+            try { this.mover.swimToward(dest, { headInWater: head, tick }); } catch (_e) { this.fault(_e); }
+            this.reason = head ? "Mining interrupted — sim.swim() to surface" : "Mining interrupted — sim.swim() to shore";
+            if (this.miner.active || this.deepMiner.active) {
+                this.miner.wantsOut = true;
+                this.deepMiner.wantsOut = true;
             }
-            // Try to get to shore while mining
-            const shore = this.terrain.shoreNear(this.sim.location, 32);
-            if (shore) {
-                this.reason = "Mining interrupted - in water, swimming to shore first - anti-drown";
-                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                if (tick % 10 === 0) { try { this.sim.jump(); } catch (_e) { this.fault(_e); } }
-                return false;
+            if (head) {
+                try { if (this.escaper.boat(tick)) return false; } catch (_e) { this.fault(_e); }
             }
+            return false;
         }
         const stock = this.bag.counts();
         // Met check
@@ -2494,7 +2520,7 @@ export class Bot {
         this.stop(found ? "Death point swept; drops collected." : "No drops remained at death point."); this.tell(this.reason);
     }
     attach(sim) {
-        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
+        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain); this.mover = this.nav.mover;
         this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag); this.autonomy = new SurvivalDirector(this);
         this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
         this.nav.builder = this.builder; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;
