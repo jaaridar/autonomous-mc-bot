@@ -9,6 +9,7 @@ import { Direction } from "@minecraft/server";
 import { isPassable, isSolid, isFalling, isLiquid, isHazard, isUnbreakable } from "../core/blocks.js";
 import { getBlockInfo, bestFor, retainScore } from "../core/knowledge.js";
 import { bridgingPlan } from "../core/world-awareness.js";
+import { portalFrame } from "../core/portal.js";
 
 const FACES = new Map([
     ["1,0,0", Direction.East],
@@ -505,12 +506,11 @@ export class Builder {
      * Build nether portal frame - 10 minimum obsidian.
      * Returns status.
      */
-    buildPortalFrame(basePos, tick) {
-        // Portal: 4 wide, 5 high, corners optional (10 min)
+    buildPortalFrame(basePos, tick, axis = "x") {
+        // 4x5 frame, 2x3 interior, corners optional: ten obsidian is enough.
+        const plan = portalFrame(basePos, axis);
         const obsidianSlot = this.bag.find(s => s.typeId === "minecraft:obsidian");
         if (obsidianSlot < 0) return "no_obsidian";
-
-        // Check if we have 10 obsidian
         let count = 0;
         for (let i = 0; i < this.bag.size; i++) {
             const s = this.bag.get(i);
@@ -518,25 +518,38 @@ export class Builder {
         }
         if (count < 10) return "not_enough_obsidian";
 
-        // Build frame: bottom 4, sides 3 each, top 4 = 10 with no corners? Actually 10 min includes corners? Let's build 4x5 hollow
-        const frame = [];
-        // Bottom
-        for (let x = 0; x < 4; x++) frame.push(add(basePos, { x, y: 0, z: 0 }));
-        // Sides
-        for (let y = 1; y < 4; y++) {
-            frame.push(add(basePos, { x: 0, y, z: 0 }));
-            frame.push(add(basePos, { x: 3, y, z: 0 }));
-        }
-        // Top
-        for (let x = 0; x < 4; x++) frame.push(add(basePos, { x, y: 4, z: 0 }));
+        // Place the ten required blocks first (bottom row, side columns, top
+        // row). The top row needs something to place against, so the two
+        // optional corners go up as *scaffolding* (any building block) before
+        // it: a non-obsidian corner does not stop the portal from forming and
+        // saves the obsidian the bot may not have.
+        const required = plan.required;
+        const isRequired = (p) => required.some((q) => q.x === p.x && q.y === p.y && q.z === p.z);
+        const bottom = required.filter((p) => p.y === plan.base.y);
+        const sides = required.filter((p) => p.y > plan.base.y && p.y < plan.base.y + 4);
+        const top = required.filter((p) => p.y === plan.base.y + 4);
+        const corners = plan.frame.filter((p) => !isRequired(p));
+        const cornersBottom = corners.filter((p) => p.y === plan.base.y);
+        const cornersTop = corners.filter((p) => p.y !== plan.base.y);
+        // Build order matters: each block is placed against a solid neighbour,
+        // so the bottom corners (scaffolding) hold the side columns, and the top
+        // corners hold the top row.
+        const order = [
+            ...cornersBottom.map((p) => ({ p, scaffold: true })),
+            ...bottom.map((p) => ({ p, scaffold: false })),
+            ...sides.map((p) => ({ p, scaffold: false })),
+            ...cornersTop.map((p) => ({ p, scaffold: true })),
+            ...top.map((p) => ({ p, scaffold: false })),
+        ];
 
-        for (const pos of frame) {
-            if (this.terrain.empty(pos) || isPassable(this.terrain.block(pos)?.typeId)) {
-                const support = this.findSupportFor(pos);
-                if (!support) continue;
-                const r = this.placeAt(pos, support.pos, { sneak: true, blockType: "minecraft:obsidian" });
-                if (r === "placed") return "placed";
-            }
+        for (const entry of order) {
+            const pos = entry.p ?? entry;
+            const scaffold = !!entry.scaffold;
+            if (!(this.terrain.empty(pos) || isPassable(this.terrain.block(pos)?.typeId))) continue;
+            const support = this.findSupportFor(pos);
+            if (!support) continue;
+            const r = this.placeAt(pos, support.pos, scaffold ? { sneak: true } : { sneak: true, blockType: "minecraft:obsidian" });
+            if (r === "placed") return "placed";
         }
         return "building";
     }

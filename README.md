@@ -3,7 +3,9 @@
 An experimental scripted survival bot for Minecraft Bedrock (1.21.114). It runs a
 real simulated player through the GameTest framework and drives it with a
 purpose-built brain: mining, crafting, smelting, foraging, defence, escape,
-exploration — and now persistent memory, night camping and death recovery.
+exploration — and now wide bidirectional pathfinding, an escalating anti-stuck
+ladder, fully autonomous Overworld ⇄ Nether travel, and general engines for
+combat, crafting and survival that compute an answer instead of looking one up.
 
 Everything the bot earns is earned in-game. Nothing is fabricated, duplicated or
 teleported into the inventory, and every action is verified against the world
@@ -26,6 +28,8 @@ before the next step trusts it.
 !bot status                        # mission + state at a glance
 !bot mission                       # just the current objective, one line
 !bot follow                        # overrides when you want: follow / guard /
+!bot nether                        # build/find a portal, light it, enter, explore
+!bot overworld                     # come home (portal, or the linked origin frame)
 !bot pause                         # goto / mine / golem / ... ; pause holds
 ```
 
@@ -105,6 +109,128 @@ vanilla way — by walking over them:
 - Only items inside loaded chunks are visible; beyond the ticking area and the
   owner's loaded chunks the script cannot see the world at all.
 
+## General engines (v1.3.1)
+
+The bot no longer answers "what now?" from tables of special cases. Four pure
+engines decide, and the runtime executes:
+
+- **Any mob, any group.** `core/mobs.js` classifies a mob by *how it fights*
+  (melee / archer / bomber / leaper / teleporter / fire / flying / summoner /
+  heavy / boss …). Vanilla ids map to archetypes; unknown and modded ids are
+  inferred from their name and from the engine's own `type_family`, so
+  `mymod:ice_zombie` is a hostile zombie and an unrecognised monster is still a
+  monster.
+- **Fights are arithmetic.** `core/combat-plan.js` computes incoming damage per
+  second, the worst burst in range, time-to-die and time-to-kill, then picks a
+  stance: engage, kite, advance behind a shield, build cover, take high ground,
+  retreat or flee. Kill order is "most damage per second of effort". Five
+  skeletons, ten zombies in a cave, or a creeper hidden behind a wall need no
+  new branches — the numbers produce the answer. `!bot fight` prints it.
+- **Crafting is generated.** `core/recipe-book.js` derives 263 recipes from
+  families (every tool and armour material, all 12 wood variants, all 16 bed
+  colours, utility blocks) plus a smelting table — and, more importantly, an
+  **acquisition graph**: `!bot recipe bucket` prints the real chain (logs →
+  planks → table → iron → furnace → smelt → craft). Items with no recipe resolve
+  to a mob drop, a block drop, a chest, or an honest "blocked" reason.
+- **Survival is ranked, not scripted.** `core/needs.js` scores 14 needs from
+  actual values (air, health, hunger, fall distance, threats) with capability
+  filtering, hysteresis and emergency pre-emption, and returns one executable
+  action. `runtime/survival-master.js` runs it before the legacy 80-scenario
+  chain, which remains as a backstop.
+
+Adding a case is now data, not code: one archetype entry, one wood colour, one
+`NEEDS` definition. Details and the extension table: `docs/GENERAL_ENGINES.md`.
+
+## Pathfinding (v1.2.8)
+
+The navigator keeps its cheap rolling-horizon A* for short walks, and now hands
+long trips and dead ends to a second, wider planner inspired by
+[nox7's Pathfinder](https://github.com/nox7/mc-bedrock-script-utilities/tree/main/Pathfinder)
+(Apache-2.0; see `THIRD_PARTY_NOTICES.txt`):
+
+- **Safety-checked moves.** Every candidate cell is tested the way the reference
+  BlockSafetyChecker does: feet and head open, floor solid, no lava/water, safe
+  fall depth, jump-onto headroom. Fences/walls/panes can be marked as
+  unjumpable; type ids can be ignored or forced passable.
+- **Bidirectional A\*.** Long trips search from both ends and meet in the
+  middle. If it cannot connect, the unidirectional search takes over with the
+  richer move set.
+- **Real moves, not just walking.** Walk, diagonal (corner-cut checked), step
+  up, drops up to three blocks, one- and two-block gap jumps, dig-through soft
+  blocks, bridging and pillaring — each with its own cost, so the route is the
+  cheapest one the bot can actually execute.
+- **Time-sliced and budgeted.** The core is a generator (`step(budget)` / 
+  `*search()`), so a big search can be spread over ticks like `system.runJob`;
+  when the node budget runs out it returns its best partial route instead of
+  failing.
+- **Smoothed, verified waypoints.** Collinear nodes are collapsed and clear
+  straight lines are string-pulled, but only when every sampled cell is
+  standable.
+
+`!bot path` shows plan/found/partial/failed counts and nodes expanded.
+`!bot config pathdig off` / `pathbridge off` stop the planner from proposing
+tunnels or bridges; `!bot config parkour off` disables gap jumps.
+
+## Autonomous Nether travel (v1.3.1)
+
+When `!bot auto` is running, the expedition director can start the trip on its
+own; no `!bot nether` command is needed. It waits for the bot to be healthy,
+fed, equipped with a stone-tier pickaxe and able to ignite a portal, and for
+nearby threats/hazards to clear. It then hands control to the same verified
+portal traveler used by the manual command. Use `!bot status` to inspect its
+readiness and blockers; `!bot config nether off` disables autonomous starts.
+
+This is autonomous *attempting*, not an absolute guarantee: Bedrock may reject
+interactions, portal generation/transit is engine-owned, and no live world is
+available in this repository to prove the whole trip succeeds on every terrain.
+Failed steps are reported and retried with backoff; the bot does not fabricate
+items or bypass hazards.
+
+### Portal traveler implementation (v1.2.8)
+
+`!bot nether` (or the speedrun director once it has obsidian and ignition) runs
+a real trip with no further input:
+
+1. Reuse a remembered portal within 64 blocks, or find a lit one nearby.
+2. Otherwise gather 10 obsidian through the normal directors, choose a flat,
+   safe 4×5 anchor and build a real frame with real blocks.
+3. Light it with flint and steel or a fire charge, and verify the portal block
+   appears before walking in.
+4. Walk into the interior. If the engine transports the simulated player, the
+   bot detects the dimension change; if it does not, the bot uses the portal's
+   own coordinate link (overworld ÷ 8, nether × 8) and searches for a safe,
+   non-lava landing on the other side.
+5. In the Nether it explores within a leash of the arrival point, mines quartz
+   and nether gold, looks for fortress/bastion signatures, avoids ghasts and
+   lava, and returns when health, food or the trip budget says so.
+6. The return trip uses a real nether portal when one exists, otherwise the
+   remembered Overworld frame (the exact one it came through), so a trip can
+   never strand the bot without obsidian.
+
+Every cache is dimension-aware: on a dimension change the shared `Terrain`
+handle is retargeted and cleared, navigation/planner state resets, and the
+awareness/structures maps are rebuilt. `!bot config travel off` restores the old
+conservative behaviour of pausing when owner and bot are in different
+dimensions; the default is to keep working autonomously.
+
+## Never stuck: the recovery ladder
+
+Navigation failures no longer just retry the same thing. The watchdog
+(`core/anti-stuck.js`) classifies the situation — suffocating, lava, drowning,
+caged, looping between the same cells, no route, unloaded chunks, or a ready
+portal — and walks an escalating ladder:
+
+```
+replan -> wide replan / jump -> dig forward / dig up / pillar / bridge
+       -> backtrack / relocate -> surface / eat -> return home / use portal
+       -> honest safe pause
+```
+
+Actions have per-action cooldowns, failed actions escalate instead of repeating,
+and progress (closing distance, not just moving) resets the ladder. When the
+ladder is exhausted the bot says exactly why and pauses instead of thrashing.
+`!bot status` includes the current stuck level, kind and last action.
+
 ## Performance notes
 
 - Memory writes only when information changed (per-sighting deduplication).
@@ -114,10 +240,16 @@ vanilla way — by walking over them:
 
 ## Current limits
 
-- **Overworld only.** Nether/End travel is planned but not implemented; the bot
-  pauses rather than guess around dimensions.
-- Combat is melee with retreat logic; bow/shield work is planned.
-- No farming, enchanting, potions or villager trading yet.
+- **Overworld and Nether.** The End is not implemented; `!bot travel` accepts
+  only overworld/nether and the bot refuses anything else honestly.
+- Nether travel assumes the vanilla 1:8 portal link when the engine does not
+  transport the simulated player itself. It searches for a safe landing, but it
+  cannot guarantee terrain generation around an arbitrary link point — it will
+  carve/land on a platform instead.
+- Combat is melee with shield, cover, tower and retreat stances. Bows and
+  crossbows are known to the item book but not yet used as a weapon.
+- No enchanting, potions or villager trading yet; farming is limited to
+  harvesting what already grows.
 - A world reload ends the simulated player; see "Persistent memory".
 
 ## Repo layout
@@ -128,13 +260,22 @@ structures/verdant/host.mcstructure   GameTest host structure
 scripts/
   main.js                      chat commands, event wiring, tick loop
   core/                        engine-free logic (unit-testable)
-    math, commands, policy, recipes, ores, navigation, survival, recovery, transfer, memory
+    math, commands, policy, recipes, ores, navigation, survival, recovery, transfer, memory,
+    pathfinder (safety-checked A*/bidirectional), anti-stuck (recovery ladder), portal (geometry/linking),
+    mobs (archetypes + inference), combat-plan (damage-race engagement planner), recipe-book (generated
+    recipes + acquisition graph), needs (severity-ranked survival)
   runtime/                     engine-bound components
     bot, drops, scouting, host, navigation, mining, world, inventory, equipment,
-    escape, furnace, foraging, exploration, survival, hands, memory
+    escape, furnace, foraging, exploration, survival, hands, memory,
+    pathfinder (wide planner service), portal-travel, stuck-recovery, nether-explore
 docs/COMMANDS.md               full command reference
+docs/PATHFINDING.md            planner, anti-stuck ladder, portal travel internals
+docs/GENERAL_ENGINES.md        mobs, combat planning, recipes, survival needs
+docs/ARCHITECTURE.md           layer map and module contracts
+docs/BRAIN.md                  offline planning layer (not the running ladder)
+docs/FULL_GAME_SPEEDRUN_ROADMAP.md   what is done and what is still planned
 tools/                         self-contained verification suite (node tools/run-all.mjs)
-LICENSE (MIT), THIRD_PARTY_NOTICES.txt
+LICENSE (MIT), THIRD_PARTY_NOTICES.txt  (incl. Apache-2.0 for the nox7 Pathfinder)
 ```
 
 ## Development & verification
@@ -155,4 +296,13 @@ reads that are never assigned; both classes were real shipped crashes), an
 import scan (`imports.mjs`), core unit tests (`test.mjs`), the walkable-block
 regex guard (`walkable.mjs`) and the drop-flush tests (`flush.mjs`).
 `tools/selftest/` holds deliberately broken fixtures; the run requires those to
-fail, proving the no-undef gate still catches bugs.
+fail, proving the no-undef gate still catches bugs. `tools/pathfinder.test.mjs`
+(73 tests) covers safety checks, bidirectional agreement, ignore/passable/
+jump-over options, dig/bridge/pillar edges, budgets, slicing, smoothing and the
+anti-stuck ladder. `tools/travel.test.mjs` (88 tests) covers portal geometry and
+validation, anchor/arrival selection, travel decisions, the pathfinder service
+and navigator handoff, and a full fake-engine build → light → enter → arrive →
+return Nether round trip. `tools/general.test.mjs` (126 tests) covers mob
+inference, the combat planner (single mobs, swarms, archers, creepers, bosses,
+modded monsters), the generated recipe book and acquisition plans, the needs
+engine, and the runtime wiring.

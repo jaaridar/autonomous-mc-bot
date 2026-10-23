@@ -4,7 +4,8 @@ import { Bot } from "./runtime/bot.js";
 import { Bag } from "./runtime/inventory.js";
 import { Memory } from "./runtime/memory.js";
 import { tokens, integer, coordinates } from "./core/commands.js";
-import { id } from "./core/recipes.js";
+import { id, explainItem } from "./core/recipes.js";
+import { dropIndex } from "./core/mobs.js";
 import { distance, floor } from "./core/math.js";
 const host = new Host();
 const memory = new Memory();
@@ -92,7 +93,7 @@ function spawnBot(p) {
     if (remembered.death)
         say(p, "A death point is remembered; it is fetched automatically after the next death, or use !bot recover now.");
 }
-const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.2.7 speedrun-fix + ultra-efficient survival-master 80 scenarios: A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1, arbitrary bridging diagonal/horizontal/up, amazing parkour.";
+const HELP = "!bot init confirm | spawn | follow | guard | goto x y z | nether | overworld | travel nether/overworld | whereami | path | fight | recipe bucket | mine oak_log 4 | deepmine diamond 5 | auto | speedrun | range 256 | starter | craft stick 1 | base [clear] | recover | collect [6..32] | golem | organize | memory | stop | pause | resume | status | mission | inventory | ui [clear|refresh] | swap | deposit | config crafting/parkour/defend/fast/hunting/armor/bridge/boat/loot/deep/camp/pickup/speedrun/pathdig/pathbridge/travel/nether on/off | host | equipment | unequip | hold | stations | releasefurnace | remove | journal. v1.3.1 autonomous Nether expeditions + general engines: any-mob trait table, damage-race combat planning for groups, generated recipe book + acquisition plans, needs-ranked survival (legacy 80 scenarios remain as the fallback): A Falls 1-15 ravine/mountain/cave/water/lava/skeleton/creeper/broken pickaxe/ledge/dark/drowned/spider/lose surface/hunger/deep hole, B Night mobs 16-30 LOS/separate/interrupted/creeper+2 skeletons/spider roof/2 creepers/zombie blocks exit/witch/mob enters shelter/zombie+skeleton/creeper destroys/skeleton knockback/spider+zombie/wooden sword/eating/village, C Resource 31-45 no wood/hunger/sunset/no table/insufficient planks/pickaxe breaks/no coal/food runs out/full inventory/iron no furnace/food across river/dirt logs/bed no wool/wool no wood/weapon durability/food no weapon/valuable loot ravine, D Shelter 46-60 hillside cave/flooded/gravel collapse/cliff/two exits skeleton/lose direction/forest night/river trapped/food outside/self-blocked/dark chamber/hostile enters/village occupied/skeleton arrows/cannot find shelter, E Multi 61-80 critical 4HP 3 skeletons/flooding broken pickaxe/creeper ravine skeleton/fall cave zombies/lava iron sunset/full inventory valuable/no shelter rain/lost forest/water tunnel skeleton/ravine 3HP/shelter destroyed/iron broken pickaxe/village pillager/poison skeletons/water drowned/tool breaks gravel/creeper explosion food/shelter secure food outside/hunger long route/respawn death. Generated recipe plans, archetype-based unknown mob handling, safe resource retention, autonomous Nether expedition and explicit status/blocker reporting.";
 function say(p, msg) {
     p.sendMessage("§a[Verdant] §r" + msg);
 }
@@ -240,6 +241,60 @@ function command(p, text) {
             case "goto":
                 b.setMode("goto", coordinates(a));
                 break;
+            case "nether": {
+                if (b.sim.dimension.id === "minecraft:nether") {
+                    say(p, "Already in the Nether. " + JSON.stringify(b.netherExplore.report()));
+                    break;
+                }
+                const r = b.travelTo("minecraft:nether", floor(b.sim.location));
+                say(p, r === "started"
+                    ? "Nether trip started. It will find or build a portal, light it, walk in, and explore on the other side (returning when hurt, hungry, or done). Watch !bot status."
+                    : "Travel not started: " + r + " (" + b.travel.report().reason + ")");
+                break;
+            }
+            case "overworld": {
+                if (b.sim.dimension.id === "minecraft:overworld") {
+                    say(p, "Already in the Overworld.");
+                    break;
+                }
+                const r = b.travelTo("minecraft:overworld", floor(b.sim.location));
+                say(p, r === "started" ? "Return trip started: portal first, remembered overworld link as the fallback." : "Travel not started: " + r + " (" + b.travel.report().reason + ")");
+                break;
+            }
+            case "travel": {
+                const dim = (a[0] ?? "").replace("minecraft:", "");
+                if (!["nether", "overworld"].includes(dim))
+                    throw Error("Use !bot travel nether or !bot travel overworld.");
+                const r = b.travelTo("minecraft:" + dim, floor(b.sim.location));
+                say(p, r === "started" ? "Travel started to the " + dim + "." : "Travel not started: " + r + " (" + b.travel.report().reason + ")");
+                break;
+            }
+            case "whereami":
+                say(p, `Dimension ${b.sim.dimension.id} at ${JSON.stringify(floor(b.sim.location))}\nTravel: ${JSON.stringify(b.travel.report())}\nNether trip: ${JSON.stringify(b.netherExplore.report())}`);
+                break;
+            case "path":
+                say(p, JSON.stringify(b.pathfinder.report()));
+                break;
+            case "recipe": {
+                const wanted = id(a[0] ?? "");
+                if (!wanted || wanted === "minecraft:") throw Error("Use !bot recipe <item>, for example !bot recipe bucket.");
+                const info = explainItem(wanted, b.bag.counts(), {
+                    table: b.terrain.tableNear(b.sim.location) || !!b.tablePosition,
+                    furnace: b.bag.find((s) => s.typeId === "minecraft:furnace") >= 0,
+                    mobDrops: dropIndex(),
+                });
+                const steps = info.steps.map((s) => s.kind === "gather" ? `gather ${s.count} ${s.item.replace("minecraft:", "")}`
+                    : s.kind === "craft" ? `craft ${s.batches ?? 1}x ${s.item.replace("minecraft:", "")}`
+                        : s.kind === "smelt" ? `smelt ${s.batches ?? 1} ${s.input.replace("minecraft:", "")}`
+                            : s.kind === "kill" ? `hunt ${s.count} ${s.mob.replace("minecraft:", "")} for ${s.item.replace("minecraft:", "")}`
+                                : s.kind === "placeTable" ? "place a crafting table"
+                                    : s.kind === "placeFurnace" ? "place a furnace" : s.kind);
+                say(p, `${wanted}: ${info.blocked ? "blocked - " + info.reason : steps.length ? steps.join(" -> ") : "already have it"}`);
+                break;
+            }
+            case "fight":
+                say(p, b.combat?.planSummary ? b.combat.planSummary : "No fight in progress.");
+                break;
             case "mine":
                 b.startMine(id(a[0] ?? "oak_log"), integer(a[1], 1, 64, 4));
                 break;
@@ -372,8 +427,16 @@ function command(p, text) {
                     b.settings.pickup = value;
                 else if (a[0] === "speedrun")
                     b.settings.speedrun = value;
+                else if (a[0] === "travel" || a[0] === "crossdim")
+                    b.settings.crossDimension = value;
+                else if (a[0] === "nether")
+                    b.settings.autoNether = value;
+                else if (a[0] === "pathdig")
+                    b.settings.pathDig = value;
+                else if (a[0] === "pathbridge")
+                    b.settings.pathBridge = value;
                 else
-                    throw Error("Settings: crafting, parkour, defend, fast, hunting, armor, bridge, boat, loot, deep, camp, pickup, speedrun.");
+                    throw Error("Settings: crafting, parkour, defend, fast, hunting, armor, bridge, boat, loot, deep, camp, pickup, speedrun, pathdig, pathbridge, travel, nether.");
                 b.stop("Configuration changed; choose or resume a task.");
                 say(p, JSON.stringify(b.settings));
                 break;
@@ -445,6 +508,6 @@ world.afterEvents.playerLeave.subscribe((e) => {
 });
 system.runInterval(() => bot?.tick(), 1);
 world.afterEvents.worldLoad.subscribe(() => {
-    console.warn("[Verdant 1.2.7] Survival-Master 80 scenarios world-class: A Falls 1-15, B Night mobs 16-30, C Resource 31-45, D Shelter 46-60, E Multi 61-80 critical. Handles ravine flee zombie low HP unknown depth, mountain ledge sunset fall damage darkness, cave tree no torches, water underwater cave oxygen, lava pool immediate hazard, skeleton above cover climb, creeper hole explosion, broken pickaxe, narrow ledge lava balance, deep cave hostile, drowned chase, spider tree, lose surface orientation, empty hunger, too deep pillar, 3 skeletons zombie sunset LOS, 4 zombies building shelter defensive, creeper 2 skeletons block home explosion cover alternate, spider roof skeleton outside multiple angles, 2 creepers narrow entrance simultaneous, zombie blocks exit skeleton above, witch low health potion retreat, mob enters small shelter doorway control, zombie then skeleton joins reassess, creeper destroys entrance terrain changed, skeleton knocks cliff knockback recovery, spider zombie pursue cave chokepoint, hostile group wooden sword disadvantage, attacked while eating cancel/complete, village night zombies secure, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1 never bare-hand, arbitrary bridging diagonal/horizontal/up, amazing parkour, death recovery, upskilling main goal.");
-    world.sendMessage("§a[Verdant] v1.2.7 speedrun-fix + ultra-efficient survival-master 80 scenarios - !bot spawn to begin. Handles all falls, night mobs, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, quick tool #1.");
+    console.warn("[Verdant 1.3.0] General engines (mobs/combat/recipes/needs) + Pathfinder + autonomous Nether: bidirectional safety-checked A*, dig/bridge/pillar edges, escalating anti-stuck ladder, portal build/light/enter/link, nether resource trips and return: A Falls 1-15, B Night mobs 16-30, C Resource 31-45, D Shelter 46-60, E Multi 61-80 critical. Handles ravine flee zombie low HP unknown depth, mountain ledge sunset fall damage darkness, cave tree no torches, water underwater cave oxygen, lava pool immediate hazard, skeleton above cover climb, creeper hole explosion, broken pickaxe, narrow ledge lava balance, deep cave hostile, drowned chase, spider tree, lose surface orientation, empty hunger, too deep pillar, 3 skeletons zombie sunset LOS, 4 zombies building shelter defensive, creeper 2 skeletons block home explosion cover alternate, spider roof skeleton outside multiple angles, 2 creepers narrow entrance simultaneous, zombie blocks exit skeleton above, witch low health potion retreat, mob enters small shelter doorway control, zombie then skeleton joins reassess, creeper destroys entrance terrain changed, skeleton knocks cliff knockback recovery, spider zombie pursue cave chokepoint, hostile group wooden sword disadvantage, attacked while eating cancel/complete, village night zombies secure, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, adaptive any mob, quick tool #1 never bare-hand, arbitrary bridging diagonal/horizontal/up, amazing parkour, death recovery, upskilling main goal.");
+    world.sendMessage("§a[Verdant] v1.3.1 autonomous Nether + general engines: any mob, group fights, generated recipes, needs-driven survival; plus pathfinder + fully autonomous Nether travel - !bot spawn to begin. Handles all falls, night mobs, resource shortages, shelter failures, multi-risk critical. Knows every block/item, retains important, lava->portal, quick tool #1.");
 });

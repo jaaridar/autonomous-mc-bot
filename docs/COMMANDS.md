@@ -1,4 +1,4 @@
-# Verdant Bot — command reference v0.9.0 Advanced
+# Verdant Bot — command reference v1.3.1 General Engines + Pathfinder + Autonomous Nether
 
 All commands are chat messages starting with `!bot`. The sender needs `/tag @s add verdant.admin` (one-time). The bot is owned by whoever spawned it; only the owner can command it. Commands are rate-limited to one per 4 ticks (`stop` is exempt). `!bot help` prints this list in-game.
 
@@ -20,7 +20,14 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 |---|---|
 | `!bot follow` | Follows the owner (leash 3). Uses advanced parkour: 1-gap, 2-gap sprint jumps, jump-up, big drops, bridging, pillaring. |
 | `!bot guard` | Holds position at anchor where mode started (leash 2). Camps at night. |
-| `!bot goto x y z` | Paths to coordinates with advanced navigation, stops on arrival. Handles water via boat, gaps via bridge. |
+| `!bot goto x y z` | Paths to coordinates with advanced navigation, stops on arrival. Handles water via boat, gaps via bridge. Long trips use the wide bidirectional planner. |
+| `!bot nether` | Fully autonomous Nether trip: find or build a portal (real obsidian), light it, walk in, verify transit, explore the Nether, return when hurt/hungry/done. Reports every phase in `!bot status`. |
+| `!bot overworld` | Return from the Nether: real portal if one is within reach, otherwise the remembered Overworld frame (1:8 link) with a safe-arrival search. |
+| `!bot travel nether\|overworld` | Explicit destination form of the two commands above. |
+| `!bot config nether off/on` | Disable/re-enable autonomous Nether departures. Manual `!bot nether` remains available. |
+| `!bot whereami` | Dimension, position, travel state and Nether-trip state in one line. |
+| `!bot path` | Wide-planner stats: plans, found/partial/failed, nodes expanded, cache hits, pending search. |
+| `!bot fight` | What the combat planner would do right now: action/stance, target, incoming dps, time-to-die vs time-to-kill. |
 | `!bot range 32..4096` | Sets exploration home radius (default 256). |
 | `!bot base [clear]` | Sets remembered base to bot's current spot (persists across sessions). `clear` forgets it. |
 
@@ -30,9 +37,10 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 |---|---|
 | `!bot mine <block> [1..64]` | Mines supported block (oak_log, wheat, iron_ore, diamond_ore, etc). Enhanced: tight 12 -> wide 28 -> explore, watches resource while moving, clears obstructions below (fixes \"can't get below\"), scaffolds to high logs, bridges gaps, collects drops honestly. For ores, uses branch mining + vein clustering. |
 | `!bot deepmine <ore> [1..64]` | Explicit deep mining: shaft to best Y (diamond -59, iron 16, etc), branch pattern with optimal spacing, vein clustering via flood-fill, torching, then ascend same route. |
-| `!bot craft <item> [1..64]` | Manual craft through recipe adapter. Requires `config crafting on`. |
+| `!bot craft <item> [1..64]` | Manual craft through the recipe book (263 generated recipes + smelting). Requires `config crafting on`. |
+| `!bot recipe <item>` | Prints how the bot would obtain an item, step by step (gather -> craft -> smelt -> craft, or hunt/loot), or the honest reason it cannot. |
 | `!bot starter` | Milestone run: stone pickaxe -> stone sword -> furnace. Spawn runs this automatically for unequipped bot, then auto survival. |
-| `!bot auto` | Survival supervisor: food, defence, tools, furnace, iron gear, armour, torches, opportunistic diamonds, village looting, sheep hunting. Auto-enables assisted crafting if it is off. |
+| `!bot auto` | Survival supervisor: food, defence, tools, furnace, iron gear, armour, torches, opportunistic diamonds, village looting, sheep hunting. Auto-enables assisted crafting if it is off. Also autonomously prepares for and starts a Nether expedition when safe. |
 | `!bot speedrun` | End-to-end speedrun director: wood (any 8 logs) -> table -> wooden tools -> cobble 20 -> stone tools -> furnace -> torch -> iron -> bucket -> diamond pick -> obsidian 10 (water+lava cast) -> flint&steel -> Nether. Auto-enables crafting and speedrun routing if off. Nether prep waits for the iron tier; directors keep their mode while mining. |
 | `!bot recover` | Walks to recorded death point (up to 256 blocks) and sweeps drops within 12 blocks. Threats interrupt; full inventory stops cleanly. |
 | `!bot collect [6..32]` | Sweeps loose `minecraft:item` drops in radius (default 12) around bot's current spot, reports real inventory delta. Idle bot also auto-picks up within 8 blocks. |
@@ -74,6 +82,9 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 | `loot` | on | Loot chests/barrels with scoring (valuable first, home avoidance), auto survival scouts villages. |
 | `deep` | on | Deep mining with DeepMiner (branch + vein clustering) + legacy Miner. |
 | `speedrun` | off | Enable speedrun optimizations (auto phase switching). |
+| `pathdig` | on | Wide planner may propose tunnelling through soft blocks (dirt/stone/netherrack/…). Never obsidian, bedrock, chests, spawners or portals. |
+| `pathbridge` | on | Wide planner may propose bridging gaps and pillaring (also requires `bridge`). |
+| `travel` (alias `crossdim`) | on | Keep working autonomously when owner and bot are in different dimensions. `off` restores the old conservative pause. |
 
 ## Advanced features v0.9
 
@@ -85,11 +96,14 @@ All commands are chat messages starting with `!bot`. The sender needs `/tag @s a
 - **Resource**: auto organize, opportunistic gathering within 8 blocks, deposit low-value when full.
 - **Speedrun**: full progression with DeepMiner integration.
 - **Fixes**: mining below now clears obstruction, tree mining scaffolds, mine mode explores instead of idling (fixes \"after mining oat or wood just watch\"), bridging places real blocks with support checks (fixes \"bridging sucks\"), crops added to MINE.
+- **General engines v1.3.1**: `combat-plan.js` decides fights from damage arithmetic (any number of attackers), `mobs.js` describes/infers any entity, `recipe-book.js` generates recipes and acquisition plans, `needs.js` ranks survival needs. See `docs/GENERAL_ENGINES.md`.
+- **Pathfinding v1.2.8**: safety-checked bidirectional A* with closed-set duplicate suppression, ignore/passable/jump-over lists, Y-axis flood, dig/bridge/pillar edges, node budgets with best-effort partials, generator time slicing, and string-pulled smoothing. See `docs/PATHFINDING.md`.
+- **Anti-stuck v1.2.8**: classifies suffocation, lava, drowning, cage, loop, stall, no-route, unloaded chunks and ready portals, then escalates replan → dig/bridge/pillar → relocate → retreat → safe pause. Cooldowns stop it from thrashing; progress resets the ladder.
 
 ## Safety recap
 
 - No item fabrication, duplication or teleporting: everything observed and moved with rollback-protected transfers.
 - Digging refuses cells with water/lava next to them (unless explicitly allowed for bridging), and respects pickaxe tiers.
 - Bot never seals shelter with block it cannot dig out again.
-- Owner offline, dimension mismatch, or three repeated script errors pause bot instead of continuing.
+- Owner offline, or three repeated script errors, pause the bot. A dimension mismatch only pauses when `config travel off`; by default the bot keeps its mission running while the owner is elsewhere (owner must still be online).
 - Deposits, crafts, withdraws are all-or-nothing; failures say `CRITICAL` and stop for manual inspection.

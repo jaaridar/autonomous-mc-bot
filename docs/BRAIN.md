@@ -7,6 +7,25 @@ with composable parts. Everything here is pure JS (no `@minecraft/*`), covered b
 **Status: built and verified offline. NOT yet wired into `runtime/bot.js`.** The running bot behaves as
 before plus the Phase-0 fixes. See "Integration" for exactly what is left and why it needs in-game testing.
 
+> **v1.2.8 note — the runtime got its own versions of two of these parts.**
+> `scripts/core/pathfinder.js` + `scripts/runtime/pathfinder.js` now supply the wide
+> A*/bidirectional planner and the navigator handoff, and
+> `scripts/core/anti-stuck.js` + `scripts/runtime/stuck-recovery.js` supply a live
+> escalation ladder (replan → replan_wide/jump → dig/pillar/bridge → backtrack →
+> surface/eat → home/portal → honest pause). They are wired into `Bot.tick()` and
+> exercised by `tools/pathfinder.test.mjs` and `tools/travel.test.mjs`.
+> This file's `brain/` layer is still the offline planner, and `brain/stuck.js` is
+> still not the running no-progress ladder — do not read the two as the same code.
+> `runtime/portal-travel.js` also owns Nether entry/return now, so item 6 below
+> ("delete the duplicate Nether planner") is still open for `speedrun.js` only.
+>
+> **v1.3.1** adds the general engines in `docs/GENERAL_ENGINES.md`
+> (`mobs.js`, `combat-plan.js`, `recipe-book.js`, `needs.js`, and the readiness-gated `expedition.js`). `needs.js` covers
+> the same ground as `drives.js` + `stuck.js` but is wired into the runtime
+> (`survival-master.js` runs it first); `brain/` remains the offline planner and
+> test bed it has always been. When the director chain is finally replaced, the
+> arbiter here is the intended target — `needs.js` already reuses it.
+
 ## Parts
 
 | File | Job |

@@ -3,10 +3,27 @@
  * Tactics: cover, bunker, low-roof, dodge, pillar, water, shield, retreat, group kiting.
  */
 import { distance, floor, add, center, away } from "../core/math.js";
-import { getMobStat, shouldRetreat, combatThreatScore, chooseTactic, dodgePattern, endermanSafeLook, findCoverPosition } from "../core/combat.js";
-import { assess, bunkerPlan, chooseCoverDirection, shouldUseShield, shouldUseWater, strafePattern } from "../core/escape-strategy.js";
-import { EXPLOSIVE, RANGED, HOSTILES } from "../core/policy.js";
+import { dodgePattern, endermanSafeLook } from "../core/combat.js";
+import { planEngagement, describePlan } from "../core/combat-plan.js";
+import { describe as describeMob } from "../core/mobs.js";
 import { CARDINAL, COMPASS, UP, DOWN } from "../core/math.js";
+
+/** Planner actions -> the legacy tactic names journals and older code read. */
+const ACTION_TACTIC = {
+    engage: "fight",
+    kite: "kite",
+    shield_advance: "cover_rush",
+    cover: "cover_build",
+    retreat: "retreat",
+    flee: "flee",
+    tower: "pillar",
+    hold: "none",
+};
+
+/** Ranged mobs, decided from traits rather than a hardcoded type list. */
+function isRangedEntity(typeId) {
+    return describeMob(typeId).ranged;
+}
 
 export class Combat {
     constructor(bot) {
@@ -47,66 +64,82 @@ export class Combat {
     }
 
     /**
-     * Evaluate current threats with world-class assessment.
+     * Evaluate the current threats with the general planner.
+     *
+     * There are no per-mob branches here: `planEngagement` gets the raw entity
+     * list plus what the bot carries, computes damage/sec, time-to-die and
+     * time-to-kill, and returns a stance. The legacy fields (`assessment`,
+     * `tactic`, `shouldRetreat`, `target`) are still produced so the rest of
+     * the runtime keeps working unchanged.
      */
     evaluate(tick) {
-        const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
-        const armor = this.bot.equipment ? this.estimateArmor() : 0;
+        const health = this.sim.getComponent("minecraft:health");
+        const hp = health?.currentValue ?? 20;
+        const maxHp = health?.effectiveMax ?? health?.defaultValue ?? 20;
+        const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
         const info = this.terrain.threatInfo(this.sim, this.bot.owner());
-        const hasWeapon = this.bag.weapon() >= 0;
-        const hasShield = this.bag.find(s => s.typeId === "minecraft:shield") >= 0;
-        const hasWater = this.bag.find(s => s.typeId === "minecraft:water_bucket") >= 0 || this.bag.find(s => s.typeId === "minecraft:bucket") >= 0;
-        const hasBlocks = this.bag.buildBlock() >= 0;
+        const armor = this.estimateArmor();
+        const weaponSlot = this.bag.weapon();
+        const weaponItem = weaponSlot >= 0 ? this.bag.get(weaponSlot) : undefined;
         const blockCount = this.countBlocks();
-        const hasTotem = this.bag.find(s => s.typeId === "minecraft:totem_of_undying") >= 0;
-        const weaponTier = this.getWeaponTier();
+        const has = {
+            weapon: !!weaponItem?.typeId,
+            shield: this.bag.find((s) => s.typeId === "minecraft:shield") >= 0,
+            bow: this.bag.find((s) => /(_bow|crossbow)$/.test(s.typeId)) >= 0,
+            water: this.bag.find((s) => s.typeId === "minecraft:water_bucket") >= 0 || this.bag.find((s) => s.typeId === "minecraft:bucket") >= 0,
+            blocks: blockCount > 0,
+            food: this.bag.hasFood(),
+            totem: this.bag.find((s) => s.typeId === "minecraft:totem_of_undying") >= 0,
+        };
+        const pos = floor(this.sim.location);
+        const openings = COMPASS
+            .map((d) => ({ x: d.x, z: d.z, ok: this.terrain.safe(add(pos, d)) }))
+            .filter((o) => o.ok);
 
-        const threats = info.list.map(e => ({
-            typeId: e.typeId,
-            location: e.location,
-            distance: distance(e.location, this.sim.location),
-            entity: e
-        }));
+        const plan = planEngagement(info.list, {
+            hp,
+            maxHp,
+            armor,
+            food: hunger,
+            has,
+            botPos: pos,
+            weaponType: weaponItem?.typeId,
+            openings,
+            allowBoss: this.bot.settings?.allowBoss === true || this.bot.settings?.fightBosses === true,
+        });
+        this.plan = plan;
+        this.tactic = ACTION_TACTIC[plan.action] ?? plan.action;
+        this.planSummary = describePlan(plan);
 
-        const resources = { hasShield, hasWater, hasBlocks, blockCount, hasTotem, hasFood: this.bag.hasFood(), weaponTier, armorValue: armor };
-        const assessment = assess(hp, threats, resources, this.sim.location);
-        this.assessment = assessment;
+        const threats = plan.threats.filter((t) => t.profile.hostile);
+        const fear = threats.reduce((n, t) => n + t.profile.terror * (t.distance < 4 ? 2 : t.distance < 8 ? 1.2 : 0.8), 0);
+        this.assessment = {
+            totalFear: fear,
+            rangedCount: threats.filter((t) => t.profile.ranged).length,
+            meleeCount: threats.filter((t) => !t.profile.ranged).length,
+            explosiveNear: threats.some((t) => t.profile.explosive && t.distance <= 5),
+            hasEnderman: threats.some((t) => t.profile.traits.includes("teleport")),
+            hasBlaze: threats.some((t) => t.profile.traits.includes("fire") && t.profile.ranged),
+            hasSkeletonSwarm: threats.filter((t) => t.profile.ranged).length >= 3,
+            closest: Math.min(Infinity, ...threats.map((t) => t.distance)),
+            threatCount: threats.length,
+            types: [...new Set(threats.map((t) => t.typeId))],
+            decision: plan.action,
+            math: plan.math,
+            plan,
+        };
 
-        // Special cases
-        const creeper = threats.find(t => EXPLOSIVE.has(t.typeId) && t.distance < 5);
-        if (creeper) {
-            return { target: creeper.entity, tactic: "retreat", shouldRetreat: true, info, assessment, reason: "creeper near" };
-        }
-
-        const warden = threats.find(t => getMobStat(t.typeId).noFight);
-        if (warden) {
-            return { target: warden.entity, tactic: "flee", shouldRetreat: true, info, assessment, reason: "boss/warden - flee" };
-        }
-
-        if (shouldRetreat(hp, assessment.totalFear, info.count, hasWeapon, armor, hasShield, hasWater, threats)) {
-            return { target: info.nearest, tactic: assessment.decision, shouldRetreat: true, info, assessment, reason: `fear ${assessment.totalFear.toFixed(1)} hp ${hp} count ${info.count}` };
-        }
-
-        // Pick best target based on priority and distance
-        let best = info.nearest;
-        if (info.list.length > 1) {
-            const sorted = [...threats].sort((a, b) => {
-                const sa = getMobStat(a.typeId).priority;
-                const sb = getMobStat(b.typeId).priority;
-                // For skeleton swarm, prioritize closest
-                if (assessment.hasSkeletonSwarm) {
-                    return a.distance - b.distance;
-                }
-                if (sa !== sb) return sb - sa;
-                return a.distance - b.distance;
-            });
-            best = sorted[0].entity;
-        }
-
-        if (!best) return { target: undefined, tactic: "none", shouldRetreat: false, info, assessment };
-
-        const tactic = chooseTactic(best.typeId, assessment);
-        return { target: best, tactic, shouldRetreat: false, info, assessment };
+        const target = plan.target?.entity ?? plan.target?.raw?.entity ?? info.nearest;
+        const shouldRetreat = plan.action === "retreat" || plan.action === "flee";
+        return {
+            target,
+            tactic: this.tactic,
+            shouldRetreat,
+            info,
+            assessment: this.assessment,
+            plan,
+            reason: plan.reason,
+        };
     }
 
     estimateArmor() {
@@ -152,116 +185,127 @@ export class Combat {
     }
 
     /**
-     * World-class combat tick - handles any mob.
+     * Execute the current plan. Every branch below is chosen by the planner's
+     * action/stance, never by a mob name; trait checks (fire, teleport, ranged,
+     * explosive) only pick the *execution detail* of a stance that was already
+     * decided for tactical reasons.
      */
     tick(target, tick, info) {
         if (!target?.isValid) {
             this.nav.reset();
             return false;
         }
-
-        const assessment = this.assessment;
+        const plan = this.plan ?? this.evaluate(tick).plan;
+        const stats = plan.threats.find((t) => t.entity === target) ?? plan.threats.find((t) => t.raw?.entity === target) ?? plan.threats[0];
+        const traits = stats?.profile?.traits ?? [];
         const d = distance(this.sim.location, target.location);
-        const stat = getMobStat(target.typeId);
+        const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
 
-        // Handle special tactics first
-        if (this.tactic === "emergency_bunker" || assessment?.decision === "emergency_bunker") {
-            if (this.buildEmergencyBunker(tick)) return true;
-        }
-        if (this.tactic === "low_roof_bunker" || assessment?.decision === "low_roof_bunker" || target.typeId === "minecraft:enderman") {
+        // Trait-driven execution details for stances that are already decided.
+        if (traits.includes("teleport") && !this.terrain.waterNear(this.sim.location)) {
+            // Endermen are 3 tall and hate water: a 2-high roof or a bucket wins.
             if (this.handleEnderman(target, tick, info)) return true;
         }
-        if (this.tactic === "cover_build" || assessment?.decision === "cover_build" || assessment?.hasSkeletonSwarm) {
-            if (this.handleSkeletonSwarm(target, tick, info)) return true;
+        if (traits.includes("fire") && this.sim.isOnFire) {
+            if (this.handleBlaze(target, tick, info)) return true;
         }
-        if (this.tactic === "bunker" || assessment?.decision === "bunker") {
-            if (this.buildEmergencyBunker(tick)) return true;
-        }
-
-        // Explosive
-        if (EXPLOSIVE.has(target.typeId) && d < 5) {
+        if (traits.includes("explosive") && d < 5) {
             this.retreatFrom(target, tick, 10);
             return true;
         }
 
-        // Blaze handling
-        if (target.typeId === "minecraft:blaze") {
-            return this.handleBlaze(target, tick, info);
-        }
-
-        // Enderman handling
-        if (target.typeId === "minecraft:enderman") {
-            return this.handleEnderman(target, tick, info);
-        }
-
-        // Ranged swarm handling
-        if (assessment?.rangedCount >= 3) {
-            return this.handleRangedSwarm(target, tick, info);
-        }
-
-        // Standard ranged
-        if (RANGED.has(target.typeId) && d > 3.5) {
-            // Use cover if available, else rush
-            if (assessment?.totalFear > 15) {
-                const cover = this.findCover(tick, info);
-                if (cover) {
-                    this.nav.urgent = true;
-                    this.bot.navTo(cover, tick, 1);
+        switch (plan.action) {
+            case "hold":
+                return false;
+            case "flee":
+                this.retreatFrom(target, tick, 14);
+                return true;
+            case "retreat":
+                this.retreatFrom(target, tick, plan.surrounded ? 10 : 8);
+                return true;
+            case "tower":
+                if (this.builder?.pillar?.(tick) === "placed") {
+                    this.reason = "Combat: gaining high ground";
                     return true;
                 }
-            }
+                this.retreatFrom(target, tick, 6);
+                return true;
+            case "cover":
+                if (this.buildWallCover(tick, info)) {
+                    this.reason = "Combat: cover built";
+                    return true;
+                }
+                {
+                    const cover = this.findCover(tick, info);
+                    if (cover && distance(this.sim.location, cover) > 1.5) {
+                        this.bot.navTo(cover, tick, 1.5);
+                        return true;
+                    }
+                }
+                break;
+            case "shield_advance":
+                this.raiseShield();
+                if (d > 2.8) {
+                    this.nav.urgent = true;
+                    this.bot.navTo(target.location, tick, 2.2);
+                    return true;
+                }
+                break;
+            case "kite":
+                if (plan.contact >= 3 && tick - this.lastDodge > 8) this.dodge(tick, target);
+                if (d > 3.2) {
+                    this.nav.urgent = true;
+                    this.bot.navTo(target.location, tick, 2);
+                    return true;
+                }
+                if (tick - this.lastAttack < 10) {
+                    this.kite(target, tick);
+                    return true;
+                }
+                break;
+            default:
+                break;
+        }
+
+        // Engage: close, strafe, hit. The same code serves every mob.
+        if (d > 2.8) {
             this.nav.urgent = true;
             this.nav.avoid = [];
-            const r = this.bot.navTo(target.location, tick, 2.5);
+            if (plan.stance === "strafe" && tick - this.lastStrafe > 20) this.strafe(tick, true);
+            const r = this.bot.navTo(target.location, tick, 2.2);
             if (r === "failed") this.retreatFrom(target, tick, 6);
             return true;
         }
 
-        // Melee with low hp
-        const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
-        if (hp <= 10 && d < 2.5 && stat.damage >= 6) {
-            this.kite(target, tick);
-            return true;
-        }
-
-        if (d > 2.8) {
-            this.nav.urgent = true;
-            this.bot.navTo(target.location, tick, 2.2);
-            return true;
-        }
-
-        // In melee range
         this.nav.urgent = false;
         this.nav.reset();
         if (!this.terrain.line(this.sim.getHeadLocation(), target.getHeadLocation())) {
-            // No LOS - need to reposition
             this.strafe(tick, true);
             return true;
         }
         if (tick - this.lastAttack < 10) {
-            // Dodge while waiting for attack cooldown
-            if (stat.strafe && tick - this.lastDodge > 12) {
-                this.dodge(tick, target);
-            }
+            if (tick - this.lastDodge > 12) this.dodge(tick, target);
             return true;
         }
-
-        // Crit logic
-        if (this.critArmed) {
-            if (!this.sim.isOnGround) {
-                this.critArmed = false;
-                this.attack(target, tick);
-                return true;
-            }
-            this.critArmed = false;
-        } else if (this.sim.isOnGround && tick - this.lastCrit > 25) {
-            this.lastCrit = tick;
-            this.critArmed = true;
-            try { this.sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        if (hp <= 10 && d < 2.5 && (stats?.damageTaken ?? 0) >= 6) {
+            this.kite(target, tick);
             return true;
         }
-
         this.attack(target, tick);
+        return true;
+    }
+
+    /** Hold the shield up if one is in the bag (used while advancing on archers). */
+    raiseShield() {
+        if (this.shieldEquipped) return true;
+        const slot = this.bag.find((s) => s.typeId === "minecraft:shield");
+        if (slot < 0) return false;
+        this.shieldEquipped = true;
+        try {
+            this.bag.select(slot);
+            this.sim.isSneaking = false;
+            this.sim.useItemInSlot?.(this.bag.get(slot));
+        } catch { /* engine may reject a use outside combat */ }
         return true;
     }
 
@@ -535,7 +579,7 @@ export class Combat {
                 // Does this position have cover from threats?
                 let coverScore = 0;
                 for (const e of info.list) {
-                    if (!RANGED.has(e.typeId) && e.typeId !== "minecraft:blaze" && e.typeId !== "minecraft:ghast") continue;
+                    if (!isRangedEntity(e.typeId)) continue;
                     // Check if line from threat to checkPos is blocked
                     const threatHead = e.getHeadLocation ? e.getHeadLocation() : e.location;
                     const botHead = { x: checkPos.x + 0.5, y: checkPos.y + 1.62, z: checkPos.z + 0.5 };
@@ -666,34 +710,33 @@ export class Combat {
         }
     }
 
+    /**
+     * Group positioning. The planner already decided whether the group fight is
+     * winnable and which way is "out"; this only turns that direction into a
+     * ground position, preferring spots that break line of sight to the most
+     * dangerous attacker.
+     */
     groupTick(info, tick) {
         if (info.count <= 1) return false;
-        const assessment = this.assessment;
-        if (assessment?.hasSkeletonSwarm) {
-            // For skeleton swarm, find cover that minimizes exposure
-            const cover = this.findCover(tick, info);
-            if (cover) {
-                this.bot.navTo(cover, tick, 1);
-                return true;
-            }
-        }
-        // General group: find position maximizing distance from all
+        const plan = this.plan ?? this.evaluate(tick).plan;
         const p = floor(this.sim.location);
-        let best = undefined;
-        let bestScore = -Infinity;
+        const dir = plan.direction ?? { x: 1, z: 0 };
+        const threat = plan.threats.find((t) => t.profile.hostile);
+        let best, bestScore = -Infinity;
         for (const d of [{ x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 }, { x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }]) {
             const q = this.terrain.groundNear(p.x + d.x * 4, p.z + d.z * 4, p.y, 3);
             if (!q || this.terrain.dangerous(q)) continue;
-            let score = 0;
-            for (const e of info.list) {
-                const dist = distance(q, e.location);
-                const prof = getMobStat(e.typeId);
-                // Prefer distance from high fear mobs
-                score += dist * (prof.fear / 5);
+            // Follow the escape direction, and prefer spots farther from threats.
+            let score = d.x * dir.x + d.z * dir.z;
+            for (const t of plan.threats) {
+                if (!t.profile.hostile) continue;
+                score += distance(q, t.pos) * (t.profile.terror / 20 + (t.profile.explosive ? 0.6 : 0));
             }
+            if (threat && !this.terrain.line({ x: q.x + 0.5, y: q.y + 1.6, z: q.z + 0.5 }, { x: threat.pos.x, y: threat.pos.y + 1.6, z: threat.pos.z })) score += 4;
             if (score > bestScore) { bestScore = score; best = q; }
         }
         if (best) {
+            this.reason = `Group: repositioning (${describePlan(plan)})`;
             this.bot.navTo(center(best), tick, 1);
             return true;
         }

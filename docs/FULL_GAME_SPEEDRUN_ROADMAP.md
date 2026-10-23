@@ -2,7 +2,40 @@
 
 Goal: refactor architecture for autonomous bot to speedrun **entire Minecraft** (Overworld → Nether → End → Dragon) without breaking existing things, following documentation (core pure, runtime thin, bounded budgets, no circular deps, verification suite must pass, honesty contract, safety model).
 
-Current baseline: v1.2.0 Nether Speedrun World-Class, 58 modules, 26 core unit tests, 121 walkable regex guard, drop-flush, no-undef gate. Overworld-only pause for Nether/End travel, but Nether entry pipeline now implemented in runtime/nether.js + core/nether-strategy.js.
+Current baseline: **v1.3.1** — general engines (mobs, combat planning, recipes, needs), autonomous
+Nether expedition director + pathfinder + autonomous Nether travel.
+`node tools/run-all.mjs` runs core 26, pathfinder/anti-stuck 73, travel/service 88,
+general 126, brain 72, survival 5, walkable 121, drop-flush, perf 56 and the
+no-undef gate, all green.
+
+Since v1.2.8 the "hardcoded" layer is being removed:
+
+* `core/mobs.js` — one archetype table + name/family inference, so every mob
+  (including modded ones) has stats, traits and drops.
+* `core/combat-plan.js` — fights decided from damage arithmetic for any group
+  size (engage / kite / shield_advance / cover / tower / retreat / flee).
+* `core/recipe-book.js` — 263 generated recipes plus an acquisition graph, so an
+  item the curated table never listed still resolves to real steps.
+* `core/expedition.js` + `runtime/expedition.js` — readiness-gated Nether departure when `!bot auto` is running; safe provision, portal traveler delegation, retry/cooldown and status reporting.
+* `core/needs.js` — survival needs ranked by severity; the legacy 80 scenarios
+  are now a backstop that can be deleted piece by piece.
+
+Since v1.2.0 the Nether is no longer a paused dimension:
+
+* `core/pathfinder.js` — port of the nox7 A*/Bidirectional A* model (walk, diagonal,
+  step, drop, jump, sprint-jump, dig, bridge, pillar, Y-axis flood; avoid lists,
+  ignore lists, node budgets, slicing). `runtime/pathfinder.js` + `navigation.js`
+  hand wide plans to the waypoint loop.
+* `core/anti-stuck.js` + `runtime/stuck-recovery.js` — live no-progress ladder with
+  capability filtering, cooldowns, oscillation detection and an honest pause.
+* `core/portal.js` + `runtime/portal-travel.js` — build a 4×5 frame from real
+  obsidian (corners optional, 10 blocks), light it with real flint & steel, enter,
+  transit with a 1:8 linked fallback, arrive on a safe platform, remember the origin
+  frame, and return with **zero** obsidian via the link.
+* `runtime/nether-explore.js` — leash, trip budget, quartz/gold mining, fortress and
+  bastion targets, return triggers. `core/knowledge.js` knows the structures.
+
+End travel (stronghold, eyes, dragon) is still planned, not implemented.
 
 ---
 

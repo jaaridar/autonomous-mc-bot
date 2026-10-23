@@ -319,6 +319,20 @@ export const STRUCTURE_SIGS = {
         priority: 85,
         loot: ["chest","buried_treasure_map","iron","emerald","food"]
     },
+    nether_fortress: {
+        blocks: ["minecraft:nether_bricks","minecraft:nether_brick_fence","minecraft:nether_brick_stairs","minecraft:nether_wart","minecraft:soul_sand","minecraft:blaze_spawner"],
+        minMatches: 2,
+        priority: 92,
+        loot: ["blaze_rod","nether_wart","gold","chest"],
+        reason: "nether fortress = blaze rods and nether wart"
+    },
+    bastion: {
+        blocks: ["minecraft:blackstone","minecraft:polished_blackstone_bricks","minecraft:gilded_blackstone","minecraft:gold_block","minecraft:chest"],
+        minMatches: 3,
+        priority: 88,
+        loot: ["gold","chest","ancient_debris"],
+        reason: "bastion = gold and loot"
+    },
     ruined_portal: {
         blocks: ["minecraft:crying_obsidian","minecraft:obsidian","minecraft:gold_block","minecraft:netherrack","minecraft:magma_block"],
         minMatches: 2,

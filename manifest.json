@@ -1,56 +1,56 @@
 {
-  "format_version": 2,
-  "header": {
-    "name": "Verdant Bot 1.2.7 • Bedrock 1.21.114 • Nether Speedrun World-Class",
-    "description": "1.2.7 SPEEDRUN FIX: directors mine without leaving their mode (speedrun no longer stops after one mining batch), nether prep waits for the iron tier, bucket + flint_and_steel + shield + bread recipes added, gravel/obsidian/#logs are mineable (flint from gravel, any wood), flint gathering walks then mines, !bot speedrun/auto self-enable crafting; plus 1.2.6 MERGED idle-fix + ultra-efficiency: active idle after every task (no more standing after a finished task, !bot stop or depot), owner-return auto-resume, capped retries, no idle-mode hard pause; arbiter no longer resets the navigator every 5 ticks (deferred directors), staggered directors (awareness 10, structures 20, organize 400), shared nearest-first rolling block sweep, per-tick terrain + inventory caches, A* 1200 nodes/r24 (tower 1500/48) with best-effort partial routes, direct short hops, cached follow, diffed scoreboard, rate-limited fault logs; 56 perf tests. Keeps 1.2.4 BRAIN LAYER: engine-free Result/Blackboard/Danger/Rules/Skills/Goals/Planner/Arbiter/Stuck + bounded fault table, any-log 12 types, goal hierarchy, 72 brain + 5 capability tests; deep mining consolidated on DeepMiner. Keeps 1.2.3 MERGED: advanced movement (3-block sprint jump, place-then-jump large gaps, 100-block tower pillar), never-drown water survival with boat craft, anti-idle always-active, ui scoreboard [clear|refresh], advanced-miner. Keeps 1.2.2 MINING STRATEGY: cuts safe hand tunnels to distant ores (never walks into rock), clears a front block only when a swing is actually absorbed (no more stopping mid-mine), re-issues absorbed tunnel digs, skips unreachable vein blocks honestly; direct-break front fix wired through breakThrough. 1.2.1 ROBUST QUICK: cached block reads and precomputed scan offsets (extreme speed), cadenced per-tick directors, budgeted chest/village/structure/nether scans, no /locate commands, no auto-shutdown (retry + fault auto-resume), obstruction/body-collision workarounds, boat/bridge/swim follow travel, beacon matches manifest. 1.2.0 NETHER SPEEDRUN: Primary enter Nether quickly reliably without dying. New: core/nether-strategy ground/cave/ruined/gather scoring chooseNetherRoute verifyPortalAction shouldRecalculate, core/village-strategy village-first distance/loot/danger/time food efficiency hay/bread bed craft, core/golem-strategy GOLEM_STATS 100HP 14dmg 5 strategies pillar_3_high/elevated_platform/terrain_hill/doorway_trap/water_bucket, core/food-strategy FOOD_VALUES thresholds critical 6 low 14 safe 18 eatBeforeFight avoidCombat escape/cover/survival 10 mob tactics, core/bucket-strategy BUCKET_MILESTONE priority 95 water/lava obsidian portal 10-14, core/flint-steel-strategy ignition prefer before commit ruined loot fire_charge iron for both, core/adaptive-planning recalc on discovery essential vs optional avoid fights reassess safety blocks intelligently, runtime/nether decision orchestrator water placement lava manipulation obsidian portal ignition entry, runtime/village village-first hay beds wool craft, runtime/golem combat execution protected elevated avoid fall damage disengage bucket priority. Updated: bot.js think() food readiness adaptive recalc nether/village/golem, speedrun.js rewrite to use new core, world-awareness.js and village.js no longer fire /locate commands, manifest 1.2.4. 73 modules.",
-    "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
-    "version": [
-      1,
-      2,
-      7
-    ],
-    "min_engine_version": [
-      1,
-      21,
-      114
-    ]
-  },
-  "modules": [
-    {
-      "type": "data",
-      "uuid": "9dfd46cd-74e7-4bc1-a3be-a13098a5f764",
-      "version": [
-        1,
-        2,
-        7
-      ]
+    "format_version": 2,
+    "header": {
+        "name": "Verdant Bot 1.3.1 \u2022 Bedrock 1.21.114 \u2022 General Engines + Nether + Pathfinder",
+        "description": "1.3.1 GENERAL ENGINES - one architecture instead of per-case hardcoding. MOBS: core/mobs.js describes any entity by archetype (melee/brute/archer/bomber/leaper/teleporter/fire/flying/potion/summoner/heavy/boss/...), infers unknown and modded ids from name patterns and the engine's type_family, and exposes drops for the item graph. COMBAT: core/combat-plan.js plans real engagements from arithmetic - incoming dps, burst, time-to-die vs time-to-kill, kill order by damage-per-second-of-effort, surround detection, escape vectors - for any number of attackers; runtime/combat.js executes stances (engage/kite/shield_advance/cover/retreat/flee/tower) instead of 40 per-mob branches. RECIPES: core/recipe-book.js generates 263 recipes from families (every wood door/fence/trapdoor/bed colour, every tool and armour material) plus smelting, and an acquisition graph that plans bucket = logs -> planks -> table -> iron -> furnace -> smelt -> craft, hunts mob drops, and reports honest blocks. !bot recipe <item> prints the plan. SURVIVAL: core/needs.js ranks needs by severity (breathe, lava, burning, falling, suffocation, combat, heal, starving, exposure, darkness, tooling, unarmed, inventory, lost) with capability filtering, hysteresis and cooldowns; SurvivalMaster runs it before the legacy 80 scenarios, which stay as a backstop. Autonomous expedition director: !bot auto prepares and initiates Nether trips when readiness checks pass; inspect status, disable with !bot config nether off. Keeps 1.2.8 pathfinder + fully autonomous Nether travel (build/light/enter/link/return) and the 1.2.6/1.2.7 efficiency and speedrun work. 126 new offline tests (tools/general.test.mjs); the full suite passes.",
+        "uuid": "cf2c5101-8fa9-4933-b8eb-39e9cf06be3e",
+        "version": [
+            1,
+            3,
+            1
+        ],
+        "min_engine_version": [
+            1,
+            21,
+            114
+        ]
     },
-    {
-      "type": "script",
-      "language": "javascript",
-      "entry": "scripts/main.js",
-      "uuid": "2547de70-aaa2-4a2e-bd7c-91be2a224d7c",
-      "version": [
-        1,
-        2,
-        7
-      ]
-    }
-  ],
-  "dependencies": [
-    {
-      "module_name": "@minecraft/server",
-      "version": "2.3.0-beta"
-    },
-    {
-      "module_name": "@minecraft/server-gametest",
-      "version": "1.0.0-beta"
-    }
-  ],
-  "metadata": {
-    "authors": [
-      "Verdant contributors"
+    "modules": [
+        {
+            "type": "data",
+            "uuid": "9dfd46cd-74e7-4bc1-a3be-a13098a5f764",
+            "version": [
+                1,
+                3,
+                1
+            ]
+        },
+        {
+            "type": "script",
+            "language": "javascript",
+            "entry": "scripts/main.js",
+            "uuid": "2547de70-aaa2-4a2e-bd7c-91be2a224d7c",
+            "version": [
+                1,
+                3,
+                1
+            ]
+        }
     ],
-    "license": "MIT"
-  }
+    "dependencies": [
+        {
+            "module_name": "@minecraft/server",
+            "version": "2.3.0-beta"
+        },
+        {
+            "module_name": "@minecraft/server-gametest",
+            "version": "1.0.0-beta"
+        }
+    ],
+    "metadata": {
+        "authors": [
+            "Verdant contributors"
+        ],
+        "license": "MIT"
+    }
 }
