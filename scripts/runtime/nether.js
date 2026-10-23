@@ -9,6 +9,7 @@ import { chooseNetherRoute, evaluateGroundLava, evaluateCaveLava, evaluateRuined
 import { evaluateBucketPriority, evaluateLavaPoolForBucket, planObsidianFormation, planPortalConstruction, chooseFastestViableMethod } from "../core/bucket-strategy.js";
 import { evaluateIgnitionOptions, shouldObtainFlintAndSteelBeforePortal, evaluateRuinedPortalForIgnitionAndObsidian, ensureIronForBothBucketAndFlintSteel, planShortestSafeRouteToIgnition, shouldNotWasteTimeSearchingFlintSteel } from "../core/flint-steel-strategy.js";
 import { Direction } from "@minecraft/server";
+import { NETHER } from "../core/portal.js";
 
 export class NetherDirector {
     constructor(bot) {
@@ -43,6 +44,9 @@ export class NetherDirector {
     }
 
     tick(tick) {
+        // Already in the Nether: the NetherExplorer owns resources, the leash
+        // and the trip home. Portal construction is an Overworld task.
+        if (this.sim.dimension.id === NETHER) return false;
         // Never interfere with an active mining task (director mining runs centrally).
         if (this.bot.mining) return false;
         // In speedrun mode, nether prep waits for the iron tier: the speedrun
@@ -468,8 +472,9 @@ export class NetherDirector {
 
         const selected = this.bag.select(slot);
         try {
-            // Look at portal interior bottom
-            const interior = add(portalPos, { x: 1, y: 0, z: 0 });
+            // Look at (and step into) the true interior bottom cell, one block
+            // above the bottom frame row.
+            const interior = add(portalPos, { x: 1, y: 1, z: 0 });
             this.sim.lookAtBlock(this.host.relative(center(interior)));
             const ok = this.sim.useItemInSlot(selected);
             this.ignitionAttempts++;
@@ -478,7 +483,9 @@ export class NetherDirector {
                 const verification = verifyPortalAction("ignite_portal", "ignited", counts);
                 if (verification.success) {
                     this.bot.reason = `Nether: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved`;
-                    // Try to enter
+                    // Hand over to the traveller: it walks in, verifies the
+                    // dimension change and has a safe link fallback.
+                    try { this.bot.travel.enter(interior, tick); } catch (e) { this.bot.fault?.(e); }
                     this.sim.moveToLocation(this.host.relative(center(interior)));
                     return true;
                 }

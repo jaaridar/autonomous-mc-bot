@@ -1,4 +1,4 @@
-# Verdant Bot — architecture v1.2.0 Nether Speedrun World-Class
+# Verdant Bot — architecture v1.2.8 Pathfinder + Autonomous Nether
 
 Where things live, who owns what, and the rules that keep the bot honest.
 If you are adding a feature, find its layer here first.
@@ -19,6 +19,10 @@ If you are adding a feature, find its layer here first.
   - `memory.js` — persistent memory schema, prefs sanitization
   - `survival.js` — food fuel tables
   - `recovery.js`, `transfer.js`, `commands.js`
+  - **NEW v1.2.8 Pathfinding & travel:**
+    - `pathfinder.js` — safety-checked A* + bidirectional A* adapted from nox7's Pathfinder (Apache-2.0). `checkSafety` (IsSafe / CanSafelyFallFrom / CanSafelyJumpOnto), option surface (ignore, passable overrides, unjumpable types, Y-axis flood, dig/bridge/pillar edges), `PathFinder`/`BidirectionalPathFinder` with closed sets and generator slicing, `planPath`, `smoothPath`, bounded best-effort partials
+    - `anti-stuck.js` — `classifySituation` (suffocating/lava/drowning/swimming/caged/loop/failing/unloaded/no_path/portal_ready), `planRecovery` filtered by capability, `StuckWatchdog` with progress baselines, oscillation detection, per-action cooldowns and an exhaustion signal
+    - `portal.js` — 4×5 frame geometry (10 required + 4 optional corners), validation, 1:8 coordinate linking, anchor and safe-arrival search, portal action decision, nether target scoring, return-to-overworld decision
   - **NEW v1.2 Nether Speedrun:**
     - `nether-strategy.js` — ROUTES ground_lava/cave_lava/ruined_portal/gather_ignition, evaluators with score distance size danger water, chooseNetherRoute time/feasibility balance, shouldRecalculate triggers village/ruined/lava_pool/useful_chest/hostile_group/obstacle, verifyPortalAction for 5 milestones
     - `village-strategy.js` — VILLAGE_BENEFITS scores, FOOD_EFFICIENCY hay 90 bread 85, evaluateVillage distance penalty/bonus benefits, shouldCraftBedIndependently 3 wool + 3 planks sheep handling, evaluateVillageVsNetherRoute comparison
@@ -124,6 +128,38 @@ If you are adding a feature, find its layer here first.
 - Nether Entry Decision System: continuously compare ground-level lava pool bucket water minimal digging, cave lava pool only when accessible usable danger travel cost acceptable, ruined portal inspect frame loot determine completing faster than building new, alternative nearby resources gather missing ignition portal-building when required, choose route best balance time feasibility resource requirements survival probability, do not insist original when world provides better alternative.
 - Adaptive Planning & Survival Rules: recalculate whenever discovers village ruined portal lava pool useful chest hostile mob group unexpected obstacle, prioritize essential progression over optional exploration unnecessary collection, avoid fights not contributing meaningfully, never assume route safe merely because worked previously reassess current health terrain enemies escape paths, use blocks intelligently bridges barriers emergency cover elevation controlled traversal, when plan fails identify missing requirement select safest efficient alternative, preserve enough resources recover common emergencies, verify important actions crafting bucket acquisition portal construction ignition Nether entry rather than assuming succeeded.
 - Final principle: behave like experienced adaptive speedrunner not fixed sequence scripted actions. Objective not collect everything or win every fight — reach Nether efficiently using resources opportunities available in current world while avoiding preventable deaths. Main goal enter nether anyhow prepare itself find resource recipe or in world use any advantage.
+
+## Pathfinding & travel v1.2.8
+
+- **Two planners.** `Navigator` keeps the cheap 24-block rolling A* for local
+  walking. `runtime/pathfinder.js` plans synchronously (bidirectional first for
+  trips ≥24 blocks, then unidirectional with the full move set) for goals over
+  40 blocks, after a dead end (`forceWide`) and for every dimension trip. Wide
+  plans are throttled (200 ticks) and banned for 400 ticks after an impossible
+  result, so the expensive search can never run every tick.
+- **Execution is unchanged.** The wide planner emits the same waypoint kinds the
+  navigator already executes (`walk`, `diagonal`, `step`, `drop`, `bigdrop`,
+  `jump`, `sprintjump`, `bridge`, `pillar`) plus `dig`, which the navigator
+  routes through `Bot.digCell`. This keeps one executor and one set of safety
+  rules.
+- **Dimension changes.** `Terrain.retarget(dimension)` swaps the shared handle
+  and clears every cache; `Bot.syncDimension()` (first thing in `tick`) calls it
+  on a change, resets the navigator/planner/watchdog, rebuilds awareness and
+  structures, and hands control to the traveller (`onDimensionChange`).
+- **Traveller state machine.** idle → seek/gather/build → ignite/ignite_wait →
+  enter → transit (engine transport, or the 1:8 link with `sim.teleport`) →
+  arrive (carve/land safely, verify a real portal before caching it) → done.
+  The origin Overworld frame is remembered so the return trip always has an
+  exact link, even with zero nether obsidian.
+- **Nether behaviour.** `runtime/nether-explore.js` runs only in the Nether:
+  return when health/food is low or the trip budget/loot goal is met, avoid
+  fights handled by combat/escape directors, mine quartz/nether gold, prefer
+  fortress/bastion signatures, never wander past a 96-block leash without first
+  heading back to the arrival point.
+- **Safety.** No item fabrication: frames are built from real obsidian, ignition
+  consumes a real flint and steel / fire charge, and every placement/ignition is
+  verified. Teleport is used only as the portal-link fallback for a simulated
+  player, not to skip survival work.
 
 ## Honesty contract
 

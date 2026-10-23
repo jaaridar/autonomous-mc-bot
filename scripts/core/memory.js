@@ -91,6 +91,9 @@ const BOOL_PREFS = [
     "pickup",
     "loot",
     "speedrun",
+    "pathDig",
+    "pathBridge",
+    "crossDimension",
 ];
 /** Whitelisted, type-checked operator preferences; unknown keys are dropped. */
 export function sanitizePrefs(raw) {

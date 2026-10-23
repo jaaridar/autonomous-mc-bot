@@ -43,6 +43,14 @@ export class Navigator {
         this.direct = undefined;      // { goal, since, issued, lastMove, best } short straight hop without A*
         this.noDirectUntil = 0;
         this.replans = 0;
+        // Optional wide planner (runtime/pathfinder.js) for long trips, plus the
+        // dig callback used by tunnelling routes. Undefined offline/in tests.
+        this.pathfinder = undefined;
+        this.forceWide = false;
+        this.dig = undefined;
+        this.widePlans = 0;
+        this.lastWide = -1000;
+        this.wideBannedUntil = 0;
     }
 
     reset() {
@@ -59,6 +67,47 @@ export class Navigator {
         this.avoid = [];
         this.trail = [];
         this.direct = undefined;
+        this.forceWide = false;
+        this.wideBannedUntil = 0;
+    }
+
+    /**
+     * Ask the wide planner for a route. Used for long trips and after a local
+     * dead end; returns false (and leaves the rolling A* to try) when the
+     * planner has nothing better.
+     */
+    usePathfinder(tick) {
+        const pf = this.pathfinder;
+        if (!pf || !this.target) return false;
+        const start = floor(this.sim.location);
+        const target = floor(this.target);
+        const wide = this.forceWide;
+        this.lastWide = tick;
+        const result = pf.plan(start, target, {
+            radius: wide ? 128 : 96,
+            maxNodes: wide ? 9000 : 6000,
+            allowDig: wide ? true : undefined,
+            allowBridge: wide ? true : undefined,
+            fresh: wide,
+        });
+        if (!pf.usable(result, start, target)) {
+            // Do not pay for the same impossible wide search every replan.
+            this.wideBannedUntil = tick + (wide ? 120 : 400);
+            return false;
+        }
+        this.path = result.path;
+        this.corridor = [];
+        this.waypoint = 0;
+        this.lastIssued = -1;
+        this.segmentStart = tick;
+        this.lastProgress = tick;
+        this.lastPosition = { ...this.sim.location };
+        this.retries = 0;
+        this.forceWide = false;
+        this.widePlans++;
+        this.reason = `Wide ${result.strategy ?? "A*"} route: ${result.expanded ?? 0} nodes`;
+        try { this.sim.stopMoving(); } catch { /* engine may reject */ }
+        return true;
     }
 
     replan(tick) {
@@ -72,6 +121,11 @@ export class Navigator {
         // reaches far goals while costing ~1/3 of the old 2000-3000 nodes.
         // The tall search is only for a real tower (goal almost straight up).
         const isTower = verticalDiff > 12 && horiz < 4;
+        // Long trips (or an explicit wide replan after a dead end) go through
+        // the safety-checked bidirectional planner first: its radius reaches
+        // around lava seas that the 24-block rolling horizon cannot see past.
+        const wideDue = this.forceWide || (horiz > 40 && tick - this.lastWide > 200 && tick >= this.wideBannedUntil);
+        if (!isTower && wideDue && this.usePathfinder(tick)) return;
         const maxNodes = isTower ? 1500 : 1200;
         const radius = isTower ? 48 : 24;
         this.replans++;
@@ -251,7 +305,10 @@ export class Navigator {
             const result = this.search.step(this.fast ? 120 : 50);
             this.expansions += this.search.expanded - before;
             if (result === "searching") return "running";
-            if (result !== "found" && result !== "partial") return this.fail(`Path ${result}; no safe route.`);
+            if (result !== "found" && result !== "partial") {
+                if (this.usePathfinder(tick)) return "running";
+                return this.fail(`Path ${result}; no safe route.`);
+            }
             this.path = this.search.path;
             this.search = undefined;
             this.segments++;
@@ -408,6 +465,24 @@ export class Navigator {
                 } else {
                     return this.fail("Need blocks for large gap place+3jump");
                 }
+            }
+
+            if (w.kind === "dig") {
+                // Tunnelling edge from the wide planner: break the feet cell
+                // (and head cell) before stepping in.
+                if (this.dig) {
+                    const feet = w.breakAt ?? { x: w.x, y: w.y, z: w.z };
+                    const r = this.dig(feet, tick);
+                    if (r === "digging" || r === "open") return "running";
+                    if (w.breakHead) {
+                        const rh = this.dig({ x: w.x, y: w.y + 1, z: w.z }, tick);
+                        if (rh === "digging" || rh === "open") return "running";
+                    }
+                }
+                this.retries++;
+                this.terrain.clear();
+                this.replan(tick);
+                return "running";
             }
 
             if (w.kind === "bridge") {

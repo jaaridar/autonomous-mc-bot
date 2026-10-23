@@ -7,6 +7,18 @@ with composable parts. Everything here is pure JS (no `@minecraft/*`), covered b
 **Status: built and verified offline. NOT yet wired into `runtime/bot.js`.** The running bot behaves as
 before plus the Phase-0 fixes. See "Integration" for exactly what is left and why it needs in-game testing.
 
+> **v1.2.8 note — the runtime got its own versions of two of these parts.**
+> `scripts/core/pathfinder.js` + `scripts/runtime/pathfinder.js` now supply the wide
+> A*/bidirectional planner and the navigator handoff, and
+> `scripts/core/anti-stuck.js` + `scripts/runtime/stuck-recovery.js` supply a live
+> escalation ladder (replan → replan_wide/jump → dig/pillar/bridge → backtrack →
+> surface/eat → home/portal → honest pause). They are wired into `Bot.tick()` and
+> exercised by `tools/pathfinder.test.mjs` and `tools/travel.test.mjs`.
+> This file's `brain/` layer is still the offline planner, and `brain/stuck.js` is
+> still not the running no-progress ladder — do not read the two as the same code.
+> `runtime/portal-travel.js` also owns Nether entry/return now, so item 6 below
+> ("delete the duplicate Nether planner") is still open for `speedrun.js` only.
+
 ## Parts
 
 | File | Job |

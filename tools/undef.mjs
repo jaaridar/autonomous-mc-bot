@@ -160,7 +160,7 @@ function collect(file, src) {
     for (const m of src.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*=>/g))
         defined.add(m[1]);
     // method definitions: name(...) {  /  get name() {  /  async name(...) {
-    for (const m of src.matchAll(/(?:^|[;{}(,]|\\n)\s*(?:async\s+|get\s+|set\s+|static\s+)*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g)) {
+    for (const m of src.matchAll(/(?:^|[;{}(,]|\\n)\s*(?:static\s+|async\s+|get\s+|set\s+|\*\s*)*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/g)) {
         defined.add(m[1]);
         addIdentifiers(defined, m[2]);
     }

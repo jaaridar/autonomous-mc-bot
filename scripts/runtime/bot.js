@@ -16,6 +16,11 @@ import { Drops } from "./drops.js";
 import { Scout } from "./scouting.js";
 import { TaskFault, blockedTask, } from "../core/recovery.js";
 import { Navigator } from "./navigation.js";
+import { PathfinderService } from "./pathfinder.js";
+import { PortalTraveler } from "./portal-travel.js";
+import { StuckRecovery } from "./stuck-recovery.js";
+import { NetherExplorer } from "./nether-explore.js";
+import { OVERWORLD, NETHER } from "../core/portal.js";
 // New advanced modules
 import { Builder } from "./builder.js";
 import { Combat } from "./combat.js";
@@ -100,6 +105,10 @@ export class Bot {
             pickup: true,
             loot: true,
             speedrun: false,
+            // New in 1.2.8: fully autonomous dimension travel + wide pathfinding.
+            pathDig: true,
+            pathBridge: true,
+            crossDimension: true,
         };
         Object.assign(this.settings, sanitizePrefs(memory?.prefs()) ?? {});
         this.mode = "idle";
@@ -183,6 +192,17 @@ export class Bot {
         this.goalTree = null;
         this.currentGoal = null;
         this.nav.builder = this.builder;
+        // Wide, safety-checked pathfinding + autonomous dimension travel +
+        // escalating stuck recovery. The navigator keeps the rolling A* for
+        // short trips and falls back to the wide planner for long ones.
+        this.pathfinder = new PathfinderService(this);
+        this.nav.pathfinder = this.pathfinder;
+        this.nav.dig = (cell, tick) => this.digCell(cell, tick);
+        this.travel = new PortalTraveler(this);
+        this.netherExplore = new NetherExplorer(this);
+        this.stuckRecovery = new StuckRecovery(this);
+        this.lastDimension = sim.dimension.id;
+        this.dimensionChanges = 0;
         // Enhanced mining state
         this.obstructionClear = undefined;
         this.scaffoldState = undefined;
@@ -260,6 +280,10 @@ export class Bot {
         this.golem?.reset?.();
         this.food?.reset?.();
         this.bucket?.reset?.();
+        this.travel?.reset?.();
+        this.netherExplore?.reset?.(system.currentTick);
+        this.stuckRecovery?.reset?.(system.currentTick);
+        this.pathfinder?.invalidate?.();
         this.blocked = undefined;
         this.recoveryAttempts = 0;
         this.mode = "idle";
@@ -393,6 +417,10 @@ export class Bot {
         this.food?.reset?.();
         this.bucket?.reset?.();
         this.looting.reset();
+        this.travel?.reset?.();
+        this.netherExplore?.reset?.(system.currentTick);
+        this.stuckRecovery?.reset?.(system.currentTick);
+        this.pathfinder?.invalidate?.();
         this.escapeAttempts = 0;
         this.fleeSince = 0;
         this.mining = undefined;
@@ -653,6 +681,7 @@ export class Bot {
         if (this.state === "dead") { this.deadTick(tick); return; }
         if (!this.sim.isValid) return;
         try { this.lastKnown = { p: { ...this.sim.location }, dim: this.sim.dimension.id }; } catch (_e) { this.fault(_e); }
+        this.syncDimension();
         // Fall detection for survival master
         try {
             const curY = this.sim.location.y;
@@ -718,13 +747,16 @@ export class Bot {
 
         // Now supports full-game speedrun Overworld -> Nether -> End
         if (owner.dimension.id !== this.sim.dimension.id) {
-            // Owner and bot in different dimensions - pause to avoid unattended mutation, but record
-            if (tick % 200 === 0) this.record(`Dimension mismatch: bot in ${this.sim.dimension.id}, owner in ${owner.dimension.id} - waiting for owner`);
-            // Only pause if owner is in overworld and bot in nether/end without owner following - actually allow if both in same non-overworld
-            if (this.sim.dimension.id === "minecraft:overworld" || owner.dimension.id === "minecraft:overworld") {
-                // One in overworld, one not - wait but don't shutdown permanently, retry
-                this.reason = `Dimension mismatch bot ${this.sim.dimension.id} vs owner ${owner.dimension.id} - waiting`;
-                return;
+            // The owner is online but elsewhere. With crossDimension (default)
+            // the bot keeps its mission running - that is what makes an
+            // autonomous Nether trip possible. Turning the setting off restores
+            // the old conservative wait.
+            if (tick % 200 === 0) this.record(`Owner is in ${owner.dimension.id}; bot in ${this.sim.dimension.id}${this.settings.crossDimension ? " - continuing autonomously" : " - waiting"}`);
+            if (!this.settings.crossDimension) {
+                if (this.sim.dimension.id === OVERWORLD || owner.dimension.id === OVERWORLD) {
+                    this.reason = `Dimension mismatch bot ${this.sim.dimension.id} vs owner ${owner.dimension.id} - waiting`;
+                    return;
+                }
             }
         }
         // Allow all dimensions: overworld, nether, end - for full-game speedrun
@@ -755,6 +787,10 @@ export class Bot {
         this.nav.parkour = this.settings.parkour;
         this.nav.allowBridge = this.settings.bridge;
         this.observe(tick);
+        // Autonomous dimension travel owns the tick while it is in progress.
+        try { if (this.travel.tick(tick)) return; } catch (_e) { this.fault(_e); }
+        // Nether behaviour once we are actually there (resources, leash, return).
+        try { if (this.netherExplore.tick(tick)) return; } catch (_e) { this.fault(_e); }
 
         // World-class awareness: scan surroundings, remember important (iron ore, sheep, lava pools, structures)
         // STAGGERED: the directors self-throttle, but are not even consulted every tick.
@@ -791,6 +827,15 @@ export class Bot {
             return cachedThreatInfo;
         };
 
+        // Escalating stuck recovery. Cheap cadence; the watchdog no-ops when the
+        // bot is making progress and never fires while a hostile is adjacent.
+        try {
+            if (this.nav.stuck) this.stuckRecovery.noteFailure(this.nav.reason, tick);
+            const threatNow = getCachedThreat();
+            if ((tick % 5 === 0 || this.nav.stuck) && (threatNow.count === 0 || (threatNow.closest ?? 99) > 6)) {
+                if (this.stuckRecovery.tick(tick, !!this.nav.stuck)) return;
+            }
+        } catch (_e) { this.fault(_e); }
         // ARBITER: replaces 430-line chain of if (director.tick()) return;
         // Keeps current behavior until finishes or clearly better appears, returns reason codes
         try {
@@ -978,6 +1023,7 @@ export class Bot {
 
         const p = floor(this.sim.location), below = this.terrain.read(add(p, DOWN));
         const justStuck = this.nav.stuck;
+        if (justStuck) this.stuckRecovery.noteFailure(this.nav.reason, tick);
         this.nav.stuck = false;
         let escapeKind = this.escaper.active ? this.escaper.mode : "";
         if (!escapeKind) {
@@ -1102,6 +1148,45 @@ export class Bot {
             }
         } catch (error) { this.blockTask(String(error), error instanceof TaskFault ? error.recovery : "manual"); }
         if (tick % 100 === 0) this.save();
+    }
+    /**
+     * Follow the simulated player into another dimension. Every cached view of
+     * the world belongs to the old dimension, so clear it, move the shared
+     * Terrain handle, reset the navigation and let the traveller finish.
+     */
+    syncDimension() {
+        let id;
+        try { id = this.sim.dimension.id; } catch (_e) { this.fault(_e); return false; }
+        if (id === this.lastDimension) return false;
+        const from = this.lastDimension;
+        this.lastDimension = id;
+        this.dimensionChanges++;
+        try {
+            this.terrain.retarget(this.sim.dimension);
+            this.nav.reset();
+            this.pathfinder.reset();
+            this.awareness?.reset?.();
+            this.structures?.reset?.();
+            this.stuckRecovery.reset(system.currentTick);
+            this.nav.avoid = [];
+            this.travel.onDimensionChange();
+            if (id === NETHER) this.netherExplore.anchor(this.sim.location);
+            this.record(`dimension ${from} -> ${id}`);
+            this.tell(`Now in the ${id.replace("minecraft:", "")}. Terrain, navigation and caches moved with me.`);
+            this.save();
+        } catch (_e) { this.fault(_e); }
+        return true;
+    }
+    /** Ask the traveller to take the bot to a dimension (building a portal if needed). */
+    travelTo(dimension, near, tick = system.currentTick) {
+        const result = this.travel.begin(dimension, near ?? this.sim.location, tick);
+        if (result === "started") {
+            this.nav.reset();
+            this.mode = this.mode === "idle" ? "travel" : this.mode;
+            this.reason = `Travel started to ${dimension.replace("minecraft:", "")}`;
+            this.record(this.reason);
+        }
+        return result;
     }
     navTo(goal, tick, leash) {
         if (distance(this.sim.location, goal) <= leash) { this.nav.reset(); return "done"; }
@@ -2872,7 +2957,11 @@ export class Bot {
             escape: this.escaper.active ? this.escaper.mode : undefined, camp: this.campState?.stage, threat: this.threat?.typeId, reason: this.reason, health: hp,
             position: this.sim.location, dimension: this.sim.dimension.id, settings: this.settings, inventory: this.bag.counts(), memory: this.memory?.summary(),
             uptimeTicks: system.currentTick - this.startedTick, stage: this.stage, events: this.log,
-            advanced: { deepMining: this.deepMiner.active ? this.deepMiner.phase : "inactive", lootingTrips: this.looting.trips, builder: this.builder.canBuild ? "ready" : "no-blocks" }
+            advanced: { deepMining: this.deepMiner.active ? this.deepMiner.phase : "inactive", lootingTrips: this.looting.trips, builder: this.builder.canBuild ? "ready" : "no-blocks" },
+            travel: this.travel.report(),
+            pathfinder: this.pathfinder.report(),
+            stuck: this.stuckRecovery.report(),
+            netherTrip: this.netherExplore.report()
         };
     }
     save() {

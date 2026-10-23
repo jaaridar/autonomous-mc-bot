@@ -254,6 +254,36 @@ for (const [block, drops, tier] of [
         tool: "pickaxe",
         tier,
     };
+// Nether blocks. Without these rules the nether explorer could see a quartz
+// vein but had no drop/tool mapping, so the vein scan never produced a target.
+for (const [block, drops, tool, tier] of [
+    ["netherrack", "netherrack", "pickaxe", 0],
+    ["nether_quartz_ore", "quartz", "pickaxe", 0],
+    ["nether_gold_ore", "gold_nugget", "pickaxe", 0],
+    ["gilded_blackstone", "gilded_blackstone", "pickaxe", 0],
+    ["basalt", "basalt", "pickaxe", 0],
+    ["blackstone", "blackstone", "pickaxe", 1],
+    ["nether_bricks", "nether_bricks", "pickaxe", 1],
+    ["nether_brick", "nether_bricks", "pickaxe", 1],
+    ["magma", "magma", "pickaxe", 0],
+    ["ancient_debris", "ancient_debris", "pickaxe", 3],
+    ["soul_sand", "soul_sand", "shovel", 0],
+    ["soul_soil", "soul_soil", "shovel", 0],
+    ["glowstone", "glowstone_dust", "hand", 0],
+    ["shroomlight", "shroomlight", "hand", 0],
+    ["nether_wart", "nether_wart", "hand", 0],
+    ["nether_wart_block", "nether_wart_block", "hand", 0],
+    ["crimson_nylium", "netherrack", "pickaxe", 0],
+    ["warped_nylium", "netherrack", "pickaxe", 0],
+    ["twisting_vines", "twisting_vines", "hand", 0],
+    ["weeping_vines", "weeping_vines", "hand", 0],
+]) {
+    MINE["minecraft:" + block] = {
+        drops: "minecraft:" + drops,
+        tool,
+        tier,
+    };
+}
 export function toolTier(type) {
     if (type.includes("netherite_"))
         return 5;

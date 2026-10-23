@@ -104,6 +104,23 @@ export class Terrain {
         this.handles.delete(k);
         this.memo.clear();
     }
+    /**
+     * Follow the bot into another dimension. The cache, handles and derived
+     * memo all belong to the old dimension and must never leak across, so this
+     * clears them and swaps the Dimension handle in place (every component
+     * holds this same Terrain instance).
+     */
+    retarget(dimension) {
+        this.dimension = dimension;
+        this.cache.clear();
+        this.handles.clear();
+        this.memo.clear();
+        this.reads = 0;
+        this.hits = 0;
+        this.nativeReads = 0;
+        this._threat = undefined;
+        this.tick = 0;
+    }
     constructor(dimension) {
         this.dimension = dimension;
         this.cache = new Map();   // key -> { value: Cell|undefined, expires }
