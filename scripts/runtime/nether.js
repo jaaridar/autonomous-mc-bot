@@ -5,7 +5,7 @@
  * Handles bucket milestone, water placement, lava manipulation, portal frame construction, obsidian formation, ignition.
  */
 import { floor, add, distance, center, key, UP, DOWN, CARDINAL } from "../core/math.js";
-import { chooseNetherRoute, evaluateGroundLava, evaluateCaveLava, evaluateRuinedPortal, shouldRecalculate, verifyPortalAction } from "../core/nether-strategy.js";
+import { chooseNetherRoute, evaluateGroundLava, evaluateCaveLava, evaluateRuinedPortal, shouldRecalculate, verifyPortalAction, planPortalEntry } from "../core/nether-strategy.js";
 import { evaluateBucketPriority, evaluateLavaPoolForBucket, planObsidianFormation, planPortalConstruction, chooseFastestViableMethod } from "../core/bucket-strategy.js";
 import { evaluateIgnitionOptions, shouldObtainFlintAndSteelBeforePortal, evaluateRuinedPortalForIgnitionAndObsidian, ensureIronForBothBucketAndFlintSteel, planShortestSafeRouteToIgnition, shouldNotWasteTimeSearchingFlintSteel } from "../core/flint-steel-strategy.js";
 import { Direction } from "@minecraft/server";
@@ -29,6 +29,9 @@ export class NetherDirector {
         this.ruinedPortalAttempts = 0;
         this.lastRecalc = 0;
         this.verifiedActions = new Map();
+        this.enteredNether = false;
+        this.ignited = false;
+        this.portalWait = 0;
     }
 
     reset(tick) {
@@ -40,9 +43,16 @@ export class NetherDirector {
         this.lavaPoolAttempts = 0;
         this.ruinedPortalAttempts = 0;
         this.lastRecalc = tick;
+        this.enteredNether = false;
+        this.ignited = false;
+        this.portalWait = 0;
     }
 
     tick(tick) {
+        try {
+            if (this.sim.dimension?.id === "minecraft:nether") return this.handleInNether(tick);
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        if (this.ignited && this.walkIntoPortal(tick)) return true;
         // Never interfere with an active mining task (director mining runs centrally).
         if (this.bot.mining) return false;
         // In speedrun mode, nether prep waits for the iron tier: the speedrun
@@ -477,10 +487,10 @@ export class NetherDirector {
             if (ok) {
                 const verification = verifyPortalAction("ignite_portal", "ignited", counts);
                 if (verification.success) {
-                    this.bot.reason = `Nether: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Entering Nether - primary objective achieved`;
-                    // Try to enter
-                    this.sim.moveToLocation(this.host.relative(center(interior)));
-                    return true;
+                    this.ignited = true;
+                    this.portalPos = portalPos;
+                    this.bot.reason = `Nether: portal ignited at ${portalPos.x},${portalPos.y},${portalPos.z}! Walking in`;
+                    return this.walkIntoPortal(tick);
                 }
             }
 
@@ -708,6 +718,88 @@ export class NetherDirector {
         }
 
         return null;
+    }
+
+    findPortalNearby(radius) {
+        const p = floor(this.sim.location);
+        let best = null, bestD = Infinity;
+        const r = Math.min(radius, 6);
+        let checks = 0;
+        const maxChecks = 400;
+        for (let dx = -r; dx <= r && checks < maxChecks; dx++) {
+            for (let dy = -2; dy <= 4 && checks < maxChecks; dy++) {
+                for (let dz = -r; dz <= r && checks < maxChecks; dz++) {
+                    const q = add(p, { x: dx, y: dy, z: dz });
+                    checks++;
+                    const b = this.terrain.block(q);
+                    if (b && b.typeId === "minecraft:nether_portal") {
+                        const d = dx * dx + dy * dy + dz * dz;
+                        if (d < bestD) { bestD = d; best = q; }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    walkIntoPortal(tick) {
+        try {
+            if (this.sim.dimension?.id === "minecraft:nether") return this.handleInNether(tick);
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        const portal = this.findPortalNearby(8) ?? (this.portalPos ? add(this.portalPos, { x: 1, y: 1, z: 0 }) : null);
+        const atPortal = portal && distance(portal, this.sim.location) < 1.2;
+        const plan = planPortalEntry({
+            inNether: false,
+            ignited: this.ignited,
+            portalBlock: portal,
+            atPortal,
+            waitTicks: this.portalWait,
+        });
+        if (plan.action === "wait") {
+            this.portalWait++;
+            this.bot.reason = "Nether: standing in portal, waiting for teleport";
+            try { this.sim.moveToLocation(this.host.relative(center(portal))); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            return true;
+        }
+        if (plan.action === "retry_walk") {
+            this.portalWait = 0;
+            this.bot.reason = "Nether: portal did not teleport, stepping out and back in";
+            return true;
+        }
+        if (plan.action === "walk_in" && portal) {
+            this.portalWait = 0;
+            const r = this.bot.navTo(center(portal), tick, 0.4);
+            this.bot.reason = `Nether: walking into portal at ${portal.x},${portal.y},${portal.z}`;
+            return r !== "failed";
+        }
+        if (plan.action === "find_portal") {
+            this.portalWait++;
+            this.bot.reason = "Nether: ignited, locating portal block to walk into";
+            if (this.portalWait > 100) { this.ignited = false; this.portalWait = 0; return false; }
+            return true;
+        }
+        return false;
+    }
+
+    handleInNether(tick) {
+        if (!this.enteredNether) {
+            this.enteredNether = true;
+            this.bot.record("NETHER ENTRY SUCCESS - in nether dimension");
+            this.bot.tell("Nether reached. Staying alive.");
+        }
+        this.bot.nav.dimension = "minecraft:nether";
+        this.bot.nav.allowBridge = true;
+        const loc = floor(this.sim.location);
+        if (this.terrain.lavaNear(loc)) {
+            const safe = this.findFlatGround(loc, 8);
+            if (safe) {
+                const r = this.bot.navTo(center(safe), tick, 1);
+                this.bot.reason = "Nether: lava nearby, moving to safe ground";
+                return r !== "failed";
+            }
+        }
+        this.bot.reason = "Nether: entered, surviving";
+        return false;
     }
 
     getTimeOfDay() {

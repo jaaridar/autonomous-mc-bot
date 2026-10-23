@@ -582,18 +582,20 @@ export class Escaper {
                     return r;
                 }
             }
-            // SURFACE IMMEDIATELY: jump + look up + move up
-            try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            try { 
-                const lookUp = { x: sim.location.x, y: sim.location.y + 5, z: sim.location.z };
-                sim.lookAtLocation(this.host.relative(lookUp));
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             const cur = sim.location;
-            // Move up aggressively
-            try {
-                sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            this.lastReason = "DROWNING! Surfacing to breathe - swimming fix, never drown";
+            const mover = bot.nav?.mover;
+            if (mover) {
+                mover.swimToward({ x: cur.x, y: cur.y + 2, z: cur.z }, { headInWater: true, tick });
+            } else {
+                try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try {
+                    sim.lookAtLocation(this.host.relative({ x: cur.x, y: cur.y + 5, z: cur.z }));
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try {
+                    sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            }
+            this.lastReason = "DROWNING! sim.swim() surfacing - never drown";
             return "running";
         }
         
@@ -641,14 +643,14 @@ export class Escaper {
         
         // Swim to shore if found
         if (shore) {
-            // If shore is close, swim to it
-            try {
-                sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            if (tick % 10 === 0) {
-                try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            const mover = bot.nav?.mover;
+            if (mover) mover.swimToward(center(shore.cell), { headInWater: false, tick });
+            else {
+                try {
+                    sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
+                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
-            this.lastReason = `Swimming to shore ${Math.round(shore.distance)}b - swimming fix, jump every 10 ticks`;
+            this.lastReason = `sim.swim() to shore ${Math.round(shore.distance)}b`;
             return "running";
         }
         

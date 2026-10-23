@@ -1,4 +1,5 @@
 import { add, key, horizontal, CARDINAL } from "./math.js";
+import { CANNOT_JUMP_OVER_RE, SLOW_TERRAIN_RE } from "./blocks.js";
 
 /**
  * Standable: feet passable, head passable, support solid, no hazard.
@@ -14,7 +15,7 @@ export function standable(read, p) {
         !c.hazard);
 }
 
-class Heap {
+export class Heap {
     constructor() { this.v = []; this.f = []; }
     get size() { return this.v.length; }
     push(v, f) {
@@ -54,7 +55,7 @@ class Heap {
     }
 }
 
-const KIND_COST = {
+export const KIND_COST = {
     walk: 1, jump: 3.5, sprintjump: 5, sprintjump3: 7, sprintjump_up: 8,
     bridge_sprintjump3: 10, bridge_bridge_sprintjump3: 14, jumpup: 3,
     bridge: 8, pillar: 6, bigdrop: 2.5,
@@ -99,6 +100,15 @@ export class PathSearch {
         this.allowBridge = options.allowBridge ?? false;
         this.allowPillar = options.allowPillar ?? false;
         this.allowSprintJump = options.allowSprintJump ?? parkour;
+        this.strictSafety = !!options.strictSafety;
+        this.dimension = options.dimension ?? "overworld";
+        this.ignoreKeys = new Set();
+        if (options.ignore) {
+            for (const p of options.ignore) {
+                if (p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z))
+                    this.ignoreKeys.add(this.k(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)));
+            }
+        }
         this.vertLimit = this.radius >= 100 ? 128 : (this.allowBridge ? 64 : 24);
         this.startH = horizontal(start, goal);
         this.best = undefined;
@@ -135,7 +145,9 @@ export class PathSearch {
         const b = this.rd(x, y + 1, z);
         if (!b?.passable || b.hazard) return false;
         const c = this.rd(x, y - 1, z);
-        return !!c?.support && !c.hazard;
+        if (!c?.support || c.hazard) return false;
+        if (this.strictSafety && c.type && CANNOT_JUMP_OVER_RE.test(c.type)) return false;
+        return true;
     }
     // Vector forms kept for compatibility.
     air(p) { return this.isAir(p.x, p.y, p.z); }
@@ -147,6 +159,7 @@ export class PathSearch {
         const px = p.x, py = p.y, pz = p.z;
         const push = (x, y, z, kind, extra) => {
             if (Math.hypot(x - this.start.x, z - this.start.z) > this.radius || Math.abs(y - this.start.y) > this.vertLimit) return;
+            if (this.ignoreKeys.size && this.ignoreKeys.has(this.k(x, y, z))) return;
             out.push(extra ? { x, y, z, kind, ...extra } : { x, y, z, kind });
         };
         const headClear = this.isAir(px, py + 2, pz);
@@ -299,14 +312,17 @@ export class PathSearch {
     }
 
     penalty(p) {
-        if (!this.avoid.length) return 0;
         let cost = 0;
-        for (let i = 0; i < this.avoid.length; i++) {
-            const a = this.avoid[i];
-            const dx = p.x - a.x, dz = p.z - a.z;
-            const d2 = dx * dx + dz * dz;
-            if (d2 < this.avoidRadii[i]) cost += (this.avoidRadii[i] - d2) * 0.5;
+        if (this.avoid.length) {
+            for (let i = 0; i < this.avoid.length; i++) {
+                const a = this.avoid[i];
+                const dx = p.x - a.x, dz = p.z - a.z;
+                const d2 = dx * dx + dz * dz;
+                if (d2 < this.avoidRadii[i]) cost += (this.avoidRadii[i] - d2) * 0.5;
+            }
         }
+        const below = this.rd(p.x, p.y - 1, p.z);
+        if (below?.type && SLOW_TERRAIN_RE.test(below.type)) cost += 3.5;
         return cost;
     }
 

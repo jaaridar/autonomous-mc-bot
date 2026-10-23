@@ -341,6 +341,24 @@ export function shouldRecalculate(newDiscovery, currentRoute, context) {
     return false;
 }
 
+/**
+ * Portal walk-in state machine. After the frame is ignited the bot must
+ * actually stand in a nether_portal block and wait for the dimension change
+ * instead of assuming ignition === entry.
+ */
+export function planPortalEntry(s) {
+    if (s.inNether) return { action: "done", reason: "already in nether" };
+    if (s.portalBlock) {
+        if (s.atPortal) {
+            if ((s.waitTicks ?? 0) < 80) return { action: "wait", reason: "standing in portal, waiting for teleport" };
+            return { action: "retry_walk", reason: "portal did not teleport, re-enter" };
+        }
+        return { action: "walk_in", target: s.portalBlock, reason: "walk into nether portal" };
+    }
+    if (!s.ignited) return { action: "ignite", reason: "need ignition" };
+    return { action: "find_portal", reason: "locate nether portal block" };
+}
+
 export function verifyPortalAction(action, result, inventory) {
     // Verify important actions: crafting, bucket acquisition, portal construction, ignition, Nether entry
     switch (action) {

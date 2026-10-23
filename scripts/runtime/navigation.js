@@ -1,5 +1,8 @@
-import { floor, horizontal, distance, center, key, add } from "../core/math.js";
+import { floor, horizontal, distance, center, key, add, CARDINAL } from "../core/math.js";
 import { PathSearch } from "../core/navigation.js";
+import { BidirectionalPathSearch, chooseSearchMode, unstuckAction } from "../core/pathfinder.js";
+import { chooseDrive } from "../core/mover.js";
+import { Mover } from "./mover.js";
 
 /**
  * Advanced Navigator: rolling-horizon A* with parkour, bridging, pillaring awareness.
@@ -43,11 +46,22 @@ export class Navigator {
         this.direct = undefined;      // { goal, since, issued, lastMove, best } short straight hop without A*
         this.noDirectUntil = 0;
         this.replans = 0;
+        this.ignore = [];             // exhausted cells (absolute {x,y,z}) skipped on the next search
+        this.dimension = "overworld";
+        this.swimSince = undefined;
+        this.unsafeSince = undefined;
+        this.didUnstuck = false;
+        this.mover = new Mover(sim, host);
+        this.nativeIssued = false;
+        this.noNativeUntil = 0;
     }
 
     reset() {
         try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         try { this.sim.isSprinting = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        if (!this.sim.isInWater) {
+            try { this.mover?.stopSwim(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
         this.target = undefined;
         this.search = undefined;
         this.path = [];
@@ -59,6 +73,11 @@ export class Navigator {
         this.avoid = [];
         this.trail = [];
         this.direct = undefined;
+        this.swimSince = undefined;
+        this.unsafeSince = undefined;
+        this.didUnstuck = false;
+        this.nativeIssued = false;
+        // keep this.ignore — the next attempt at the same goal should skip the cell we died on
     }
 
     replan(tick) {
@@ -75,7 +94,12 @@ export class Navigator {
         const maxNodes = isTower ? 1500 : 1200;
         const radius = isTower ? 48 : 24;
         this.replans++;
-        this.search = new PathSearch(
+        let dim = this.dimension;
+        try { dim = this.sim.dimension?.id ?? dim; } catch { /* offline tests */ }
+        this.dimension = dim;
+        const mode = chooseSearchMode({ horiz, vert: verticalDiff, radius, isTower });
+        const Search = mode === "bidirectional" ? BidirectionalPathSearch : PathSearch;
+        this.search = new Search(
             this.terrain.read,
             floor(this.sim.location),
             floor(this.target),
@@ -85,12 +109,16 @@ export class Navigator {
             radius,
             horiz > 16,
             this.avoid,
-            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump }
+            {
+                allowBridge, allowPillar, allowSprintJump: this.allowSprintJump,
+                ignore: this.ignore, strictSafety: true, dimension: dim,
+            }
         );
         this.path = [];
         this.corridor = [];
         this.waypoint = 0;
         this.lastIssued = -1;
+        this.nativeIssued = false;
         this.lastProgress = tick;
         this.segmentStart = tick;
         this.lastPosition = { ...this.sim.location };
@@ -99,10 +127,84 @@ export class Navigator {
 
     fail(message) {
         this.lastGoal = this.target ? { ...this.target } : this.lastGoal;
+        try {
+            const here = floor(this.sim.location);
+            this.ignore.push(here);
+            if (this.ignore.length > 32) this.ignore.shift();
+        } catch { /* ignore */ }
         this.reason = message;
         this.stuck = true;
         this.reset();
         return "failed";
+    }
+
+    unstuck(tick) {
+        const p = floor(this.sim.location);
+        const inWater = !!this.sim.isInWater;
+        const onGround = this.sim.isOnGround !== false;
+        const safeStart = this.terrain.safe(p);
+        let frontSolid = false;
+        try {
+            const yaw = this.sim.getRotation?.()?.y ?? 0;
+            const rad = yaw * Math.PI / 180;
+            const fwd = { x: Math.round(-Math.sin(rad)), y: 0, z: Math.round(Math.cos(rad)) };
+            const front = add(p, fwd.x || fwd.z ? fwd : CARDINAL[0]);
+            const b = this.terrain.block(front);
+            frontSolid = !!(b && !b.isAir && !b.isLiquid);
+        } catch { /* ignore */ }
+        const verb = unstuckAction({
+            inWater, onGround, safeStart, retries: this.retries,
+            oscillating: false,
+            hasBlocks: !!this.builder?.canBuild,
+            frontSolid,
+        });
+        this.reason = `Unstuck: ${verb}`;
+        if (verb === "swim_shore") return this.swimToward(this.target ?? this.lastGoal ?? p, tick);
+        if (verb === "wait_land") return "running";
+        if (verb === "pillar" && this.builder?.canBuild) {
+            try { this.builder.pillar(tick); } catch { /* ignore */ }
+            return "running";
+        }
+        if (verb === "sidestep" || verb === "jump_replan" || verb === "ignore_cell_replan") {
+            try { if (onGround) this.sim.jump(); } catch { /* ignore */ }
+            for (const d of CARDINAL) {
+                const q = add(p, d);
+                if (this.terrain.safe(q)) {
+                    try { this.sim.moveToLocation(this.host.relative(center(q)), { speed: 1, faceTarget: true }); } catch { /* ignore */ }
+                    break;
+                }
+            }
+        }
+        return "running";
+    }
+
+    /**
+     * In water the A* start cell is "unsafe" (water is a hazard), so we must
+     * not fail the search. Uses SimulatedPlayer.swim() + look + jump-to-surface.
+     */
+    swimToward(goal, tick) {
+        const p = floor(this.sim.location);
+        this.swimSince = this.swimSince ?? tick;
+        let best = null, bestScore = Infinity;
+        for (let dx = -8; dx <= 8; dx++) {
+            for (let dz = -8; dz <= 8; dz++) {
+                for (let dy = -2; dy <= 3; dy++) {
+                    const q = { x: p.x + dx, y: p.y + dy, z: p.z + dz };
+                    if (!this.terrain.safe(q)) continue;
+                    const score = horizontal(q, goal) + horizontal(q, p) * 0.3;
+                    if (score < bestScore) { bestScore = score; best = q; }
+                }
+            }
+        }
+        let headInWater = false;
+        try { headInWater = !!this.terrain.headInWater?.(this.sim); } catch { /* ignore */ }
+        const dest = best ? center(best) : goal;
+        this.mover.swimToward(dest, { headInWater, tick });
+        this.reason = best
+            ? `Swimming (sim.swim) to shore at ${best.x},${best.y},${best.z}`
+            : "Swimming (sim.swim) toward goal — no shore in range";
+        if (tick - this.swimSince > 400) return this.fail("Could not leave water");
+        return "running";
     }
 
     detectLoop(tick) {
@@ -207,18 +309,25 @@ export class Navigator {
     }
 
     go(goal, tick) {
-        // UNBREAKABLE: if in water, don't try normal pathfinding - need boat/swim
         if (this.sim.isInWater) {
-            return this.fail("In water, need boat or swim to shore - water navigation");
+            return this.swimToward(goal, tick);
         }
-        // If start not safe (in water, falling, etc), fail fast
+        this.swimSince = undefined;
+        try { this.mover.stopSwim(); } catch { /* ignore */ }
         const startFloor = floor(this.sim.location);
-        if (!this.terrain.safe(startFloor) && !this.terrain.safe({ x: startFloor.x, y: startFloor.y - 1, z: startFloor.z })) {
-            // Check if water nearby
-            if (this.terrain.waterNear(startFloor)) {
-                return this.fail("Start in water or unsafe, need boat/bridge - water detected");
+        const startSafe = this.terrain.safe(startFloor) || this.terrain.safe({ x: startFloor.x, y: startFloor.y - 1, z: startFloor.z });
+        if (!startSafe) {
+            if (this.terrain.waterNear(startFloor)) return this.swimToward(goal, tick);
+            this.unsafeSince = this.unsafeSince ?? tick;
+            if (!this.sim.isOnGround) {
+                this.reason = "Falling; waiting to land before pathing";
+                return "running";
             }
+            this.unstuck(tick);
+            if (tick - this.unsafeSince > 80) return this.fail("Start still unsafe after unstuck");
+            return "running";
         }
+        this.unsafeSince = undefined;
         if (horizontal(this.sim.location, goal) < 0.7 && Math.abs(this.sim.location.y - goal.y) < 1.2) {
             this.reset();
             return "done";
@@ -227,12 +336,47 @@ export class Navigator {
         // standable straight line - just walk there, no A* at all.
         const directResult = this.tryDirect(goal, tick);
         if (directResult) return directResult;
+        if (this.nativeIssued) {
+            if (horizontal(this.sim.location, goal) < 0.9 && Math.abs(this.sim.location.y - goal.y) < 1.3) {
+                this.reset();
+                return "done";
+            }
+            if (this.lastPosition && distance(this.sim.location, this.lastPosition) > 0.2) {
+                this.lastProgress = tick;
+                this.lastPosition = { ...this.sim.location };
+            }
+            if (tick - this.lastProgress > 60) {
+                this.nativeIssued = false;
+                this.noNativeUntil = tick + 80;
+                this.unstuck(tick);
+            } else {
+                this.reason = "Vanilla navigateToLocation in progress";
+                return "running";
+            }
+        }
+        if (!this.nativeIssued && !this.search && !this.path.length && this.sim.isOnGround && tick >= this.noNativeUntil) {
+            const remaining = horizontal(this.sim.location, goal);
+            const vert = Math.abs(this.sim.location.y - goal.y);
+            if (remaining > 1.2 && remaining <= 24 && vert <= 4) {
+                const speed = this.fast || this.urgent ? 1 : 0.65;
+                if (this.mover.navigateTo(goal, speed)) {
+                    this.nativeIssued = true;
+                    this.target = { ...goal };
+                    this.lastProgress = tick;
+                    this.lastPosition = { ...this.sim.location };
+                    this.reason = "Vanilla navigateToLocation around terrain";
+                    return "running";
+                }
+                this.noNativeUntil = tick + 40;
+            }
+        }
         // Retarget only when the goal really moved: a walking owner used to
         // trigger a full replan every 12 ticks. The threshold grows with the
         // remaining distance (owner moving 3 blocks barely matters at 40).
         const remaining = horizontal(this.sim.location, goal);
         const moveThreshold = Math.max(3, Math.min(8, remaining * 0.25));
         if (!this.target) {
+            if (!this.lastGoal || distance(goal, this.lastGoal) > 8) this.ignore = [];
             this.target = { ...goal };
             this.lastRetarget = tick;
             this.replan(tick);
@@ -242,6 +386,7 @@ export class Navigator {
             this.retries = 0;
             this.endpoints.clear();
             this.trail = [];
+            this.ignore = [];
             this.replan(tick);
         }
         if (tick - this.segmentStart > 700) return this.fail("Segment timeout; terrain blocked or unloaded.");
@@ -318,13 +463,35 @@ export class Navigator {
                     }
                 } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
-            if (++this.retries > 4) return this.fail("Stuck or terrain changed after retries.");
+            this.unstuck(tick);
+            if (++this.retries > 6) return this.fail("Stuck or terrain changed after retries.");
             this.terrain.clear();
             this.replan(tick);
             return "running";
         }
 
-        if (this.detectLoop(tick)) return this.fail("Circling without progress; treating as blocking.");
+        if (this.detectLoop(tick)) {
+            this.unstuck(tick);
+            try { this.ignore.push(floor(this.sim.location)); } catch { /* ignore */ }
+            if (++this.retries > 6) return this.fail("Circling without progress; treating as blocking.");
+            this.terrain.clear();
+            this.replan(tick);
+            return "running";
+        }
+
+        if (this.nativeIssued) {
+            if (horizontal(this.sim.location, goal) < 0.9 && Math.abs(this.sim.location.y - goal.y) < 1.3) {
+                this.reset();
+                return "done";
+            }
+            if (tick - this.lastProgress > 60) {
+                this.nativeIssued = false;
+                this.noNativeUntil = tick + 80;
+                this.unstuck(tick);
+                this.replan(tick);
+            }
+            return "running";
+        }
 
         if (this.lastIssued !== this.waypoint) {
             // Smoothing: combine collinear walks
@@ -346,6 +513,28 @@ export class Navigator {
             }
             this.corridor = this.path.slice(first, end + 1);
             this.lastIssued = this.waypoint;
+
+            const drive = chooseDrive({
+                inWater: false,
+                onGround: this.sim.isOnGround !== false,
+                kinds: this.corridor.map((p) => p.kind),
+                nativeBanned: tick < this.noNativeUntil,
+            });
+            if (drive === "native_route") {
+                const nSpeed = this.fast || this.urgent ? 1 : 0.65;
+                const pts = this.corridor.map((p) => center(p));
+                if (pts.length >= 2 && this.mover.navigateRoute(pts, nSpeed)) {
+                    this.nativeIssued = true;
+                    this.reason = "Vanilla navigateToLocations along walk";
+                    return "running";
+                }
+                if (this.mover.navigateTo(center(w), nSpeed)) {
+                    this.nativeIssued = true;
+                    this.reason = "Vanilla navigateToLocation";
+                    return "running";
+                }
+                this.noNativeUntil = tick + 40;
+            }
 
             const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
             const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;

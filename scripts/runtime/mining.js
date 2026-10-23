@@ -8,6 +8,7 @@ import { add, floor, center, horizontal, distance, UP, DOWN } from "../core/math
 import { oreLevel, isBulk, bulkLevel } from "../core/ores.js";
 import { MINE } from "../core/policy.js";
 import { isUnbreakable } from "../core/blocks.js";
+import { shouldAbortMine, stillUnderground } from "../core/mover.js";
 
 const STEP_LIMIT = 250;
 const RUN_LENGTH = 16;
@@ -181,25 +182,36 @@ export class Miner {
         return "digging";
     }
 
+    driveTo(loc, jumpUp, tick) {
+        const b = this.bot;
+        const mover = b.nav?.mover;
+        if (b.sim.isInWater && mover) {
+            mover.swimToward(loc, { headInWater: !!b.terrain.headInWater?.(b.sim), tick });
+            return;
+        }
+        if (jumpUp) {
+            try { (mover ? mover.jump() : b.sim.jump()); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
+        if (mover && mover.walkTo(loc, 1)) return;
+        try { b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+    }
+
     stepTo(cell, tick) {
         const b = this.bot;
         const loc = center(cell);
         if (horizontal(b.sim.location, loc) < 0.5 && Math.abs(b.sim.location.y - cell.y) < 1.2) return "arrived";
-        b.nav.reset();
+        if (!b.sim.isInWater) b.nav.reset();
         b.sim.isSprinting = false;
-        if (cell.y > floor(b.sim.location).y) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(loc), { faceTarget: true });
+        this.driveTo(loc, cell.y > floor(b.sim.location).y, tick);
         return "moving";
     }
 
     goTo(cell, tick) {
         const b = this.bot;
-        void tick;
         this.moving = { ...cell };
-        b.nav.reset();
+        if (!b.sim.isInWater) b.nav.reset();
         b.sim.isSprinting = false;
-        if (cell.y > floor(b.sim.location).y) b.sim.jump();
-        b.sim.moveToLocation(b.host.relative(center(cell)), { faceTarget: true });
+        this.driveTo(center(cell), cell.y > floor(b.sim.location).y, tick);
     }
 
     settle() {
@@ -272,6 +284,19 @@ export class Miner {
 
     ensure(m, tick) {
         const b = this.bot;
+        let hp = 20, hunger = 20;
+        try { hp = b.sim.getComponent("minecraft:health")?.currentValue ?? 20; } catch { /* ignore */ }
+        try { hunger = b.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20; } catch { /* ignore */ }
+        const abort = shouldAbortMine({
+            quotaMet: false,
+            inventoryFull: (b.bag?.container?.emptySlotsCount ?? 1) < 1,
+            wantsOut: this.wantsOut,
+            hp, hunger,
+            ticksUnderground: this.site && this.since != null ? tick - this.since : 0,
+            inWater: !!b.sim.isInWater,
+            lavaNear: !!b.terrain.lavaNear?.(floor(b.sim.location)),
+        });
+        if (abort.abort) this.wantsOut = true;
         const p = floor(b.sim.location);
         const item = m.deepItem ?? m.item;
         const level = oreLevel(item) ?? (isBulk(item) ? bulkLevel(p.y) : undefined);
@@ -371,25 +396,66 @@ export class Miner {
         }
         if (this.route.length <= 1) {
             const origin = this.site?.origin;
-            if (!origin || (horizontal(b.sim.location, center(origin)) < 2.0 && Math.abs(b.sim.location.y - origin.y) < 2.0)) {
+            if (origin && horizontal(b.sim.location, center(origin)) < 2.0 && Math.abs(b.sim.location.y - origin.y) < 2.0) {
                 this.reset();
                 this.reason = "Back on surface - front fix";
                 return "surface";
             }
         }
         if (!this.route.length) {
+            const origin = this.site?.origin;
+            if (!origin || stillUnderground(floor(b.sim.location), origin, 2)) return this.emergencyExit(tick);
             this.reset();
             this.reason = "Back on surface - front fix";
             return "surface";
         }
-        if (tick - this.ascendSince > 3000) {
-            this.reason = "Could not retrace shaft - needs help - advanced";
-            this.wantsOut = false;
-            return "stalled";
-        }
+        if (tick - this.ascendSince > 3000) return this.emergencyExit(tick);
         const next = this.route[this.route.length - 1];
         if (this.stepTo(next, tick) === "arrived") this.route.pop();
         this.reason = `Climbing shaft (${this.route.length} left) - front fix`;
+        return "working";
+    }
+
+    emergencyExit(tick) {
+        const b = this.bot;
+        const loc = floor(b.sim.location);
+        const origin = this.site?.origin;
+        this.wantsOut = true;
+        if (!stillUnderground(loc, origin, 2) && origin && horizontal(loc, origin) < 4) {
+            this.reset();
+            this.reason = "Back on surface - emergency";
+            return "surface";
+        }
+        if (origin && loc.y < origin.y - 1 && b.builder?.canBuild) {
+            try {
+                const r = b.builder.pillar(tick);
+                if (r === "placed" || r === "jumping") {
+                    this.reason = "Emergency pillar toward surface";
+                    return "working";
+                }
+            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        }
+        const above = { x: loc.x, y: loc.y + 2, z: loc.z };
+        try {
+            const r = b.digCell(above, tick);
+            if (r === "digging") {
+                this.reason = "Digging straight up to surface";
+                return "working";
+            }
+            if (r === "open") {
+                try { b.sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            }
+        } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        if (origin) {
+            const r = b.nav.go(center(origin), tick);
+            this.reason = "Navigating back to shaft head";
+            if (r === "done" && !stillUnderground(floor(b.sim.location), origin, 2)) {
+                this.reset();
+                return "surface";
+            }
+            return "working";
+        }
+        this.reason = "Lost shaft, still climbing out";
         return "working";
     }
 }
