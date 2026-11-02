@@ -1,6 +1,0 @@
-[
-  {"scenario": "any_log_birch", "target": "#logs", "nearby": ["birch_log"], "expected": "mine_any_log"},
-  {"scenario": "oak_and_birch_mix", "target": "#logs", "nearby": ["oak_log","birch_log"], "expected": "mine_nearest_any"},
-  {"scenario": "log_3_high", "target": "#logs", "pos": {"x":0,"y":3,"z":0}, "expected": "direct_break_no_scaffold"},
-  {"scenario": "iron_ore_needs_stone_pick", "target": "iron_ore", "hasPickaxeTier": 1, "expected": "need_stone_pickaxe_prereq"}
-]

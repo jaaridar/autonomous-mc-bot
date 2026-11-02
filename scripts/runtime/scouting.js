@@ -1,8 +1,12 @@
-import { system } from "@minecraft/server";
-import { add, floor, distance, center, CARDINAL, UP } from "../core/math.js";
+// One module now: runtime/scouting.js + runtime/exploration.js (see docs/ARCHITECTURE.md).
+import { CARDINAL, UP, add, center, distance, floor, key } from "../core/math.js";
 import { amountOf } from "../core/recipes.js";
+import { allowedPrey } from "./survival.js";
 import { BlockScan } from "./world.js";
-import { allowedPrey } from "./foraging.js";
+import { system } from "@minecraft/server";
+
+// ---------------------------------------------------------------- scouting.js
+
 /**
  * Roaming duties: villages worth looting, fresh ground worth scouting, and
  * opportunistic foraging on the way (a trunk for logs, a sheep for wool).
@@ -181,7 +185,7 @@ export class Scout {
             }
             else {
                 b.nav.reset();
-                b.sim.stopMoving();
+                b.avatar.stopMoving();
                 c.dwell = c.dwell ?? tick;
                 if (tick - c.dwell > 40) {
                     this.chore = undefined;
@@ -203,10 +207,10 @@ export class Scout {
         }
         b.nav.reset();
         b.reason = "Hunting a sheep for wool.";
-        b.sim.lookAtEntity(e);
+        b.avatar.lookEntity(e);
         if (tick - c.lastSwing >= 10 && allowedPrey(e)) {
             b.bag.tool("sword") || b.bag.tool("axe");
-            b.sim.attackEntity(e);
+            b.avatar.attack(e);
             c.lastSwing = tick;
         }
         return true;
@@ -277,11 +281,88 @@ export class Scout {
         b.reason = "Grabbing logs from a nearby tree.";
         if (!b.bag.tool("axe"))
             b.bag.emptyHand();
-        b.sim.lookAtBlock(b.host.relative(c.cell));
-        if (b.sim.breakBlock(b.host.relative(c.cell)))
+        b.avatar.lookBlock(c.cell);
+        if (b.avatar.breakBlockAt(c.cell))
             c.breaking = tick;
         else
             c.cell = undefined; // cannot open it from here; pick another cell
         return true;
+    }
+}
+
+// ---------------------------------------------------------------- exploration.js
+
+/** Bounded frontier wandering. Does not pretend to know structures in unloaded chunks. */
+export class Explorer {
+    constructor() {
+        this.visits = new Map();
+        this.blocked = new Map();
+        this.since = 0;
+        this.turns = 0;
+        this.trips = 0;
+    }
+    reset() {
+        this.goal = undefined;
+    }
+    step(position, home, tick, terrain, nav, range = 256) {
+        if (this.goal && distance(this.goal, home) > range) {
+            nav.reset();
+            this.goal = undefined;
+        }
+        if (this.goal) {
+            const result = nav.go(this.goal, tick);
+            if (result === "running" && tick - this.since < 500)
+                return "running";
+            const k = key(this.goal);
+            const v = this.visits.get(k);
+            if (v) v.n++;
+            else this.visits.set(k, { x: this.goal.x, y: this.goal.y, z: this.goal.z, n: 1 });
+            if (result !== "done")
+                this.blocked.set(k, tick + 1200);
+            this.goal = undefined;
+            this.trips++;
+            nav.reset();
+            return "arrived";
+        }
+        const origin = floor(position), options = [];
+        this.turns++;
+        for (let dir = 0; dir < 8; dir++)
+            for (const radius of [12, 20]) {
+                const angle = (dir * Math.PI) / 4;
+                const x = Math.round(Math.cos(angle) * radius), z = Math.round(Math.sin(angle) * radius);
+                for (const y of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+                    const p = add(origin, { x, y, z });
+                    if (distance(p, home) > range ||
+                        (this.blocked.get(key(p)) ?? 0) > tick ||
+                        !terrain.safe(p))
+                        continue;
+                    // Visits keep parsed coordinates (this used to split+parse
+                    // every visit key for every candidate).
+                    let penalty = 0;
+                    for (const v of this.visits.values()) {
+                        if (distance(p, v) < 12)
+                            penalty += v.n * 20;
+                    }
+                    options.push({
+                        p,
+                        score: penalty +
+                            Math.abs(y) * 2 +
+                            Math.abs(dir - (this.turns % 8)) * 0.35 +
+                            16 -
+                            radius,
+                    });
+                    break;
+                }
+            }
+        options.sort((a, b) => a.score - b.score);
+        if (!options.length)
+            return "blocked";
+        this.goal = options[0].p;
+        this.since = tick;
+        if (this.visits.size > 96)
+            this.visits.delete(this.visits.keys().next().value);
+        if (this.blocked.size > 96)
+            this.blocked.delete(this.blocked.keys().next().value);
+        return "running";
     }
 }

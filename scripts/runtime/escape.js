@@ -1,14 +1,14 @@
+import { assess } from "../core/combat.js";
+import { CARDINAL, COMPASS, DOWN, UP, add, away, center, distance, floor, key } from "../core/math.js";
+import { HAZARDS, RANGED, diggable } from "../core/world.js";
+import { Hands } from "./builder.js";
+import { Direction } from "@minecraft/server";
+import { findBoat, weaponTierLoose } from "./world.js";
 /**
  * World-class Escaper - can escape any situation: 16 skeletons, blaze, enderman, warden, lava, water, pit, etc.
  * Phases: ASSESS -> COVER -> BUILD -> RETREAT -> RECOVER
  * Uses builder, parkour, and tactical assessment.
  */
-import { Direction } from "@minecraft/server";
-import { add, floor, center, distance, key, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
-import { diggable, HAZARDS, RANGED, EXPLOSIVE } from "../core/policy.js";
-import { getProfile, assess, bunkerPlan, chooseCoverDirection } from "../core/escape-strategy.js";
-import { getMobStat } from "../core/combat.js";
-import { Hands } from "./hands.js";
 
 const FACES = new Map([
     ["1,0,0", Direction.East],
@@ -85,8 +85,8 @@ export class Escaper {
         this.endermanMode = false;
         this.skeletonSwarmMode = false;
         this.blazeMode = false;
-        try { this.sim.stopBreakingBlock(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { this.sim.isSneaking = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.stopDigging(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.setSneaking(false); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
     bump() {
@@ -100,7 +100,7 @@ export class Escaper {
 
     walkTo(loc) {
         if (!this.bump()) return "done";
-        try { this.sim.moveToLocation(this.host.relative(loc), { faceTarget: true }); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.hop(loc); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         return "running";
     }
 
@@ -170,7 +170,7 @@ export class Escaper {
         const hasWater = this.bag.find(s => s.typeId === "minecraft:water_bucket") >= 0;
         const hasBlocks = this.bag.buildBlock() >= 0;
         const blockCount = this.countBlocks();
-        const resources = { hasShield, hasWater, hasBlocks, blockCount, hasTotem: this.bag.find(s => s.typeId === "minecraft:totem_of_undying") >= 0, weaponTier: this.getWeaponTier(), armorValue: 0 };
+        const resources = { hasShield, hasWater, hasBlocks, blockCount, hasTotem: this.bag.find(s => s.typeId === "minecraft:totem_of_undying") >= 0, weaponTier: weaponTierLoose(this.bag), armorValue: 0 };
         this.assessment = assess(hp, threats, resources, this.sim.location);
         this.lastReason = `Assessed: fear ${this.assessment.totalFear.toFixed(1)} threats ${threats.length} decision ${this.assessment.decision}`;
     }
@@ -184,18 +184,6 @@ export class Escaper {
         return count;
     }
 
-    getWeaponTier() {
-        for (let i = 0; i < this.bag.size; i++) {
-            const s = this.bag.get(i);
-            if (!s) continue;
-            if (s.typeId.includes("netherite")) return 5;
-            if (s.typeId.includes("diamond")) return 4;
-            if (s.typeId.includes("iron")) return 3;
-            if (s.typeId.includes("stone")) return 2;
-            if (s.typeId.includes("wooden")) return 1;
-        }
-        return 0;
-    }
 
     /**
      * Combat escape for extreme situations: 16 skeletons, blaze, enderman
@@ -238,8 +226,8 @@ export class Escaper {
             if (slot >= 0) {
                 const selected = this.bag.select(slot);
                 try {
-                    this.sim.lookAtBlock(this.host.relative(center(p)));
-                    if (this.sim.useItemInSlot(selected)) {
+                    this.bot.avatar.lookBlock(p);
+                    if (this.bot.avatar.use(selected)) {
                         this.lastWaterPlace = tick;
                         this.lastReason = "Enderman escape: placed water";
                         return "running";
@@ -271,7 +259,7 @@ export class Escaper {
             } else {
                 // Already have roof, stay under it
                 this.lastReason = "Enderman escape: under low roof, safe";
-                try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 return "running";
             }
         }
@@ -399,7 +387,7 @@ export class Escaper {
                 if (res === "placed") {
                     this.bunkerAttempts++;
                     this.lastReason = "Bunker: built roof, safe inside";
-                    try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                    try { this.bot.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                     return "running";
                 }
             }
@@ -408,12 +396,12 @@ export class Escaper {
         // If bunker built, stay inside and heal
         if (this.bunkerAttempts >= 3) {
             this.lastReason = "In bunker, healing and waiting";
-            try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             // Try to eat
             const food = this.bag.food(true);
             if (food >= 0) {
                 const held = this.bag.select(food);
-                try { this.sim.useItemInSlot(held); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.avatar.use(held); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             return "running";
         }
@@ -505,7 +493,7 @@ export class Escaper {
             const q = this.terrain.groundNear(p.x + dir.x * n, p.z + dir.z * n, p.y, 4);
             if (q && !this.terrain.dangerous(q)) {
                 this.lastReason = `Zigzag retreat ${usePerp ? "perp" : "away"}`;
-                this.sim.isSprinting = true;
+                this.bot.avatar.setSprinting(true);
                 return this.walkTo(center(q));
             }
         }
@@ -526,7 +514,7 @@ export class Escaper {
                 return "running";
             }
             if (shore) {
-                sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
+                this.bot.avatar.hop(center(shore.cell));
                 this.lastReason = "Boating to shore - swimming fix";
                 return "running";
             }
@@ -534,7 +522,7 @@ export class Escaper {
             const owner = bot.owner();
             const target = owner ? owner.location : bot.home();
             if (target) {
-                sim.moveToLocation(this.host.relative({ x: target.x, y: sim.location.y, z: target.z }), { faceTarget: true });
+                this.bot.avatar.hop({ x: target.x, y: sim.location.y, z: target.z });
                 this.lastReason = "Boating towards owner/home - swimming fix";
                 return "running";
             }
@@ -549,7 +537,7 @@ export class Escaper {
         // Not in water anymore - done
         if (!sim.isInWater) {
             if (this.swimming) {
-                try { sim.stopSwimming(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.avatar.stopSwimming(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
                 this.swimming = false;
             }
             this.drowning = undefined;
@@ -559,12 +547,12 @@ export class Escaper {
         
         // === IN WATER - CRITICAL SWIMMING LOGIC - NEVER DROWN ===
         this.nav.reset();
-        sim.isSprinting = false;
+        this.bot.avatar.setSprinting(false);
         
         // Always try to be swimming
         if (!this.swimming) {
             this.swimming = true;
-            try { sim.swim(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.swim(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
         
         // Check if head in water - DROWNING RISK - must surface immediately
@@ -583,15 +571,15 @@ export class Escaper {
                 }
             }
             // SURFACE IMMEDIATELY: jump + look up + move up
-            try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            try { this.bot.avatar.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             try { 
                 const lookUp = { x: sim.location.x, y: sim.location.y + 5, z: sim.location.z };
-                sim.lookAtLocation(this.host.relative(lookUp));
+                this.bot.avatar.lookLocation(lookUp);
             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             const cur = sim.location;
             // Move up aggressively
             try {
-                sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
+                this.bot.avatar.hop({ x: cur.x, y: cur.y + 1.5, z: cur.z });
             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             this.lastReason = "DROWNING! Surfacing to breathe - swimming fix, never drown";
             return "running";
@@ -643,10 +631,10 @@ export class Escaper {
         if (shore) {
             // If shore is close, swim to it
             try {
-                sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true });
+                this.bot.avatar.hop(center(shore.cell));
             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             if (tick % 10 === 0) {
-                try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.avatar.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             this.lastReason = `Swimming to shore ${Math.round(shore.distance)}b - swimming fix, jump every 10 ticks`;
             return "running";
@@ -662,15 +650,13 @@ export class Escaper {
             };
             const len = Math.hypot(dir.x, dir.z) || 1;
             const cur = sim.location;
-            try {
-                sim.moveToLocation(this.host.relative({ 
-                    x: cur.x + (dir.x/len) * 4, 
-                    y: cur.y + 0.5, 
-                    z: cur.z + (dir.z/len) * 4 
-                }), { faceTarget: true });
-            } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+            this.bot.avatar.hop({
+                x: cur.x + (dir.x / len) * 4,
+                y: cur.y + 0.5,
+                z: cur.z + (dir.z / len) * 4,
+            });
             if (tick % 8 === 0) {
-                try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                try { this.bot.avatar.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
             }
             this.lastReason = `No shore, swimming to ${owner ? 'owner' : 'home'} at surface - swimming fix`;
             return "running";
@@ -679,22 +665,17 @@ export class Escaper {
         // Last resort: just keep swimming up and moving
         const cur = sim.location;
         try {
-            sim.moveToLocation(this.host.relative({ x: cur.x + 1, y: cur.y + 0.5, z: cur.z }), { faceTarget: true });
+            this.bot.avatar.hop({ x: cur.x + 1, y: cur.y + 0.5, z: cur.z });
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { sim.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.bot.avatar.jump(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         this.lastReason = "Deep water no target, swimming up and moving - never drown fix";
         return "running";
     }
 
-
-    findBoat() {
-        try { return this.sim.dimension.getEntities({ type: "minecraft:boat", location: this.sim.location, maxDistance: 8 })[0]; } catch { return undefined; }
-    }
-
     mount(boat) {
         try { const rideable = boat.getComponent("minecraft:rideable"); if (rideable?.addRider?.(this.sim)) return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { if (typeof this.sim.interactWithEntity === "function" && this.sim.interactWithEntity(boat)) return true; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { return typeof this.sim.interact === "function" ? !!this.sim.interact() : false; } catch { return false; }
+        if (this.bot.avatar.interactEntity(boat)) return true;
+        return this.bot.avatar.interact();
     }
 
     eject() {
@@ -716,7 +697,7 @@ export class Escaper {
             if (tick - this.boatSince < 120) return undefined;
             this.boatTries = 0;
         }
-        const existing = this.findBoat();
+        const existing = findBoat(this.sim);
         if (existing) {
             if (this.mount(existing)) {
                 this.riding = true;
@@ -784,17 +765,16 @@ export class Escaper {
         const selected = this.bag.select(slot);
         const p = sim.location;
         try { 
-            sim.lookAtBlock(this.host.relative(center(floor(p)))); 
+            this.bot.avatar.lookBlock(floor(p)); 
         } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         try { 
-            sim.useItemInSlot(selected); 
+            this.bot.avatar.use(selected); 
             this.lastReason = "Floating boat - swimming fix, never drown - unbreakable water"; 
         } catch { 
             this.lastReason = "Boat placement rejected, will retry - swimming fix"; 
         }
         return "running";
     }
-
 
     escapeDirection() {
         const p = floor(this.sim.location);
@@ -874,7 +854,7 @@ export class Escaper {
                 .filter((q) => q && !this.terrain.dangerous(q))
                 .sort((a, b) => distance(a, sim.location) - distance(b, sim.location))[0];
             if (spot) {
-                sim.isSprinting = true;
+                this.bot.avatar.setSprinting(true);
                 this.lastReason = "Stepping off hazard.";
                 return this.walkTo(center(spot));
             }
@@ -901,20 +881,20 @@ export class Escaper {
             }
             if (plan.kind === "bridge") return this.bridge(dir, tick);
             if (plan.kind === "climb") {
-                if (sim.isOnGround) sim.jump();
+                if (sim.isOnGround) this.bot.avatar.jump();
                 this.lastReason = "Climbing out.";
                 return this.walkTo(center(add(add(p, dir), UP)));
             }
             if (plan.kind === "drop") {
                 const drop = this.terrain.groundNear(p.x + dir.x, p.z + dir.z, p.y - 1, 6);
                 if (!drop || this.terrain.dangerous(drop)) continue;
-                sim.isSprinting = true;
+                this.bot.avatar.setSprinting(true);
                 this.lastReason = "Dropping to lower ground.";
                 return this.walkTo(center(drop));
             }
             const walk = this.terrain.groundNear(p.x + dir.x, p.z + dir.z, p.y, 3);
             if (!walk || this.terrain.dangerous(walk)) continue;
-            sim.isSprinting = true;
+            this.bot.avatar.setSprinting(true);
             this.lastReason = "Walking out.";
             return this.walkTo(center(walk));
         }
@@ -983,7 +963,7 @@ export class Escaper {
         if (!cells.length) {
             const walk = this.terrain.groundNear(foot.x, foot.z, p.y, 4);
             if (walk && !this.terrain.dangerous(walk)) {
-                sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true });
+                this.bot.avatar.hop(center(walk));
                 this.lastReason = "Tunnelling forward.";
                 return "running";
             }
@@ -998,8 +978,8 @@ export class Escaper {
         else if (rule.tool === "axe") this.bag.tool("axe");
         else if (rule.tool === "shovel") this.bag.tool("shovel");
         if (this.breaking !== key(cell)) {
-            sim.lookAtBlock(this.host.relative(center(cell)));
-            if (!sim.breakBlock(this.host.relative(center(cell)))) return this.giveUp(`${type} out of reach to tunnel.`);
+            this.bot.avatar.lookBlock(center(cell));
+            if (!this.bot.avatar.breakBlockAt(cell)) return this.giveUp(`${type} out of reach to tunnel.`);
             this.breaking = key(cell);
         }
         this.lastReason = "Tunnelling through " + type;
@@ -1012,8 +992,8 @@ export class Escaper {
             const walk = this.crossing;
             if (!this.terrain.solid(add(walk, DOWN))) { this.crossing = undefined; }
             else {
-                sim.isSprinting = false;
-                sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true });
+                this.bot.avatar.setSprinting(false);
+                this.bot.avatar.hop(center(walk));
                 const flat = Math.hypot(sim.location.x - (walk.x + 0.5), sim.location.z - (walk.z + 0.5));
                 if (flat < 0.6 && Math.abs(sim.location.y - walk.y) < 1.1) {
                     this.crossing = undefined;
@@ -1034,16 +1014,16 @@ export class Escaper {
         if (this.lavaAhead(target)) return this.giveUp("Refusing to bridge over lava/fire.");
         if (tick - this.since > 600) return this.giveUp("Bridge escape timed out.");
         if (this.terrain.solid(target)) {
-            sim.isSprinting = false;
-            sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true });
+            this.bot.avatar.setSprinting(false);
+            this.bot.avatar.hop(center(walk));
             this.crossing = walk;
             this.lastReason = "Stepping across.";
             return "running";
         }
         const tb = this.terrain.block(target);
         if (tb && !tb.isAir && !tb.isLiquid && !tb.isSolid) {
-            sim.lookAtBlock(this.host.relative(center(target)));
-            sim.breakBlock(this.host.relative(center(target)));
+            this.bot.avatar.lookBlock(center(target));
+            this.bot.avatar.breakBlockAt(target);
             this.lastReason = "Clearing bridge line.";
             return "running";
         }
@@ -1075,11 +1055,11 @@ export class Escaper {
         }
         if (tick - this.since > 500) return this.giveUp("Pillar escape timed out.");
         if (!this.hands.canBuild) return this.giveUp("No blocks to pillar.");
-        sim.isSneaking = true;
+        this.bot.avatar.setSneaking(true);
         if (sim.isOnGround) {
             this.jumpFrom = p.y;
             this.pillarCol = { x: p.x, z: p.z };
-            sim.jump();
+            this.bot.avatar.jump();
             return "running";
         }
         if (this.jumpFrom !== undefined && this.pillarCol && p.y > this.jumpFrom) {
