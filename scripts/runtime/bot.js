@@ -823,27 +823,12 @@ export class Bot {
         this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
 
-        // ANTI-DROWN: if in water, immediately handle swimming - never drown
-        if (this.sim.isInWater) {
-            // Force swimming behavior - jump every tick to stay at surface
-            if (tick % 5 === 0) {
-                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-            }
-            // If head in water, urgent surface
-            try {
-                if (this.terrain.headInWater(this.sim)) {
-                    this.reason = "In water head submerged - urgent surfacing - anti-drown swimming fix";
-                    try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-                    const cur = this.sim.location;
-                    try {
-                        this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.5, z: cur.z }), { faceTarget: true });
-                    } catch (_e) { this.fault(_e); }
-                    // Try boat immediately when drowning
-                    const boatRes = this.escaper.boat(tick);
-                    if (boatRes) return;
-                }
-            } catch (_e) { this.fault(_e); }
-        }
+        // ANTI-DROWN used to live here as a jump-every-5-ticks loop. That kept
+        // the bot's head above the water but never moved it toward land, so a
+        // bot that walked into a lake trod water forever ("gets stuck in
+        // water"). Surfacing *and* swimming to the nearest shore now belong to
+        // the Escaper's water mode, which the owner state machine selects the
+        // moment the bot is in water.
         this.nav.parkour = this.settings.parkour;
         this.nav.allowBridge = this.settings.bridge;
         this.observe(tick);
@@ -1739,14 +1724,18 @@ export class Bot {
         if (clear && tick - this.retreatSince > 20) {
             this.nav.urgent = false; this.nav.avoid = []; this.nav.reset(); this.retreatSince = 0; this.fleeSince = 0; this.lastBranch = ""; this.record("broke contact"); return;
         }
+        // Climbing out is the right first move underground, but reaching the
+        // surface must NOT block the task: blockTask() freezes every later tick,
+        // which is how a bot that climbed away from a zombie ended up standing
+        // still while the zombie caught up.
         if (this.miner.active && this.miner.route.length > 1) {
             const r = this.miner.ascend(tick); this.reason = this.miner.reason;
-            if (r === "surface") { this.miner.reset(); this.blockTask("Climbed out of the shaft to break contact with a hostile.", "retry"); }
-            else if (r !== "stalled") { return; }
+            if (r === "surface") { this.miner.reset(); this.record("Climbed out of the shaft; breaking contact above ground."); }
+            else if (r !== "stalled") return;
         }
         if (this.deepMiner.active && this.deepMiner.route.length > 1) {
             const r = this.deepMiner.ascend(tick); this.reason = this.deepMiner.reason;
-            if (r === "surface") { this.deepMiner.reset(); this.blockTask("Climbed out to break contact.", "retry"); }
+            if (r === "surface") { this.deepMiner.reset(); this.record("Climbed out to break contact."); }
             else if (r !== "stalled") return;
         }
         if (tick - this.retreatSince > 350) { 
@@ -1770,8 +1759,24 @@ export class Bot {
         }
         candidates.sort((a, b) => threat ? distance(b, threat.location) - distance(a, threat.location) : distance(a, this.owner()?.location ?? p) - distance(b, this.owner()?.location ?? p));
         this.reason = "Retreating from " + (threat?.typeId ?? "danger");
-        if (!candidates.length) { this.nav.urgent = false; this.nav.avoid = []; this.nav.stuck = true; return; }
-        if (this.nav.go(center(candidates[0]), tick) === "failed") { this.nav.urgent = false; this.nav.avoid = []; }
+        if (!candidates.length) {
+            // No open ground to run to. This used to set nav.stuck, which the
+            // *next* tick turned into a "trapped" escape - the wrong ladder for
+            // a fight. Delegate to the combat-escape mode instead: it looks for
+            // cover from ranged mobs, then runs, and only walls itself in as a
+            // genuine last resort.
+            this.nav.urgent = false; this.nav.avoid = [];
+            if (!this.escaper.active) this.escaper.reset();
+            const r = this.escaper.step("combat_escape", tick);
+            this.reason = this.escaper.lastReason || this.reason;
+            if (r !== "running") { this.nav.stuck = true; }
+            return;
+        }
+        if (this.nav.go(center(candidates[0]), tick) === "failed") {
+            this.nav.urgent = false; this.nav.avoid = [];
+            if (!this.escaper.active) this.escaper.reset();
+            this.escaper.step("combat_escape", tick);
+        }
     }
 
     /**
@@ -1796,25 +1801,15 @@ export class Bot {
      * - Deep mining delegates to AdvancedMiner / DeepMiner
      */
     mine(m, tick) {
-        // ANTI-DROWN: if in water while mining, surface first - never drown
-        if (this.sim.isInWater) {
-            try { this.sim.jump(); } catch (_e) { this.fault(_e); }
-            if (this.terrain.headInWater(this.sim)) {
-                this.reason = "Mining interrupted - in water head submerged, surfacing - anti-drown";
-                const cur = this.sim.location;
-                try { this.sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 1.2, z: cur.z }), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                const boatRes = this.escaper.boat(tick);
-                if (boatRes) return false;
-                return false;
-            }
-            // Try to get to shore while mining
-            const shore = this.terrain.shoreNear(this.sim.location, 32);
-            if (shore) {
-                this.reason = "Mining interrupted - in water, swimming to shore first - anti-drown";
-                try { this.sim.moveToLocation(this.host.relative(center(shore.cell)), { faceTarget: true }); } catch (_e) { this.fault(_e); }
-                if (tick % 10 === 0) { try { this.sim.jump(); } catch (_e) { this.fault(_e); } }
-                return false;
-            }
+        // In water but not drowning: keep working (you can mine while swimming
+        // and the escaper owns genuine drowning). This used to abort mining and
+        // swim to the nearest shore on EVERY tick in water, so a shallow pond
+        // next to a coal seam made the bot pace between the water and the ore
+        // forever - the "stuck in a loop while mining" report.
+        if (this.sim.isInWater && this.terrain.headInWater(this.sim)) {
+            this.reason = "Mining paused: head under water, surfacing.";
+            this.escaper.reset();
+            return false;
         }
         const stock = this.bag.counts();
         // Met check
@@ -2696,7 +2691,13 @@ export class Bot {
         try { this.stopActions(); } catch (_e) { this.fault(_e); }
         this.blocked = undefined; this.paused = false; this.escapeSeal = undefined; this.nav.reset(); this.escaper.reset(); this.recentAttacker = undefined; this.lastBranch = "";
         const grave = this.memory?.death(); const here = this.sim.location;
-        if (grave && grave.dim === this.sim.dimension.id && distance(here, grave) <= 256) { this.tell("Respawned. Returning to the death point for the drops."); this.startRecover(); return; }
+        if (grave && grave.dim === this.sim.dimension.id && distance(here, grave) <= 256) {
+            this.tell("Respawned. Returning to the death point for the drops.");
+            // Only fetch drops we can actually carry something home from; an
+            // empty inventory has no reason to walk 200 blocks into the dark.
+            try { if (this.bag.container.emptySlotsCount >= 1) { this.startRecover(); return; } } catch { /* no inventory */ }
+            this.tell("Inventory is full; skipping the drop run for now.");
+        }
         if (grave) { this.tell("Respawned. The death point is " + (grave.dim !== this.sim.dimension.id ? "in another dimension" : `${Math.round(distance(here, grave))} blocks away`) + "; cannot fetch those drops from here."); } else this.tell("Respawned.");
         this.resumePlan(tick);
     }

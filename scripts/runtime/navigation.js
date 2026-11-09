@@ -122,9 +122,14 @@ export class Navigator {
         // horizon reaches far goals at a fraction of the node cost. The tall
         // search is only for a real tower (goal almost straight up).
         const isTower = verticalDiff > 12 && horiz < 4;
-        const maxNodes = isTower ? 1500 : 1200;
-        const radius = isTower ? 48 : 24;
+        // `wide` is set by the blocked() ladder: after several genuine failures
+        // the same 24-block horizon is guaranteed to fail again, so widen it
+        // (and the node budget) instead of repeating the identical search.
+        const wide = !!this.wide;
+        const maxNodes = isTower ? 1500 : wide ? 2200 : 1200;
+        const radius = isTower ? 48 : wide ? 48 : 24;
         this.replans++;
+        this.wide = false;
         this.search = new PathSearch(
             this.terrain.read,
             self,
@@ -175,9 +180,11 @@ export class Navigator {
      */
     blocked(message, tick) {
         this.retries++;
-        this.ladderLevel = Math.min(3, this.retries);
-        if (this.retries <= 3) {
-            this.reason = `${message}; re-planning (${this.retries}/3)`;
+        this.ladderLevel = Math.min(4, this.retries);
+        // Rung 1-2: replan. Cheap, and most blocks are temporary (a tree grew,
+        // a mob pushed us, a chunk loaded).
+        if (this.retries <= 2) {
+            this.reason = `${message}; re-planning (${this.retries}/2)`;
             this.terrain.clear();
             this.search = undefined;
             this.path = [];
@@ -185,6 +192,41 @@ export class Navigator {
             this.lastIssued = -1;
             this.lastProgress = tick;
             this.segmentStart = tick;
+            return "running";
+        }
+        // Rung 3: change the world. If the route is blocked by terrain, cut
+        // through it instead of asking the same question again - this is the
+        // rung that turns "cannot get there" into progress in caves, ravines
+        // and under overhangs. Only when we are already underground or the goal
+        // is close enough that a short tunnel is worthwhile.
+        const goal = this.target ?? this.lastGoal;
+        if (this.retries === 3 && goal && this.bot?.digCell) {
+            const here = floor(this.sim.location);
+            const dist = horizontal(here, floor(goal));
+            const underground = here.y < 55 || !this.terrain.empty({ x: here.x, y: here.y + 3, z: here.z });
+            if (dist <= 24 || underground) {
+                this.reason = `${message}; tunnelling through`;
+                if (this.tunnel(tick) === "running") return "running";
+            }
+        }
+        // Rung 4: gain height / change vantage - a pillar or a wider horizon
+        // finds the way round a wall that a 24-block search cannot see past.
+        if (this.retries === 4 && this.builder?.pillar) {
+            this.reason = `${message}; climbing for a wider view`;
+            const r = this.builder.pillar(tick);
+            if (r === "placed" || r === "jumping" || r === "waiting") return "running";
+        }
+        if (this.retries > 4) {
+            this.reason = `${message}; searching wider`;
+            this.terrain.clear();
+            this.wide = true;
+            this.search = undefined;
+            this.path = [];
+            this.waypoint = 0;
+            this.lastIssued = -1;
+            this.lastProgress = tick;
+            this.segmentStart = tick;
+            this.retries = 2;
             return "running";
         }
         if (this.inWaterState()) {
