@@ -1,4 +1,5 @@
 import { add, key, horizontal, CARDINAL } from "./math.js";
+import { cellDanger } from "./brain/danger.js";
 
 /**
  * Standable: feet passable, head passable, support solid, no hazard.
@@ -12,6 +13,31 @@ export function standable(read, p) {
         !a.hazard &&
         !b.hazard &&
         !c.hazard);
+}
+
+/**
+ * Standing in a fluid is legal for the pathfinder: the bot swims/wades, and
+ * refusing water made every river, lake and flooded cave "unreachable" - the
+ * single most common way the old search dead-ended. Lava and other damaging
+ * blocks stay forbidden. Landing IN water never hurts in Minecraft, so a drop
+ * of any depth into water is safe.
+ */
+export function swimStandable(read, p) {
+    const a = read(p), b = read(add(p, { x: 0, y: 1, z: 0 }));
+    if (!a?.passable || !b?.passable) return false;
+    if (a.hazard && !isWaterCell(a)) return false;
+    if (b.hazard && !isWaterCell(b)) return false;
+    if (isWaterCell(a)) return true;
+    const c = read(add(p, { x: 0, y: -1, z: 0 }));
+    return !!c?.support && !c.hazard;
+}
+
+/** A cell whose fluid content is water (the Terrain Cell exposes `type`). */
+export function isWaterCell(c) {
+    return !!c && /water/.test(String(c.type ?? ""));
+}
+export function isLavaCell(c) {
+    return !!c && /lava/.test(String(c.type ?? ""));
 }
 
 class Heap {
@@ -57,25 +83,28 @@ class Heap {
 const KIND_COST = {
     walk: 1, jump: 3.5, sprintjump: 5, sprintjump3: 7, sprintjump_up: 8,
     bridge_sprintjump3: 10, bridge_bridge_sprintjump3: 14, jumpup: 3,
-    bridge: 8, pillar: 6, bigdrop: 2.5,
+    bridge: 8, pillar: 6, bigdrop: 2.5, step: 1.6, drop: 1.4,
+    swim: 2.2, diagonal: 1.5,
 };
 const LAVA = /lava/, WATER = /water/;
+/** Drop depths that are always survivable without a water bucket. */
+const SAFE_DROP = 3;
 
 /**
  * Advanced PathSearch with:
- * - 1-block gap jumps
- * - 2-block sprint jumps
- * - 1-up steps
- * - drops up to 3 blocks
- * - bridging awareness (cost for gaps)
+ * - 1/2/3-block gap jumps (sprint-jump aware)
+ * - 1-up steps, drops up to a safe depth (deeper only when landing in water)
+ * - bridging awareness (cost for gaps) - horizontal and diagonal
+ * - swimming through water instead of refusing it
+ * - falling-block aware floors (sand/gravel are not supports you may stand on
+ *   while digging, but they are normal floors to walk on)
  * - threat avoidance
- * - parkour chain
  *
- * Performance: cells are memoised per search under a packed numeric key
- * (the old code built a "x,y,z" string and a fresh vector object for every
- * one of the ~100 reads per expanded node), and when the node budget runs
- * out the best partial route found so far is returned instead of failing,
- * so small budgets still make progress on long trips.
+ * Performance: cells are memoised per search under a packed numeric key,
+ * and when the node budget runs out the best partial route found so far is
+ * returned instead of failing, so small budgets still make progress on long
+ * trips. The frontier is *incremental*: a search object can be resumed on the
+ * next tick instead of being thrown away and rebuilt.
  */
 export class PathSearch {
     constructor(read, start, goal, tolerance = 0.7, parkour = true, maxNodes = 2000, radius = 32, allowPartial = false, avoid = [], options = {}) {
@@ -95,14 +124,25 @@ export class PathSearch {
         this.open = new Heap();
         this.costs = new Map();
         this.cells = new Map();
-        this.options = options; // {allowBridge, allowPillar, allowSprintJump}
+        this.options = options; // {allowBridge, allowPillar, allowSprintJump, allowSwim}
+        // {threats:[{x,y,z,damage,reach}], hp} - enables the composable risk model.
+        this.danger = options.danger ?? null;
+        this.dangerWorld = options.dangerWorld ?? null;
+        this.riskCache = new Map();
         this.allowBridge = options.allowBridge ?? false;
         this.allowPillar = options.allowPillar ?? false;
         this.allowSprintJump = options.allowSprintJump ?? parkour;
-        this.vertLimit = this.radius >= 100 ? 128 : (this.allowBridge ? 64 : 24);
+        this.allowSwim = options.allowSwim ?? true;
+        // A vertical limit of 24 above/below the start is ample for stairs,
+        // caves and shallow ravines while a 128 limit let a search wander into
+        // a whole mountain. It is widened only for genuine towers.
+        this.vertLimit = this.radius >= 100 ? 128 : (this.allowBridge ? 48 : 24);
         this.startH = horizontal(start, goal);
         this.best = undefined;
         this.bestH = Infinity;
+        // Longer trips are scored with a bigger distance weight so the search
+        // heads for the goal instead of exhaustively filling the horizon.
+        this.hWeight = this.startH > 40 ? 1.15 : 0.95;
         const n = { p: { x: start.x, y: start.y, z: start.z, kind: "walk" }, g: 0 };
         this.open.push(n, 0);
         this.costs.set(this.k(start.x, start.y, start.z), 0);
@@ -129,11 +169,29 @@ export class PathSearch {
         const c = this.rd(x, y, z);
         return !!c?.support && !c.hazard;
     }
+    isWater(x, y, z) { return isWaterCell(this.rd(x, y, z)); }
+    isLava(x, y, z) { return isLavaCell(this.rd(x, y, z)); }
+
+    /** Feet/head passable, no hazard except swimmable water. */
+    clear(x, y, z) {
+        const a = this.rd(x, y, z);
+        if (!a?.passable) return false;
+        if (a.hazard && !isWaterCell(a)) return false;
+        const b = this.rd(x, y + 1, z);
+        if (!b?.passable) return false;
+        if (b.hazard && !isWaterCell(b)) return false;
+        return true;
+    }
+    inWater(x, y, z) {
+        return this.isWater(x, y, z) || this.isWater(x, y + 1, z);
+    }
+
     stand(x, y, z) {
         const a = this.rd(x, y, z);
-        if (!a?.passable || a.hazard) return false;
+        if (!a?.passable || (a.hazard && !isWaterCell(a))) return false;
         const b = this.rd(x, y + 1, z);
-        if (!b?.passable || b.hazard) return false;
+        if (!b?.passable || (b.hazard && !isWaterCell(b))) return false;
+        if (isWaterCell(a)) return true;
         const c = this.rd(x, y - 1, z);
         return !!c?.support && !c.hazard;
     }
@@ -142,34 +200,56 @@ export class PathSearch {
     solid(p) { return this.isSolid(p.x, p.y, p.z); }
     safeStand(p) { return this.stand(p.x, p.y, p.z); }
 
+    /** True when dropping from (x,y,z) to (x,ty,z) cannot hurt. */
+    safeDrop(x, fromY, z, ty) {
+        if (fromY - ty <= SAFE_DROP) return true;
+        // Any water in the fall column column or at the landing pool saves it.
+        for (let y = fromY; y >= ty; y--) if (this.isWater(x, y, z)) return true;
+        return false;
+    }
+
     neighbors(p) {
         const out = [];
         const px = p.x, py = p.y, pz = p.z;
         const push = (x, y, z, kind, extra) => {
             if (Math.hypot(x - this.start.x, z - this.start.z) > this.radius || Math.abs(y - this.start.y) > this.vertLimit) return;
+            if (this.avoid.length && this.avoidPenalty(x, y, z) > 900) return;
+            // Lethal cells are walls. A route may not be "cheap" through a cell
+            // that ends the run, however close to the goal it is.
+            if (this.danger) {
+                const d = this.risk(x, y, z);
+                if (d?.lethal) return;
+            }
             out.push(extra ? { x, y, z, kind, ...extra } : { x, y, z, kind });
         };
         const headClear = this.isAir(px, py + 2, pz);
+        const standingInWater = this.inWater(px, py, pz);
         let headClear3;
         for (const d of CARDINAL) {
             const dx = d.x, dz = d.z;
             const qx = px + dx, qz = pz + dz;
             const qStand = this.stand(qx, py, qz);
-            // Normal walk
+            const qOpen = this.clear(qx, py, qz);
+            // Normal walk (includes swimming across the surface).
             if (qStand) {
-                push(qx, py, qz, "walk");
+                push(qx, py, qz, standingInWater || this.inWater(qx, py, qz) ? "swim" : "walk");
             }
             // Step up 1
-            else if (this.stand(qx, py + 1, qz) && headClear) {
+            else if (headClear && this.stand(qx, py + 1, qz)) {
                 push(qx, py + 1, qz, "step");
             }
-            // Drop down 1-3
-            else if (this.isAir(qx, py, qz) && this.isAir(qx, py + 1, qz)) {
-                for (let drop = 1; drop <= 3; drop++) {
+            // Drop down: support at any depth that is survivable. Landing in
+            // water is always survivable, so a lake below a cliff is a route.
+            else if (qOpen) {
+                for (let drop = 1; drop <= 24; drop++) {
                     if (this.stand(qx, py - drop, qz)) {
-                        push(qx, py - drop, qz, drop === 1 ? "drop" : "bigdrop");
+                        if (!this.safeDrop(qx, py, qz, py - drop)) break; // too far without water
+                        push(qx, py - drop, qz, drop <= 1 ? "drop" : "bigdrop");
                         break;
                     }
+                    // Stop scanning once a floor exists that is not standable
+                    const below = this.rd(qx, py - drop, qz);
+                    if (below && below.support) break;
                 }
             }
 
@@ -223,8 +303,7 @@ export class PathSearch {
 
                 // === ADVANCED: >3 BLOCK GAP - PLACE BLOCK THEN 3-JUMP ===
                 // Only for a REAL gap: every intermediate cell must be open
-                // and unstandable. (The old loop also fired on flat ground,
-                // pushing ~5 bogus bridge candidates per direction per node.)
+                // and unstandable.
                 if (this.allowSprintJump && this.allowBridge && !qStand) {
                     let run = 0;
                     const lavaPrefix = [false];
@@ -275,19 +354,34 @@ export class PathSearch {
                 }
             }
 
-            // Bridging: if gap with no support, allow if builder enabled (higher cost)
+            // Bridging: if gap with no support, allow if builder enabled (higher cost).
+            // Water below is bridged freely; lava only one cell (never a long bridge).
             if (this.allowBridge) {
                 const belowRead = this.rd(qx, py - 1, qz);
                 if (!belowRead?.support && this.isAir(qx, py, qz) && this.isAir(qx, py + 1, qz)) {
-                    // Only if not over hazard - allow water but not lava for single bridge
-                    if (!belowRead?.hazard || (belowRead && WATER.test(belowRead.type ?? ""))) {
+                    const hazard = !!belowRead?.hazard;
+                    const lava = hazard && LAVA.test(belowRead?.type ?? "");
+                    if (!hazard || (belowRead && WATER.test(belowRead.type ?? "")) || (lava && !qStand)) {
                         const bx = qx + dx, bz = qz + dz;
-                        if (this.stand(bx, py, bz) || this.isAir(bx, py, bz)) {
-                            push(qx, py, qz, "bridge");
-                        }
+                        // A bridge step is only proposed when it makes progress:
+                        // the far side is standable, or at least open air so the
+                        // bridge can continue next node.
+                        if (this.stand(bx, py, bz) || this.isAir(bx, py, bz)) push(qx, py, qz, "bridge");
                     }
                 }
             }
+        }
+        // Diagonal movement: Minecraft players move diagonally all the time; the
+        // old grid was cardinal-only which made open ground 40% slower and made
+        // "walk around the corner" trails look like pacing. A diagonal step is
+        // allowed only when both adjacent cardinal cells are open (no corner
+        // clipping) and the destination is standable.
+        const diag = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+        for (const [dx, dz] of diag) {
+            const qx = px + dx, qz = pz + dz;
+            if (!this.stand(qx, py, qz)) continue;
+            if (!this.clear(px + dx, py, pz) || !this.clear(px, py, pz + dz)) continue;
+            push(qx, py, qz, "diagonal");
         }
         // Pillar up (once per node; it used to be pushed 4x inside the loop).
         if (this.allowBridge || this.options.allowPillar) {
@@ -298,16 +392,61 @@ export class PathSearch {
         return out;
     }
 
-    penalty(p) {
+    avoidPenalty(x, y, z) {
         if (!this.avoid.length) return 0;
         let cost = 0;
         for (let i = 0; i < this.avoid.length; i++) {
             const a = this.avoid[i];
-            const dx = p.x - a.x, dz = p.z - a.z;
+            const dx = x - a.x, dz = z - a.z;
             const d2 = dx * dx + dz * dz;
             if (d2 < this.avoidRadii[i]) cost += (this.avoidRadii[i] - d2) * 0.5;
         }
         return cost;
+    }
+    penalty(p) {
+        return this.avoid.length ? this.avoidPenalty(p.x, p.y, p.z) : 0;
+    }
+
+    /**
+     * Composable risk for one cell, from the shared danger model.
+     *
+     * HAZARDS used to be handled one predicate at a time (isLava? isWater?
+     * drop too deep? mob nearby?), so combinations nobody wrote a rule for -
+     * a 4-drop onto a block next to lava at 2 HP, or a dark ledge over water -
+     * were either free or fatal. `cellDanger` sums the independent factors and
+     * marks the lethal ones, and the search treats lethal cells as walls.
+     *
+     * `dangerWorld` defaults to *this* search's memoised reader, so this adds
+     * no extra block reads beyond the 3x3 column already cached.
+     */
+    risk(x, y, z) {
+        if (!this.danger) return undefined;
+        const key3 = (x + 1024) * 4096 * 4096 + (y + 1024) * 4096 + (z + 1024);
+        const cached = this.riskCache.get(key3);
+        if (cached !== undefined) return cached;
+        let d;
+        try {
+            const world = this.dangerWorld ?? { block: (bx, by, bz) => this.rd(bx, by, bz) };
+            d = cellDanger(world, { x, y, z }, this.danger.threats ?? [], { hp: this.danger.hp ?? 20 });
+        } catch { d = undefined; }
+        this.riskCache.set(key3, d);
+        return d;
+    }
+
+    /** Extra movement cost for standing on (x,y,z). Lethal cells are excluded upstream. */
+    riskPenalty(x, y, z) {
+        const d = this.risk(x, y, z);
+        if (!d) return 0;
+        // Lethal cells never reach here (they are filtered as walls), so this
+        // only prices down the survivable-but-bad ones: falls, water, mobs.
+        let p = 0;
+        if (d.parts) {
+            p += (d.parts.fall ?? 0) * 0.8;
+            p += (d.parts.water ?? 0) * 0.6;
+            p += (d.parts.mobs ?? 0) * 0.35;
+            p += (d.parts.dark ?? 0) * 0.15;
+        }
+        return p;
     }
 
     trace(n) {
@@ -322,7 +461,7 @@ export class PathSearch {
 
     /** Out of budget / options: hand back the best partial route if it gets us meaningfully closer. */
     bestEffort(status) {
-        if (this.best && this.best.parent && this.bestH <= this.startH - 3) {
+        if (this.best && this.best.parent && this.bestH <= this.startH - Math.min(3, this.startH * 0.2)) {
             this.path = this.trace(this.best);
             return (this.status = "partial");
         }
@@ -348,10 +487,10 @@ export class PathSearch {
             }
             for (const q of this.neighbors(np)) {
                 const cost = KIND_COST[q.kind] ?? 1.5;
-                const g = n.g + cost + this.penalty(q), k = this.k(q.x, q.y, q.z);
+                const g = n.g + cost + this.penalty(q) + this.riskPenalty(q.x, q.y, q.z), k = this.k(q.x, q.y, q.z);
                 if (g >= (this.costs.get(k) ?? Infinity)) continue;
                 this.costs.set(k, g);
-                this.open.push({ p: q, g, parent: n }, g + horizontal(q, goal) * 0.9 + Math.abs(q.y - goal.y) * 0.3);
+                this.open.push({ p: q, g, parent: n }, g + (horizontal(q, goal) * this.hWeight + Math.abs(q.y - goal.y) * 0.3));
             }
         }
         if (!this.open.size) return this.bestEffort("unreachable");

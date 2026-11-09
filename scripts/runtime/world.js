@@ -4,6 +4,7 @@ import { HAZARDS, HOSTILES, RANGED, EXPLOSIVE, threatRank } from "../core/policy
 
 const THREAT_RADIUS = 18;
 const NEAR6 = [UP, DOWN, ...CARDINAL];
+const ZERO = { x: 0, y: 0, z: 0 };
 const TABLE_OFFSETS = [];
 for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) for (let y = -1; y <= 1; y++) TABLE_OFFSETS.push({ x, y, z });
 TABLE_OFFSETS.sort((a, b) => (a.x * a.x + a.y * a.y + a.z * a.z) - (b.x * b.x + b.y * b.y + b.z * b.z));
@@ -14,8 +15,14 @@ const WALKABLE = /(short_grass|tallgrass|tall_grass|fern|large_fern|deadbush|dea
 const AIR = new Set(["minecraft:air", "minecraft:cave_air", "minecraft:void_air"]);
 const LIQUID_HINT = /water|lava|bubble/;
 const TABLE = "minecraft:crafting_table";
-/** Snapshot TTLs (ticks). Open cells expire sooner so newly placed blocks show up fast. */
-const SOLID_TTL = 40, OPEN_TTL = 20, MISSING_TTL = 2, HANDLE_TTL = 40;
+/**
+ * Snapshot TTLs (ticks).  A stale snapshot is not just a wasted read: the
+ * pathfinder routes through a cell that is now solid (bot walks into a wall
+ * and stops), or avoids a cell it thinks is solid after the bot dug it out.
+ * So the open/missing TTLs are short, and every write we make (or observe) is
+ * pushed into the cache explicitly - see invalidate()/noteBroken()/notePlaced().
+ */
+const SOLID_TTL = 20, OPEN_TTL = 8, MISSING_TTL = 2, HANDLE_TTL = 8;
 const CACHE_CAP = 18000, HANDLE_CAP = 6000;
 
 /**
@@ -98,10 +105,19 @@ export class Terrain {
         this.cache.delete(key({ x: b.x, y: b.y + 1, z: b.z }));
         return this.safe(b);
     }
+    /**
+     * Forget everything known about `p` and its 6 neighbours: a break or a place
+     * changes support and passability for the cells around it too (the block we
+     * just dug was the floor of the cell above; the block we placed may now
+     * block a head or sit in water).
+     */
     invalidate(p) {
-        const k = key(floor(p));
-        this.cache.delete(k);
-        this.handles.delete(k);
+        const b = floor(p);
+        for (const d of [ZERO, ...NEAR6]) {
+            const k = key({ x: b.x + d.x, y: b.y + d.y, z: b.z + d.z });
+            this.cache.delete(k);
+            this.handles.delete(k);
+        }
         this.memo.clear();
     }
     constructor(dimension) {
@@ -149,6 +165,38 @@ export class Terrain {
             else this.handles.delete(k);
             return b;
         } catch { return undefined; }
+    }
+    /**
+     * Record that `p` became air (we mined it, or a block fell/was removed).
+     * Writing the new state is dramatically cheaper than merely invalidating:
+     * the pathfinder re-reads the same cells dozens of times per second.
+     */
+    noteBroken(p) {
+        const b = floor(p);
+        for (const d of [ZERO, ...NEAR6]) {
+            const q = { x: b.x + d.x, y: b.y + d.y, z: b.z + d.z };
+            const k = key(q);
+            // The broken cell itself is air; neighbours keep their type but may
+            // have lost support, so they are dropped rather than faked.
+            if (d === ZERO) this.cache.set(k, { value: new Cell({ typeId: "minecraft:air", isSolid: false, isLiquid: false, isAir: true }), expires: this.tick + 200 });
+            else this.cache.delete(k);
+            this.handles.delete(k);
+        }
+        this.memo.clear();
+    }
+    /** Record that `p` now holds `typeId` (we placed it). */
+    notePlaced(p, typeId = "minecraft:stone") {
+        const b = floor(p);
+        const k = key(b);
+        const solid = !/water|lava|air|torch|rail|_button|_plate|_carpet/.test(String(typeId));
+        try {
+            this.cache.set(k, {
+                value: new Cell({ typeId, isSolid: solid, isLiquid: /water|lava/.test(String(typeId)), isAir: /air$/.test(String(typeId)) }),
+                expires: this.tick + 200,
+            });
+        } catch { this.cache.delete(k); }
+        this.handles.delete(k);
+        this.memo.clear();
     }
     /** Cached type id (no native call when the cell was read recently). */
     typeAt(p) { return this.read(floor(p))?.type; }

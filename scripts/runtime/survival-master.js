@@ -81,7 +81,15 @@ export class SurvivalMaster {
         if (!detected.length) return false;
 
         const top = detected[0];
-        if (top.priority < 80 && !top.critical) return false;
+        // The old gate discarded everything under 80 unconditionally. That is
+        // why the bot "could not escape and survive alone": a 70-priority
+        // "about to be cooked in a hole" or "night is falling with no torch"
+        // never got a handler, and nothing else in the tick chain was watching
+        // for it either. Anything at 60+ is now taken when the bot is idle;
+        // 80+ is taken always (an emergency pre-empts the mission).
+        const idleish = this.bot.mode === "idle" || this.bot.mode === "guard" || this.bot.mode === "follow";
+        const floor = idleish ? 60 : 80;
+        if (top.priority < floor && !top.critical) return false;
 
         this.currentScenario = top;
         this.bot.reason = `Survival-Master: Scenario ${top.id} ${top.name} (priority ${top.priority}) - ${top.actions[0]}`;
@@ -501,20 +509,90 @@ export class SurvivalMaster {
     }
 
     handleHoleTooDeep(ctx, tick) {
-        const depth = this.fallStartY ? this.fallStartY - ctx.p.y : 5;
-        if (depth > 3 && ctx.hasBlocks) {
-            const pillar = this.builder.pillar(tick);
-            if (pillar === "placed" || pillar === "jumping") {
-                this.bot.reason = `Fall 15: hole too deep (${depth}) - pillaring up safely`;
+        // The old fallback was `depth = 5` when the fall height was unknown,
+        // which then failed the `depth > 3` test for a one-block hole and send
+        // the bot pillaring out of a hole it could simply walk out of.
+        // Measure the actual shaft instead: how far can we fall / climb here?
+        const depth = this.fallStartY != null ? Math.max(0, this.fallStartY - ctx.p.y) : this.shaftDepth(ctx.p);
+        const hole = Math.max(depth, this.shaftDepth(ctx.p));
+
+        // 0-2 blocks: this is a step, not a hole. Walk out.
+        if (hole <= 2) {
+            const step = this.findStepOut(ctx.p, 2);
+            if (step) {
+                this.bot.reason = `Fall 15: shallow dip (${hole}) - stepping out`;
+                this.bot.navTo(center(step), tick, 1);
                 return true;
             }
         }
+        // Deep and we have blocks: pillar up in place (fastest, safest).
+        if (hole > 3 && ctx.hasBlocks) {
+            const pillar = this.builder.pillar(tick);
+            if (pillar === "placed" || pillar === "jumping") {
+                this.bot.reason = `Fall 15: hole too deep (${hole}) - pillaring up safely`;
+                return true;
+            }
+        }
+        // Deep without blocks: a stair out is slower but works with bare hands.
+        const stair = this.stairOut(ctx.p, Math.min(6, hole + 1));
+        if (stair && this.bot.digCell(stair.cell, tick) === "digging") {
+            this.bot.reason = `Fall 15: stair-stepping out of a ${hole}-deep hole without blocks`;
+            return true;
+        }
         const alt = this.findAlternateExit(ctx.p, 8);
         if (alt) {
+            this.bot.reason = `Fall 15: following an alternate exit out of the hole`;
             this.bot.navTo(center(alt), tick, 1);
             return true;
         }
-        return false;
+        // Last resort: a real escape rather than silently returning false
+        // (returning false handed the same hole back to the arbiter forever).
+        if (!this._holeEscaping) {
+            this._holeEscaping = true;
+            this.escaper.reset();
+        }
+        const r = this.escaper.step("trapped", tick);
+        this.bot.reason = `Fall 15: hole has no simple exit - escaping (${this.escaper.lastReason})`;
+        if (r !== "running") this._holeEscaping = false;
+        return r === "running";
+    }
+
+    /** How many blocks of air below the feet (capped), i.e. the shaft we are in. */
+    shaftDepth(p) {
+        let d = 0;
+        for (let i = 1; i <= 24; i++) {
+            const c = this.terrain.block(add(p, { x: 0, y: -i, z: 0 }));
+            if (!c || c.isAir || c.isLiquid) d = i;
+            else break;
+        }
+        return d;
+    }
+
+    /** A horizontal neighbour one/two blocks up that is standable. */
+    findStepOut(p, maxRise = 2) {
+        for (const d of COMPASS) {
+            for (let rise = 1; rise <= maxRise; rise++) {
+                const q = add(p, { x: d.x, y: rise, z: d.z });
+                if (this.terrain.safe(q)) return q;
+            }
+        }
+        return null;
+    }
+
+    /** The cell to mine for a one-block stair out of a shaft. */
+    stairOut(p, steps) {
+        for (const d of COMPASS) {
+            for (let i = 1; i <= steps; i++) {
+                const base = add(p, { x: d.x * i, y: i - 1, z: d.z * i });
+                const low = this.terrain.block(base);
+                const mid = this.terrain.block(add(base, UP));
+                if (!low || low.isAir) continue;
+                if (mid && mid.isAir) continue;
+                if (this.terrain.lavaNear(base) || this.terrain.waterNear(base)) continue;
+                return { cell: base, dir: d };
+            }
+        }
+        return null;
     }
 
     // ===== NIGHT COMBAT 16-30 =====
@@ -1095,13 +1173,47 @@ export class SurvivalMaster {
             this.placeTorchNearby(ctx.p, tick);
             this.torchMarkers.push({ ...ctx.p, tick });
         }
+        // Home is the obvious landmark, but `navTo(home)` was the ONLY remedy,
+        // so with no home recorded (or home unreachable) the handler returned
+        // false and the bot kept wandering deeper. Recover orientation instead:
+        // torch trail -> remembered surface -> a safe high point to look from.
         const home = this.bot.home();
         if (home) {
-            this.bot.navTo(center(home), tick, 3);
+            const r = this.bot.navTo(center(home), tick, 3);
             this.bot.reason = "Shelter 51: lose spawn direction - orientation recovery via home";
-            return true;
+            if (r !== "failed" && r !== "blocked") return true;
         }
-        return false;
+        const marker = this.torchMarkers.length ? this.torchMarkers[this.torchMarkers.length - 1] : null;
+        if (marker && distance(marker, ctx.p) > 2) {
+            const r = this.bot.navTo(center(marker), tick, 2);
+            if (r !== "failed" && r !== "blocked") {
+                this.bot.reason = "Shelter 51: retracing the torch trail to get bearings";
+                return true;
+            }
+        }
+        const surface = this.findSurfaceWaypoint(ctx.p);
+        if (surface) {
+            const r = this.bot.navTo(center(surface), tick, 2);
+            if (r !== "failed" && r !== "blocked") {
+                this.bot.reason = "Shelter 51: climbing toward the surface to re-orient";
+                return true;
+            }
+        }
+        // Nothing to walk to: dig up. A bot that cannot find its way must make
+        // its own way out rather than stand still.
+        const r = this.escaper.step("trapped", tick);
+        this.bot.reason = `Shelter 51: no landmark reachable - digging out (${this.escaper.lastReason})`;
+        return r === "running";
+    }
+
+    /** A remembered or computed surface point: standing on solid at the local top. */
+    findSurfaceWaypoint(p) {
+        try {
+            const spot = this.bot.awareness?.getNearest?.("surface") ?? this.bot.awareness?.getNearest?.("village");
+            if (spot?.pos) return spot.pos;
+        } catch { /* awareness is optional */ }
+        const g = this.terrain.groundNear(p.x, p.z, Math.max(p.y, 64), 24);
+        return g && g.y > p.y ? g : null;
     }
 
     handleNightForestNoShelter(ctx, tick) {
@@ -1173,7 +1285,7 @@ export class SurvivalMaster {
             const b = this.terrain.block(toBreak);
             if (b && !b.isAir) {
                 this.sim.lookAtBlock(this.host.relative(center(toBreak)));
-                this.sim.breakBlock(this.host.relative(center(toBreak)));
+                if (this.sim.breakBlock(this.host.relative(center(toBreak)))) this.terrain.noteBroken?.(toBreak);
                 this.bot.reason = "Shelter 55: blocks inside one-block entrance - reopening safely";
                 return true;
             }

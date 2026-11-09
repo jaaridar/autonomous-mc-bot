@@ -278,8 +278,10 @@ export class Scout {
         if (!b.bag.tool("axe"))
             b.bag.emptyHand();
         b.sim.lookAtBlock(b.host.relative(c.cell));
-        if (b.sim.breakBlock(b.host.relative(c.cell)))
+        if (b.sim.breakBlock(b.host.relative(c.cell))) {
+            b.terrain.noteBroken?.(c.cell);
             c.breaking = tick;
+        }
         else
             c.cell = undefined; // cannot open it from here; pick another cell
         return true;

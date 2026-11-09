@@ -19,6 +19,8 @@ export class FoodDirector {
         this.lastDamage = 0;
         this.prevHealth = 20;
         this.consecutiveAvoids = 0;
+        this.prevThreats = 0;
+        this.reassess = null;
     }
 
     reset() {
@@ -36,9 +38,16 @@ export class FoodDirector {
             this.lastDamage = tick;
             try {
                 const threatInfo = this.bot.terrain.threatInfo(this.sim, this.bot.owner());
-                const reassess = reassessAfterDamage(null, this.prevHealth - health, health, threatInfo.list, { hasBlocks: (this.bot.builder?.countBlocks() ?? 0) > 0 });
+                const reassess = reassessAfterDamage(null, this.prevHealth - health, health, threatInfo.list, {
+                    hasBlocks: (this.bot.builder?.countBlocks() ?? 0) > 0,
+                    previousHealth: this.prevHealth,
+                    // Without this the "new threats appeared" branch compared
+                    // against `undefined` and was always false.
+                    previousThreatCount: this.prevThreats ?? 0,
+                });
                 if (reassess && reassess.priority >= 80) {
                     this.bot.reason = `Food: ${reassess.reason} - reassess after damage ${this.prevHealth - health} dmg`;
+                    this.reassess = reassess;
                 }
             } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
         }
@@ -50,6 +59,7 @@ export class FoodDirector {
         const reserves = assessFoodReserves(counts);
         const threatInfo = this.bot.terrain.threatInfo(this.sim, this.bot.owner());
         const threatTypes = threatInfo.list.map(e => e.typeId);
+        this.prevThreats = threatInfo.count ?? threatInfo.list.length;
 
         // Before dangerous fight eat when necessary when safe
         if (threatInfo.nearest && threatInfo.count >= 1) {

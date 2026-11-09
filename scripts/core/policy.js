@@ -1,6 +1,8 @@
 /**
- * Branch arbitration. The caller computes each flag from observed state; this
- * function only orders them. Order matters: survival first, work last.
+ * Legacy fixed-order arbitration. The bot no longer uses this for body
+ * decisions - `core/state-machine.js` does that with utilities and hysteresis,
+ * because a fixed order cannot express "eat now, the mob is 9 blocks away".
+ * Kept exported for tooling/tests that still want the old ordering.
  */
 export function priority(s) {
     if (s.paused)

@@ -28,7 +28,11 @@ export class Looting {
     }
 
     scan(radius = 20, tick = 0) {
-        if (tick - this.lastScan < 20) return [];
+        // Cached for 20 ticks and *returned* while cached. The old version
+        // returned [] on the cached path, so a caller that asked twice in one
+        // tick (arbiter priority() then tick()) saw an empty world and looting
+        // silently did nothing.
+        if (tick - this.lastScan < 20) return this.scanCache ?? [];
         this.lastScan = tick;
         const base = floor(this.sim.location);
         const found = [];
@@ -62,6 +66,7 @@ export class Looting {
             c.priority = struct ? struct.priority : 70;
         });
         found.sort((a,b) => b.priority - a.priority || a.dist - b.dist);
+        this.scanCache = found;
         return found;
     }
 
@@ -76,6 +81,14 @@ export class Looting {
             }
             return best;
         } catch { return null; }
+    }
+
+    wantsChest(pos) {
+        const home = this.memory?.home();
+        const homeDist = home ? distance(pos, home) : Infinity;
+        const free = this.bag.container.emptySlotsCount;
+        const struct = this.detectStructureForChest(pos);
+        return shouldLootChest(distance(pos, this.sim.location), homeDist, free, struct?.name ?? null);
     }
 
     evaluateChest(pos, tick) {
@@ -139,32 +152,19 @@ export class Looting {
                 this.currentChest = undefined;
                 return false;
             }
+            // Withdraw all chosen stacks. The old loop withdrew with
+            // `allow = (it) => it.typeId === item.typeId` and `reserve = 2`, then
+            // `break` - so it took the first type only, and `reserve` kept 2
+            // free slots so a full-ish inventory took one stack per trip.
+            // Worse, it moved 2 *items* per visit and marked the chest ignored
+            // for 2 minutes afterwards (the "2 items per 10 minutes" bug).
             let moved = 0;
-            for (const idx of toTake) {
-                const chestSlot = items[idx]?.slot;
-                if (chestSlot === undefined) continue;
-                const item = chest.get(chestSlot);
-                if (!item) continue;
-                // Try merge first
-                let dest = -1;
-                for (let s = 0; s < this.bag.size; s++) {
-                    const bagItem = this.bag.get(s);
-                    if (bagItem && bagItem.isStackableWith(item) && bagItem.amount < bagItem.maxAmount) {
-                        dest = s;
-                        break;
-                    }
-                }
-                if (dest < 0) {
-                    for (let s = 0; s < this.bag.size; s++) {
-                        if (!this.bag.get(s)) { dest = s; break; }
-                    }
-                }
-                if (dest < 0) break;
+            const wanted = new Set(toTake.map((idx) => chest.get(items[idx].slot)?.typeId).filter(Boolean));
+            if (wanted.size) {
                 try {
-                    const res = this.bag.withdraw(chest, (it) => it.typeId === item.typeId, 2);
+                    const res = this.bag.withdraw(chest, (it) => wanted.has(it.typeId), 0);
                     moved += res.moved + res.merged;
-                    break;
-                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+                } catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
             }
             if (moved > 0) {
                 this.memory?.notice("chest", pos, this.sim.dimension.id, tick);
@@ -182,6 +182,28 @@ export class Looting {
             this.currentChest = undefined;
             return false;
         }
+    }
+
+    /**
+     * Utility for the job arbiter: is looting worth owning the bot right now?
+     * Using the same scan the tick does (cached 20 ticks), so selection and
+     * action agree and we never "own" looting with nothing to loot.
+     */
+    priority(tick = 0) {
+        if (!this.bot.settings?.loot) return 0;
+        const free = this.bag.container?.emptySlotsCount ?? 0;
+        const top = this.bot.structures?.getTopPriority?.();
+        if (free < 1 && (!top || top.priority < 90)) return 0;
+        if (this.currentChest) return 60;
+        let chests;
+        try { chests = this.scan(20, tick); } catch { return 0; }
+        let best = 0;
+        for (const c of chests) {
+            if (!this.wantsChest(c.pos)) continue;
+            const structBoost = c.priority >= 85 ? 30 : 0;
+            best = Math.max(best, Math.min(90, 45 + structBoost + (8 - Math.min(8, c.dist))));
+        }
+        return best;
     }
 
     tick(tick) {

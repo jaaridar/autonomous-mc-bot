@@ -14,9 +14,36 @@
 const NEIGHBORS6 = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
 const MAX_FALL_SCAN = 24;
 
+const EMPTY = Object.freeze({ solid: false, liquid: null, passable: true, unknown: true });
+
+/**
+ * Normalise whatever the caller's world returns into `{solid, liquid, passable}`.
+ *
+ * Two shapes exist in this codebase and both are legitimate:
+ *   - tests pass `{ solid, liquid: "lava"|"water"|null, passable }`,
+ *   - `Terrain.read()` returns a cached `Cell` with `isSolid` / `isLiquid` /
+ *     `type` / `passable` / `hazard`.
+ * Reading only the first shape made every Terrain cell look like 24 blocks of
+ * air below the feet (no `.solid` to stop the fall scan), so `cellDanger`
+ * reported lethal fall damage for *every* cell and the pathfinder treated the
+ * whole world as a wall. Normalise here, once.
+ */
+function normalise(c) {
+    if (!c) return EMPTY;
+    if (c.solid !== undefined || c.liquid !== undefined) return c;
+    const type = String(c.type ?? c.typeId ?? "");
+    let liquid = null;
+    if (c.isLiquid || /water|lava/.test(type)) {
+        if (/lava/.test(type)) liquid = c.isLiquid || /lava/.test(type) ? "lava" : null;
+        else if (/water/.test(type)) liquid = c.isLiquid || /water/.test(type) ? "water" : null;
+    }
+    const solid = c.isSolid !== undefined ? !!c.isSolid : !c.passable && !liquid;
+    return { solid, liquid, passable: !!c.passable, hazard: !!c.hazard, type };
+}
+
 const cell = (world, x, y, z) => {
-    try { return world.block(x, y, z) ?? { solid: false, liquid: null, passable: true, unknown: true }; }
-    catch { return { solid: false, liquid: null, passable: true, unknown: true }; }
+    try { return normalise(world.block(x, y, z)); }
+    catch { return EMPTY; }
 };
 
 export function fallDepth(world, x, y, z, max = MAX_FALL_SCAN) {

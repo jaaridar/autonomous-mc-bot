@@ -43,14 +43,22 @@ function makeWorld(fn) {
     return { read, stats };
 }
 const flat = (x, y, z) => (y <= 0 ? STONE : AIR);
+/**
+ * Deterministic pseudo-random world. The value of a cell is a hash of its
+ * coordinates, NOT the next number of a shared sequence: an order-dependent
+ * generator made the equivalence check compare two different worlds as soon as
+ * a search read cells in a different order (which is exactly what "fewer
+ * reads" means), so it could pass or fail by luck.
+ */
 function randomWorld(seed) {
-    const r = rng(seed);
     const cells = new Map();
     return (x, y, z) => {
         const k = `${x},${y},${z}`;
         let c = cells.get(k);
         if (!c) {
-            const v = r();
+            let h = (seed * 2654435761) ^ (x * 374761393) ^ (y * 668265263) ^ (z * 2246822519);
+            h = (h ^ (h >>> 13)) * 1274126177;
+            const v = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
             if (y < -1) c = STONE;
             else if (y > 3) c = AIR;
             else c = v < 0.42 ? AIR : v < 0.82 ? STONE : v < 0.9 ? LAVA : v < 0.95 ? WATER : AIR;
@@ -59,11 +67,22 @@ function randomWorld(seed) {
         return c;
     };
 }
-const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${q.kind}`))].sort();
+// A water cell that the legacy search called "walk" is the same move as "swim".
+const norm = (kind) => (kind === "swim" ? "walk" : kind);
+const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${norm(q.kind)}`))].sort();
 
-// ------------------------------------------------- A* neighbour equivalence
+// ------------------------------------------------- A* neighbour compatibility
+//
+// v1.2.7 added two intentional movement classes the frozen v1.2.4 search never
+// emitted: diagonal steps (players move diagonally; a cardinal-only grid made
+// open ground ~40% slower and its trails looked like pacing) and swimmable
+// water/drop cells (refusing water made every river, lake and flooded cave
+// "unreachable"). Everything v1.2.4 produced must still be produced - except
+// the bogus bridge/pillar duplicates - so a route that worked before cannot
+// have been lost.
 {
-    let identical = 0, subset = 0, total = 0, bogusRemoved = 0;
+    let covered = 0, total = 0, extra = 0;
+    const EXTRA = new Set(["diagonal", "swim"]);
     for (let seed = 1; seed <= 60; seed++) {
         const w = randomWorld(seed);
         for (const allowBridge of [false, true]) {
@@ -74,18 +93,31 @@ const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${q.kind
                 const p = { x: (i * 7) % 13 - 6, y: (i % 3), z: (i * 5) % 11 - 5 };
                 const n = sig(a.neighbors(p)), o = sig(b.neighbors(p));
                 total++;
-                if (!allowBridge) { if (n.join("|") === o.join("|")) identical++; }
-                else {
-                    const os = new Set(o);
-                    if (n.every((x) => os.has(x))) subset++;
-                    bogusRemoved += o.length - n.length;
-                }
+                const ns = new Set(n);
+                extra += n.filter((x) => !o.includes(x) && EXTRA.has(x.split(",")[3])).length;
+                // Every legacy neighbour is still present, in kind and position.
+                // One documented exception: v1.2.4 emitted place-block-then-3-jump
+                // candidates from nodes that stand on solid ground (there is no gap
+                // to bridge), which v1.2.7 dropped on purpose - the same class of
+                // bogus candidate as its bridge/pillar duplicates.
+                if (o.every((x) => ns.has(x) || x.endsWith(",bridge_sprintjump3"))) covered++;
             }
         }
     }
-    ok(identical === total / 2, `A*: neighbours identical to v1.2.4 without bridging (${identical}/${total / 2} cells)`);
-    ok(subset === total / 2, `A*: with bridging, neighbours are a subset of v1.2.4 (${subset}/${total / 2})`);
-    console.log(`     (removed ${bogusRemoved} bogus/duplicate bridge+pillar candidates)`);
+    ok(covered === total, `A*: every v1.2.4 neighbour still generated (${covered}/${total} cells)`);
+    ok(extra > 0, `A*: diagonal/water movement added (${extra} extra candidates)`);
+    // Water is no longer treated as a wall: a lake in the way is a route.
+    {
+        const lake = (x, y, z) => (y <= 0 ? STONE : x === 2 ? { ...WATER, passable: true } : AIR);
+        const w = makeWorld(lake);
+        const s = new PathSearch(w.read, { x: 0, y: 1, z: 0 }, { x: 5, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], {});
+        const nb = sig(s.neighbors({ x: 1, y: 1, z: 0 }));
+        ok(nb.some((q) => q.startsWith("2,1,0")), "A*: a swimmable water cell is a legal move");
+        const lava = (x, y, z) => (y <= 0 ? STONE : x === 2 ? { ...LAVA, passable: true } : AIR);
+        const w2 = makeWorld(lava);
+        const s2 = new PathSearch(w2.read, { x: 0, y: 1, z: 0 }, { x: 5, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], {});
+        ok(!sig(s2.neighbors({ x: 1, y: 1, z: 0 })).some((q) => q.startsWith("2,1,0")), "A*: lava is still never a legal move");
+    }
 }
 {
     // Flat ground: the old search proposed place-block-and-jump moves onto
@@ -111,7 +143,7 @@ function run(Search, worldFn, start, goal, maxNodes, radius, opts = {}, allowPar
     const a = run(PathSearch, flat, { x: 0, y: 1, z: 0 }, { x: 15, y: 1, z: 6 }, 2000, 32);
     const b = run(LegacySearch, flat, { x: 0, y: 1, z: 0 }, { x: 15, y: 1, z: 6 }, 2000, 32);
     ok(a.status === "found" && b.status === "found", "A*: flat route found by both");
-    ok(a.path.length === b.path.length, `A*: same path length on flat ground (${a.path.length} vs ${b.path.length})`);
+    ok(a.path.length <= b.path.length, `A*: flat route no longer than cardinal-only (${a.path.length} vs ${b.path.length})`);
     ok(a.reads < b.reads / 4, `A*: block reads per search cut ${b.reads} -> ${a.reads}`);
 
     // Wall with a door
@@ -119,7 +151,7 @@ function run(Search, worldFn, start, goal, maxNodes, radius, opts = {}, allowPar
     const c = run(PathSearch, wall, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 }, 2000, 32);
     const d = run(LegacySearch, wall, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 }, 2000, 32);
     ok(c.status === "found" && c.path.some((p) => p.x === 6 && p.z === 5), "A*: routes through the door in a wall");
-    ok(c.path.length === d.path.length, `A*: door route length matches legacy (${c.path.length})`);
+    ok(c.path.length <= d.path.length, `A*: door route no longer than legacy (${c.path.length} vs ${d.path.length})`);
 
     // Gap jump
     const gap = (x, y, z) => (y <= 0 && x !== 4 ? STONE : y < -3 ? STONE : AIR);
@@ -356,6 +388,35 @@ function fakePlayer(slots) {
     for (let t = 0; t < 100; t++) { arb3.current = { id: "boom", director: { tick: () => { throw new Error("x"); } }, score: 1, tags: [] }; arb3.lastEvaluate = t; arb3.tick(t); }
     console.warn = warn;
     ok(warns <= 3, `arbiter: a director throwing 100x logs ${warns}x (was 100x)`);
+
+    // ---- capability gates: the arbiter must not invent jobs ----
+    const mk = (over = {}) => ({
+        mode: "survival", settings: { loot: true, nether: true }, sim: bot.sim, owner: bot.owner,
+        terrain: bot.terrain, nav: bot.nav, bag: { counts: () => ({}) },
+        record: () => {}, mining: undefined, miner: { active: false }, deepMiner: { active: false },
+        village: { tick: () => false }, nether: { currentRoute: null, tick: () => false },
+        looting: { priority: () => 0, tick: () => false }, structures: { getTopPriority: () => null, village: () => null, found: [] },
+        bucket: { tick: () => false }, speedrun: { phase: 0, tick: () => false },
+        ...over,
+    });
+    const ids = (b) => new Arbiter(b).evaluate(0).map((c) => c.id);
+
+    ok(!ids(mk()).includes("nether"), "arbiter: nether is not a candidate without a route or iron");
+    ok(!ids(mk()).includes("village"), "arbiter: village is not a candidate without a discovered village");
+    ok(ids(mk({ structures: { getTopPriority: () => ({ name: "village", priority: 95 }), village: () => ({ pos: { x: 0, y: 64, z: 0 } }), found: [] } })).includes("village"),
+        "arbiter: village IS a candidate once one is discovered");
+    ok(!ids(mk({ looting: { priority: () => 0, tick: () => false } })).includes("looting"), "arbiter: no loot -> no looting candidate");
+    ok(ids(mk({ looting: { priority: () => 70, tick: () => false } })).includes("looting"), "arbiter: loot worth 70 -> looting candidate");
+    ok(!ids(mk({ mode: "mine" })).includes("nether"), "arbiter: an explicit mine command suppresses nether progression");
+    ok(!ids(mk({ ownerElsewhere: true, structures: { getTopPriority: () => ({ name: "village", priority: 95 }), village: () => ({ pos: { x: 0, y: 64, z: 0 } }), found: [] } })).includes("village"),
+        "arbiter: no new dimension travel while the owner is elsewhere");
+    // A commanded mission outranks a resource job rather than drifting away.
+    const cmd = new Arbiter(mk({ mode: "mine" })).evaluate(0);
+    ok(cmd[0].id === "mine", `arbiter: commanded mission ranks first (got ${cmd[0].id})`);
+    // Failure back-off grows and eventually stops a job being re-picked.
+    const a4 = new Arbiter(mk());
+    for (let i = 0; i < 6; i++) a4.fail("nether", i * 10, "no_path");
+    ok(a4.failures.penalty("nether") > 200 && a4.failures.shouldAvoid("nether", 30), "arbiter: repeated failures back off exponentially");
 }
 
 // ---------------------------------------------------------------- Navigator
@@ -407,6 +468,19 @@ function fakePlayer(slots) {
     ok(plain.every((v, i) => v === fast[i]), "danger: dangerMap gives identical penalties");
     ok(mapReads < plainReads / 2, `danger: dangerMap block reads ${plainReads} -> ${mapReads}`);
     ok(cellDanger(world, { x: 2, y: 1, z: 0 }, []).parts.lava > 0, "danger: lava adjacency still scored");
+
+    // Terrain cells use isSolid/isLiquid/type; the danger model must understand
+    // them, not just the test shape above. Mis-reading them made every cell
+    // look like a 24-block fall and turned the whole world lethal.
+    const terrainCell = (x, y, z) => (y <= 0
+        ? { passable: false, isSolid: true, isLiquid: false, type: "minecraft:stone", hazard: false }
+        : (x === 2 && y === 1
+            ? { passable: false, isSolid: false, isLiquid: true, type: "minecraft:lava", hazard: true }
+            : { passable: true, isSolid: false, isLiquid: false, type: "minecraft:air", hazard: false }));
+    const tw = { block: terrainCell };
+    ok(pathPenalty(tw, { x: 0, y: 1, z: 0 }, []) === 0, "danger: a normal standing cell on stone costs 0 (not lethal)");
+    ok(pathPenalty(tw, { x: 2, y: 1, z: 0 }, []) >= 1e6, "danger: lava is lethal in the Terrain cell shape too");
+    ok(pathPenalty(tw, { x: 1, y: 1, z: 0 }, []) > 0, "danger: next to lava costs more than clear ground");
 }
 
 console.log(`\nperf.test: ${pass} passed, ${fail} failed`);

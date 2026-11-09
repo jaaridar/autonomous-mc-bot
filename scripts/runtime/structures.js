@@ -193,6 +193,21 @@ export class StructureDetector {
         return { x: Math.floor(x/positions.length), y: Math.floor(y/positions.length), z: Math.floor(z/positions.length) };
     }
 
+    /**
+     * Nearest known village within `maxDistance`, or null.
+     * The arbiter must never invent a village: village-first progression is
+     * only a candidate when one is actually known.
+     */
+    village(maxDistance = 128) {
+        let best = null, bestD = maxDistance;
+        for (const f of this.found) {
+            if (f.name !== "village") continue;
+            const d = distance(f.pos, this.sim.location);
+            if (d < bestD) { bestD = d; best = { ...f, distance: d }; }
+        }
+        return best;
+    }
+
     // Main priority if structure found
     getTopPriority() {
         if (!this.found.length) return null;

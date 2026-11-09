@@ -1,6 +1,6 @@
 import { system, world, EntityComponentTypes, Direction, } from "@minecraft/server";
 import { add, floor, key, distance, away, horizontal, CARDINAL, COMPASS, UP, DOWN, center, } from "../core/math.js";
-import { MINE, priority, toolTier, diggable, RANGED, EXPLOSIVE, HOSTILES as MOB_DEFENCE, } from "../core/policy.js";
+import { MINE, toolTier, diggable, RANGED, EXPLOSIVE, HOSTILES as MOB_DEFENCE, } from "../core/policy.js";
 import { RECIPES, craft, id, nextStep, matches, amountOf, bedTarget, } from "../core/recipes.js";
 import { isUndergroundOre, isBulk } from "../core/ores.js";
 import { sanitizePrefs } from "../core/memory.js";
@@ -39,6 +39,7 @@ import { prioritizeGoal, planDeathRecovery } from "../core/world-awareness.js";
 import { shouldEatBeforeFight, shouldAvoidCombat, assessFoodReserves, reassessAfterDamage } from "../core/food-strategy.js";
 import { UI } from "./ui.js";
 import { Arbiter, REASON_CODES } from "../core/arbiter.js";
+import { chooseOwner, ownsEating, STATEFUL } from "../core/state-machine.js";
 import { decomposeMission, analyzeRequirements, isAnyLog, HIERARCHY } from "../core/goal-decomposition.js";
 import { shouldRecalculateAdaptive, verifyAction, handlePlanFailure, preserveEmergencyResources } from "../core/adaptive-planning.js";
 
@@ -153,7 +154,7 @@ export class Bot {
         this.bag = new Bag(sim);
         this.terrain = new Terrain(sim.dimension);
         this.terrain.clock = () => system.currentTick;
-        this.nav = new Navigator(sim, host, this.terrain);
+        this.nav = new Navigator(sim, host, this.terrain, this);
         this.escaper = new Escaper(this);
         this.miner = new Miner(this);
         this.drops = new Drops(this);
@@ -224,6 +225,95 @@ export class Bot {
         if (this.mining) this.mining.breakingSince = undefined;
     }
     dangerThreat() { return this.threat; }
+
+    /**
+     * UNSTUCK owner: the bot has been asked to move for a while and has not.
+     *
+     * This deliberately does not re-plan the same route again (that is what the
+     * old code did, forever: navTo fails -> dig the same obstruction -> navTo
+     * fails ...). Each call burns one rung of a ladder, and every rung changes
+     * the world or the goal:
+     *
+     *   1. clear the blocking cell in front of the head (if it is diggable),
+     *   2. step aside / jump / sneak to shake a collision,
+     *   3. drop or climb one block (the 1-block ledge trap),
+     *   4. if the cell is standable but unreachable, abandon the goal and
+     *      explore a new area - a stuck bot must never keep pushing the same
+     *      unwinnable goal.
+     */
+    unstuck(tick) {
+        const st = (this._unstuck ??= { rung: 0, since: 0, lastRound: 0 });
+        if (tick - st.lastRound > 200) { st.rung = 0; st.lastRound = tick; }
+        if (!st.since) st.since = tick;
+        const p = floor(this.sim.location);
+
+        // Rung 1: the swing is absorbed by something in front of the head.
+        if (st.rung === 0) {
+            st.rung = 1;
+            const blocker = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+            if (blocker) {
+                const b = this.terrain.block(blocker);
+                if (b && !b.isAir && !b.isLiquid && !isUnbreakable(b.typeId) && retainScore(b.typeId) < 80) {
+                    this.reason = `Unstuck: breaking ${b.typeId} in front of the head.`;
+                    const r = this.digCell(blocker, tick);
+                    if (r === "digging" || r === "open") return true;
+                    this.lastDigReason && this.record(this.lastDigReason);
+                }
+            }
+            this.nav.reset();
+            return true;
+        }
+
+        // Rung 2: physical shake - jump, sneak-step, stop.
+        if (st.rung === 1) {
+            st.rung = 2;
+            try { this.sim.isSneaking = false; this.sim.jump(); } catch (_e) { this.fault(_e); }
+            const d = COMPASS[(tick / 5 | 0) % COMPASS.length];
+            try { this.sim.moveToLocation(this.host.relative(center(add(p, d))), { faceTarget: false }); } catch (_e) { this.fault(_e); }
+            this.reason = "Unstuck: shaking loose (jump + step).";
+            return true;
+        }
+
+        // Rung 3: vertical - a one-block ledge or a hole needs up/down, not a route.
+        if (st.rung === 2) {
+            st.rung = 3;
+            this.nav.reset();
+            const up = add(p, UP);
+            if (this.terrain.empty(add(up, UP))) {
+                this.reason = "Unstuck: climbing one block.";
+                try { this.sim.jump(); this.sim.moveToLocation(this.host.relative(center(up)), { faceTarget: false }); } catch (_e) { this.fault(_e); }
+                return true;
+            }
+            const below = this.terrain.block(add(p, DOWN));
+            if (below && !below.isAir && !below.isLiquid) {
+                this.reason = "Unstuck: clearing the cell below to drop through.";
+                const r = this.digCell(add(p, DOWN), tick);
+                if (r === "digging") return true;
+            }
+            return true;
+        }
+
+        // Rung 4: the goal itself is the problem. Give up on it, explore.
+        if (st.rung === 3) {
+            st.rung = 4;
+            this.record("Unstuck: abandoning an unreachable goal and exploring instead.");
+            this.nav.reset();
+            this.terrain.clear();
+            this.explorer.reset();
+            if (this.arbiter) this.arbiter.fail(this.arbiter.current?.id ?? "mission", tick, "unreachable goal");
+            if (this.mining) { this.mining.exploring = true; this.mining.target = undefined; this.mining.noTargetSince = tick; }
+            this.reason = "Unstuck: goal unreachable - scouting a new area.";
+            return true;
+        }
+
+        // Nothing left to try this round: stand still but keep the owner, so the
+        // caller does not fall straight back into the failing task.
+        st.rung = 4;
+        const spot = this.scout?.step?.(tick);
+        if (spot) { this.reason = spot; return true; }
+        this.reason = "Unstuck: no local remedy; waiting for the world to change.";
+        return true;
+    }
     retainImportant() {
         // Retain important stuff: iron ore, diamond, obsidian, etc - never drop critical
         const counts = this.bag.counts();
@@ -499,7 +589,7 @@ export class Bot {
         this.sim.lookAtBlock(c);
         let started = false;
         try { started = this.sim.breakBlock(c); } catch { started = false; }
-        if (started) return "digging";
+        if (started) { this.terrain.noteBroken?.(cell); return "digging"; }
         if (cell.y < floor(this.sim.location).y) {
             const blocker = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
             if (blocker && !(blocker.x === cell.x && blocker.y === cell.y && blocker.z === cell.z)) {
@@ -512,6 +602,7 @@ export class Bot {
                     this.sim.lookAtBlock(bc);
                     try {
                         if (this.sim.breakBlock(bc)) {
+                            this.terrain.noteBroken?.(blocker);
                             this.lastDigReason = `Cleared ${bb.typeId} blocking the swing.`;
                             return "digging";
                         }
@@ -716,17 +807,18 @@ export class Bot {
         // UI update - scoreboard + actionbar for spectating
         try { this.ui?.tick(tick); } catch (_e) { this.fault(_e); }
 
-        // Now supports full-game speedrun Overworld -> Nether -> End
-        if (owner.dimension.id !== this.sim.dimension.id) {
-            // Owner and bot in different dimensions - pause to avoid unattended mutation, but record
-            if (tick % 200 === 0) this.record(`Dimension mismatch: bot in ${this.sim.dimension.id}, owner in ${owner.dimension.id} - waiting for owner`);
-            // Only pause if owner is in overworld and bot in nether/end without owner following - actually allow if both in same non-overworld
-            if (this.sim.dimension.id === "minecraft:overworld" || owner.dimension.id === "minecraft:overworld") {
-                // One in overworld, one not - wait but don't shutdown permanently, retry
-                this.reason = `Dimension mismatch bot ${this.sim.dimension.id} vs owner ${owner.dimension.id} - waiting`;
-                return;
-            }
+        // Dimensions: full-game speedrun Overworld -> Nether -> End is allowed.
+        // A mismatch used to `return` here on EVERY tick, which froze the bot
+        // completely: it stopped eating, stopped fighting, and stood still in
+        // the Nether for as long as the owner stayed in the Overworld (the
+        // "can't survive alone" report). The mismatch is now only a *guard*
+        // against starting brand-new self-directed nether/end travel: survival,
+        // escape and combat keep running in whatever dimension the bot is in.
+        const elsewhere = owner.dimension.id !== this.sim.dimension.id;
+        if (elsewhere && tick % 200 === 0) {
+            this.record(`Dimension mismatch: bot in ${this.sim.dimension.id}, owner in ${owner.dimension.id} - surviving in place`);
         }
+        this.ownerElsewhere = elsewhere;
         // Allow all dimensions: overworld, nether, end - for full-game speedrun
         this.terrain.begin(tick);
         this.nav.fast = this.settings.fast;
@@ -793,28 +885,34 @@ export class Bot {
 
         // ARBITER: replaces 430-line chain of if (director.tick()) return;
         // Keeps current behavior until finishes or clearly better appears, returns reason codes
+        // `job` is the one thing allowed to drive the bot this tick. Everything
+        // below is gated on it, so a director can no longer steal a tick that
+        // the arbiter gave to something else. That stealing is what made the
+        // bot oscillate: mine -> bucket -> mine -> nether, every other tick.
+        let job = null;
         try {
             // Every 5 ticks (survival-master keeps its fast lane). The old gate
             // also ran it on every tick whenever there was no current pick or
             // the bot was in water - i.e. constantly after any director error.
             if (tick % 5 === 0 || this.arbiter.current?.id === "survival_master") {
                 const arbResult = this.arbiter.tick(tick);
+                job = this.arbiter.current?.id ?? null;
                 if (arbResult.code === "running") {
-                    // If arbiter says running for survival/escape/combat/food, honor it.
-                    // Mission-mode ids (mine, follow, golem, ...) must fall through to the dispatcher below,
-                    // so no mode name may appear in this list.
-                    if (["survival_master","escape","combat","food","bucket","village","nether"].includes(arbResult.id)) {
-                        return;
-                    }
+                    // The job's own director handled this tick.
+                    return;
                 } else if (arbResult.code === "failed") {
                     this.record(`Arbiter failed: ${arbResult.reason}`);
                 }
+            } else {
+                job = this.arbiter.current?.id ?? null;
             }
         } catch (_e) { this.fault(_e); }
 
-        // WORLD-CLASS SURVIVAL MASTER - now via arbiter, but keep direct call for fall fast path
+        // WORLD-CLASS SURVIVAL MASTER - keep the fall fast path even when the
+        // arbiter has not been consulted yet this tick: a fall cannot wait 5.
         try {
-            const shouldTickSurvival = (tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2) || (this.survivalMaster.fallStartY !== null);
+            const falling = this.survivalMaster.fallStartY !== null;
+            const shouldTickSurvival = falling || (job === "survival_master" && tick % 10 === 0) || (cachedThreatInfo && cachedThreatInfo.count >= 2);
             if (shouldTickSurvival && this.survivalMaster.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
@@ -922,51 +1020,25 @@ export class Bot {
 
         // NETHER + VILLAGE via arbiter - merged speedrun into nether, single call
 
-        // IRON GOLEM COMBAT & RISK MANAGEMENT
+        // IRON GOLEM COMBAT & RISK MANAGEMENT (only when the arbiter chose it)
         try {
-            if (this.settings.defend && this.golem && this.golem.tick(tick)) return;
+            if (job === "golem" && this.settings.defend && this.golem && this.golem.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
         // FOOD HEALING COMBAT READINESS (10-tick cadence; it counted the whole
         // inventory and read components on every single tick before)
         try {
-            if (this.food && tick % 10 === 0 && this.food.tick(tick)) return;
+            if (job === "food" && tick % 10 === 0 && this.food && this.food.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
-        // BUCKET ACQUISITION & NETHER PREPARATION
+        // BUCKET ACQUISITION & NETHER PREPARATION (only when chosen)
         try {
-            if ((this.mode === "speedrun" || this.mode === "survival" || this.mode === "starter") && !this.mining && this.bucket && this.bucket.tick(tick)) return;
+            if (job === "bucket" && !this.mining && this.bucket && this.bucket.tick(tick)) return;
         } catch (_e) { this.fault(_e); }
 
-        // Structure loot main priority if found - interrupt current task if high priority
-        try {
-            const topStruct = this.structures.getTopPriority();
-            if (topStruct && topStruct.priority >= 90) {
-                const currentPrio = this.mode === "idle" ? 0 : 50;
-                if (this.structures.shouldInterruptForLoot(currentPrio)) {
-                    const lootTarget = this.structures.getLootTarget();
-                    if (lootTarget) {
-                        this.reason = `Structure priority: ${topStruct.name} (${topStruct.reason}) - looting chest`;
-                        const r = this.navTo(center(lootTarget.pos), tick, 2);
-                        if (r !== "failed") return;
-                    }
-                }
-            }
-            // Lava pool -> portal if have water bucket - main priority
-            const portalOpp = this.structures.getPortalOpportunity();
-            if (portalOpp && portalOpp.hasWater) {
-                const inv = this.bag.counts();
-                if ((inv["minecraft:obsidian"] ?? 0) < 10) {
-                    this.reason = `Lava pool portal opportunity at ${portalOpp.pos.x},${portalOpp.pos.y},${portalOpp.pos.z} - making obsidian`;
-                    // If near lava pool, try to make obsidian
-                    if (distance(portalOpp.pos, this.sim.location) < 12) {
-                        // Place water logic would be in survival/speedrun, but we can navigate there
-                        const r = this.navTo(center(portalOpp.pos), tick, 3);
-                        if (r !== "failed") return;
-                    }
-                }
-            }
-        } catch (_e) { this.fault(_e); }
+        // VILLAGE / NETHER / LOOTING: direct calls removed - all three are
+        // arbiter jobs now (see core/arbiter.js). Calling them here too meant
+        // the bot did village work in the middle of a mining mission.
 
         // Enhanced threat evaluation with combat module - use cached threatInfo for speed
         const info = this.settings.defend ? (cachedThreatInfo ?? this.terrain.threatInfo(this.sim, owner)) : { list: [], nearest: undefined, count: 0, ranged: 0, explosive: 0, melee: 0, closest: Infinity, bombNear: false, underFire: false };
@@ -993,37 +1065,142 @@ export class Bot {
         const desperate = hp <= 8 || hunger <= 4;
         // Only look for food when eating is actually on the table.
         const foodSlot = hunger <= 17 ? this.bag.food(desperate) : -1;
-        let retreat = false;
-        if (info.nearest) {
-            retreat = hp <= 6 || info.bombNear || info.count >= 4 || (hp <= 12 && (info.count >= 2 || info.explosive > 0)) || (hp <= 10 && !hasWeapon) || (hp <= 14 && info.ranged > 0 && info.closest > 3);
+
+        /* ------------------------------ owner --------------------------------- */
+        // ONE owner per tick, chosen by the explicit state machine instead of
+        // the old if/else cascade. `priority()` could only express a fixed
+        // order, so combat always beat "eat with 3 hunger while a zombie is 9
+        // blocks away", the bot fled into more mobs, and "unstuck" did not
+        // exist as an owner at all - hence the loops.
+        const noProgress = this.nav.noProgressTicks ?? 0;
+        const snapshot = {
+            health: hp,
+            hunger,
+            threats: info.count,
+            threatCount: info.count,
+            closestThreat: info.closest,
+            rangedThreats: info.ranged,
+            bombNear: !!info.bombNear,
+            hasWeapon,
+            hasFood: foodSlot >= 0,
+            headInWater: (() => { try { return this.terrain.headInWater(this.sim); } catch { return false; } })(),
+            inWater: !!this.sim.isInWater,
+            onLava: below?.type === "minecraft:lava" || below?.type === "minecraft:flowing_lava",
+            lavaAdjacent: !!below?.hazard,
+            fallDepthBelow: (() => { const sy = this.survivalMaster?.fallStartY; return sy != null ? Math.max(0, sy - this.sim.location.y) : 0; })(),
+            suffocating: false,
+            trapped: justStuck && !this.sim.isInWater,
+            // Level 2 = physically not moving while a route is active (the
+            // "blocked" symptom). Higher levels come from the pathfinder's own
+            // retry ladder, so a genuinely trapped bot escalates instead of
+            // retrying the same route forever.
+            stuckLevel: Math.max(
+                noProgress >= 200 ? 4 : noProgress >= 120 ? 3 : noProgress >= 60 ? 2 : 0,
+                (this.nav.ladderLevel ?? 0) >= 3 ? 3 : 0,
+            ),
+            missionActive: this.mode !== "idle",
+            mode: this.mode,
+        };
+        const jobId = this.arbiter?.current?.id ?? null;
+        const decision = chooseOwner(snapshot, this.ownerDecision, tick, jobId);
+        const prevOwner = this.ownerDecision?.owner;
+        // Do not rip the bot out of a stateful owner (mid-escape, mid-fight) for
+        // a non-emergency. `ownsEating` is polled instead: food is eaten in the
+        // gaps, which is what `STATEFUL` protects against.
+        let who = decision.owner;
+        if (prevOwner && STATEFUL.has(prevOwner) && !decision.emergency && who !== prevOwner) {
+            who = prevOwner;
         }
-        if (retreat) this.fleeSince = this.fleeSince || tick; else this.fleeSince = 0;
-        if (this.fleeSince && info.nearest && tick - this.fleeSince < 200) retreat = true;
-        const eat = foodSlot >= 0 && hunger <= 17 && (!info.nearest || info.closest > 10 || hunger <= 6);
-        const branch = priority({ paused: false, escape: !!escapeKind, retreat, eat, threat: !!info.nearest, });
-        if (branch !== this.lastBranch) { this.stopActions(); this.lastBranch = branch; this.retreatSince = 0; this.eatingUntil = 0; }
-        this.state = branch;
-        if (branch === "escape") {
+        if (who !== "eat" && ownsEating(snapshot) && !STATEFUL.has(prevOwner ?? "")) who = "eat";
+        if (who !== prevOwner) {
+            this.ownerDecision = { owner: who, since: tick, utility: decision.utility };
+            this.stopActions();
+            this.retreatSince = 0;
+            this.eatingUntil = 0;
+            if (who !== "escape") this.lastBranch = "";
+            if (who !== "combat") this.lastCombatAt = 0;
+        } else if (this.ownerDecision) {
+            this.ownerDecision.utility = decision.utility;
+        } else {
+            this.ownerDecision = { owner: who, since: tick, utility: decision.utility };
+        }
+        this.ownerReason = decision.reason;
+        // Legacy `state` string is still shown in the HUD/status.
+        this.state = who === "mission" ? "task" : who;
+        this.lastBranch = who === "mission" ? "task" : who;
+
+        if (who === "escape" || (this.escaper.active && escapeKind)) {
+            // An escape must NEVER be replaced by a blocked task. The old code
+            // called blockTask() after 14 attempts and returned - and because
+            // `blocked` then short-circuits every later tick, the bot stopped
+            // trying to escape entirely and died in the lava it was standing
+            // in. Escaping is a body reflex: it keeps running, and after many
+            // failures it *changes method* instead of stopping.
+            const kind = escapeKind || this.escaper.mode || "trapped";
             if (!this.escaper.active) {
-                if (this.escapeAttempts++ >= 14) { this.blockTask("Stuck repeatedly with no way out; needs help.", "retry"); return; }
+                if (this.escapeAttempts >= 14) {
+                    this.record(`Escape is not working (${this.escaper.lastReason || kind}); trying a different route out.`);
+                    this.escapeAttempts = 6;
+                    this._escapeVariants = ((this._escapeVariants ?? 0) + 1) % 3;
+                    this.escaper.reset();
+                    this.nav.reset();
+                }
+                this.escapeAttempts++;
                 this.escapeOrigin = { ...this.sim.location };
             }
-            const result = this.escaper.step(escapeKind || "trapped", tick);
+            const result = this.escaper.step(kind, tick);
             this.reason = this.escaper.lastReason;
             if (result === "done") {
                 const moved = this.escapeOrigin ? distance(this.sim.location, this.escapeOrigin) : 0;
                 this.escaper.reset(); this.nav.reset();
                 if (moved >= 1) this.escapeAttempts = 0;
-                this.fleeSince = 0; this.lastBranch = ""; this.record(moved >= 2 ? "escaped" : "escape made no progress");
+                this.fleeSince = 0; this.lastBranch = ""; this.ownerDecision = null;
+                this.record(moved >= 2 ? "escaped" : "escape made no progress");
             } else if (result === "failed") {
                 const why = this.escaper.lastReason; this.escaper.reset(); this.nav.reset();
+                this.ownerDecision = null;
                 this.blockTask("Escape failed: " + why, "retry");
             }
             return;
         }
-        if (branch === "retreat") { this.retreat(info, tick); return; }
-        if (branch === "eat") { this.eat(tick); return; }
-        if (branch === "combat" && info.nearest) { this.fight(info, tick); return; }
+        if (who === "retreat") { this.retreat(info, tick); return; }
+        if (who === "eat") { this.eat(tick); return; }
+        if (who === "combat" && info.nearest) { this.fight(info, tick); return; }
+        if (who === "unstuck" && this.unstuck(tick)) return;
+        if (who === "survive" && this.survivalMaster.tick(tick)) return;
+
+        // Structure detours are OPPORTUNITIES, not owners: they may only move the
+        // bot when the owner has no body-level work (mission/idle), and never
+        // when an explicit command is being executed. Before, this block ran
+        // before the owner was even chosen, so a ruined portal 40 blocks away
+        // could pull the bot out of a fight it was winning.
+        const opportunistic = who === "mission" && (this.mode === "idle" || this.mode === "survival" || this.mode === "starter" || this.mode === "speedrun");
+        if (opportunistic) {
+            try {
+                const topStruct = this.structures.getTopPriority();
+                if (topStruct && topStruct.priority >= 90) {
+                    const currentPrio = this.mode === "idle" ? 0 : 50;
+                    if (this.structures.shouldInterruptForLoot(currentPrio)) {
+                        const lootTarget = this.structures.getLootTarget();
+                        if (lootTarget) {
+                            this.reason = `Structure priority: ${topStruct.name} (${topStruct.reason}) - looting chest`;
+                            const r = this.navTo(center(lootTarget.pos), tick, 2);
+                            if (r !== "failed") return;
+                        }
+                    }
+                }
+                // Lava pool -> portal if we have a water bucket (obsidian formation).
+                const portalOpp = this.structures.getPortalOpportunity();
+                if (portalOpp && portalOpp.hasWater) {
+                    const inv = this.bag.counts();
+                    if ((inv["minecraft:obsidian"] ?? 0) < 10 && distance(portalOpp.pos, this.sim.location) < 12) {
+                        this.reason = `Lava pool portal opportunity at ${portalOpp.pos.x},${portalOpp.pos.y},${portalOpp.pos.z} - making obsidian`;
+                        const r = this.navTo(center(portalOpp.pos), tick, 3);
+                        if (r !== "failed") return;
+                    }
+                }
+            } catch (_e) { this.fault(_e); }
+        }
         if (this.blocked) {
             this.state = "blocked";
             if (this.blocked.retryAt !== undefined && tick >= this.blocked.retryAt) { this.recoverTask(tick); }
@@ -1052,10 +1229,15 @@ export class Bot {
             this.reason = `Task deadline exceeded, retrying ${this.mode} robustly`;
             return;
         }
-        if (this.camp(tick)) return;
-        // FIX: looting single implementation via arbiter, not 3 times
-        // maybeLoot removed - Looting director handles all
-        if (this.boatTravel(tick)) return;
+        // Camping and boat crossings are *body-level* behaviours that belong to
+        // the mission owner. They used to run unconditionally after every
+        // safety branch, so a boat trip could pre-empt a survival owner that
+        // had just taken over (and `camp()` insists on night + no threats, but
+        // set `this.state = "camp"` regardless of who owned the tick).
+        if (who === "mission") {
+            if (this.camp(tick)) return;
+            if (this.boatTravel(tick)) return;
+        }
         // DIRECTOR MINING: a task assigned via assignMine() is driven here, in place,
         // so director modes (speedrun/nether/bucket/survival-master) keep their state
         // and resume as soon as the quota is complete. startMine() keeps the command
@@ -1155,30 +1337,36 @@ export class Bot {
             }
         }
         const result = this.nav.go(center(bestCand), tick);
-        if (result === "failed") {
-            // ROBUST: Path failed, try to break obstruction in front unless obsidian or important
-            try {
-                const p = floor(this.sim.location);
-                // Check block directly in front of head that blocks entire body
-                const headFront = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
-                const obstruct = headFront ? [headFront] : this.terrain.findObstructions(this.sim.location, center(bestCand));
-                if (obstruct.length > 0 && obstruct.length <= 3) {
-                    for (const cell of obstruct) {
-                        const b = this.terrain.block(cell);
-                        if (!b || b.isAir) continue;
-                        if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") continue;
-                        if (isUnbreakable(b.typeId)) continue;
-                        const score = retainScore(b.typeId);
-                        if (score >= 80) continue;
-                        const r = this.digCell(cell, tick);
-                        if (r === "digging") {
-                            this.reason = `Breaking obstruction ${b.typeId} at ${cell.x},${cell.y},${cell.z} - path failed workaround`;
-                            return "running";
+        if (result === "failed" || result === "blocked") {
+            // Escalation ladder. The navigator already tried its own ladder
+            // (retarget, replan, tunnel, pillar, bridge) before reporting
+            // failure, so re-probing obstructions here - with a *second* full
+            // obstruction scan on every failing tick - mostly just burned CPU
+            // and re-digging what the navigator had already cleared.
+            // One clean attempt, rate-limited, then an honest answer.
+            if (tick >= (this._digRetryAt ?? 0)) {
+                this._digRetryAt = tick + 40;
+                try {
+                    const headFront = this.terrain.headFrontObstruction ? this.terrain.headFrontObstruction(this.sim.location) : null;
+                    const obstruct = headFront ? [headFront] : this.terrain.findObstructions(this.sim.location, center(bestCand));
+                    if (obstruct.length > 0 && obstruct.length <= 3) {
+                        for (const cell of obstruct) {
+                            const b = this.terrain.block(cell);
+                            if (!b || b.isAir) continue;
+                            if (b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian") continue;
+                            if (isUnbreakable(b.typeId)) continue;
+                            if (retainScore(b.typeId) >= 80) continue;
+                            const r = this.digCell(cell, tick);
+                            if (r === "digging") {
+                                this.reason = `Breaking obstruction ${b.typeId} at ${cell.x},${cell.y},${cell.z} - path failed workaround`;
+                                return "running";
+                            }
+                            if (r === "open") continue;
                         }
-                        if (r === "open") continue;
                     }
-                }
-            } catch (_e) { this.fault(_e); }
+                } catch (_e) { this.fault(_e); }
+            }
+            this.reason = this.nav.reason || "No route to the goal.";
         }
         return result;
     }
@@ -1973,6 +2161,7 @@ export class Bot {
                     this.sim.lookAtBlock(this.host.relative(center(target)));
                     if (!m.breakingSince) {
                         if (this.sim.breakBlock(this.host.relative(center(target)))) {
+                            this.terrain.noteBroken?.(target);
                             m.breakingSince = tick;
                             this.nav.reset();
                             this.reason = `Tree: breaking log at ${target.x},${target.y},${target.z} dy=${dy} direct fix - no scaffold`;
@@ -2479,7 +2668,7 @@ export class Bot {
         this.stop(found ? "Death point swept; drops collected." : "No drops remained at death point."); this.tell(this.reason);
     }
     attach(sim) {
-        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain);
+        this.sim = sim; this.bag = new Bag(sim); this.terrain = new Terrain(sim.dimension); this.nav = new Navigator(sim, this.host, this.terrain, this);
         this.escaper = new Escaper(this); this.miner = new Miner(this); this.drops = new Drops(this); this.scout = new Scout(this); this.hands = new Hands(this); this.equipment = new Equipment(sim, this.bag); this.autonomy = new SurvivalDirector(this);
         this.builder = new Builder(this); this.combat = new Combat(this); this.looting = new Looting(this); this.parkour = new Parkour(this); this.deepMiner = new DeepMiner(this); this.resource = new ResourceManager(this); this.speedrun = new SpeedrunDirector(this);
         this.nav.builder = this.builder; this.threat = undefined; this.boatTrip = undefined; this.swingCell = undefined; this.grab = undefined;

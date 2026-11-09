@@ -23,6 +23,7 @@ import { violations } from "../scripts/core/brain/rules.js";
 import { StuckDetector } from "../scripts/core/brain/stuck.js";
 import { ITEMS, PROGRESSION, lookupGoal } from "../scripts/core/brain/goals.js";
 import { REASON, STATUS } from "../scripts/core/brain/results.js";
+import { chooseOwner, ownsEating, STATEFUL, OWNERS } from "../scripts/core/state-machine.js";
 
 let ok = 0, bad = 0, log = [];
 function pass(msg) { ok++; }
@@ -617,6 +618,45 @@ function runSim(sim, rootGoal, maxSteps = 200) {
     const v = violations({ type: "mine", target: { x: 0, y: 0, z: 0 } }, { world });
     const noWorld = violations({ type: "mine", target: { x: 0, y: 0, z: 0 } }, {});
     assert(v.length === 1 && noWorld.length === 0, "mutation: lava rule only fires when world is known (unknown != safe, but rule needs world to check)");
+}
+
+
+// ---- unit: owner state machine (the layer that replaced the if/else cascade) ----
+{
+    const base = { health: 20, hunger: 20, threatCount: 0, missionActive: true, mode: "survival" };
+    // An emergency pre-empts immediately, even inside another owner's min hold.
+    const inWater = chooseOwner({ ...base, headInWater: true }, { owner: OWNERS.UNSTUCK, since: 0, utility: 60 }, 5);
+    assert(inWater.owner === OWNERS.ESCAPE && inWater.emergency, "owner: drowning pre-empts a held owner instantly");
+
+    // A stable job is not replaced by a marginally better one.
+    const held = chooseOwner({ ...base, hunger: 18, threatCount: 0 }, { owner: OWNERS.MISSION, since: 0, utility: 40 }, 10);
+    assert(held.owner === OWNERS.MISSION, "owner: mission keeps control when nothing clearly beats it");
+
+    // Eating beats driving on with hunger, and works with a distant threat.
+    const eat = chooseOwner({ ...base, hunger: 9, hasFood: true, threatCount: 1, closestThreat: 12 }, null, 0);
+    assert(eat.owner === OWNERS.EAT, `owner: eats at hunger 9 with a distant mob (got ${eat.owner})`);
+    // ... but not with a creeper in the face.
+    const noEat = chooseOwner({ ...base, hunger: 9, hasFood: true, threatCount: 1, closestThreat: 1, bombNear: true }, null, 0);
+    assert(noEat.owner === OWNERS.RETREAT, `owner: creeper adjacent -> retreat, not eat (got ${noEat.owner})`);
+
+    // Being physically stuck escalates through levels.
+    const lv = (n) => chooseOwner({ ...base, stuckLevel: n }, null, 0).owner;
+    eq([lv(0), lv(2), lv(4)], [OWNERS.MISSION, OWNERS.UNSTUCK, OWNERS.SURVIVE], "owner: stuck levels 0/2/4 -> mission/unstuck/survive");
+
+    // Hysteresis: the same inputs must not flap.
+    let cur = null, switches = 0;
+    for (let t = 0; t < 400; t++) {
+        const hunger = 15 + (t % 2);           // noisy around the eat threshold
+        const d = chooseOwner({ ...base, hunger, hasFood: true }, cur, t);
+        if (d.switched) switches++;
+        cur = { owner: d.owner, since: cur?.owner === d.owner ? cur.since : t, utility: d.utility };
+    }
+    assert(switches <= 4, `owner: hysteresis suppresses flapping (${switches} switches in 400 ticks)`);
+
+    // ownsEating is the poll the run dispatcher uses.
+    assert(ownsEating({ ...base, hunger: 8, hasFood: true }), "owner: ownsEating() true when food would win");
+    assert(!ownsEating({ ...base, hunger: 20, hasFood: true }), "owner: ownsEating() false when not hungry");
+    assert(STATEFUL.has(OWNERS.COMBAT) && !STATEFUL.has(OWNERS.EAT), "owner: eating is polled, combat is stateful");
 }
 
 // ---- fuzz: assessHazards + computeUtilities must not throw on random inputs ----

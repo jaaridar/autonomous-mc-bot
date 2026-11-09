@@ -282,8 +282,32 @@ export function adjustTacticForHostile(hostileType, context) {
     };
 }
 
+/**
+ * After taking damage, reassess instead of blindly continuing the plan.
+ *
+ * Signature is positional and easy to call wrong, which is exactly what
+ * happened: `bot.js` called it as `(snapshotObject, contextObject)`, so
+ * `newHealth` was an object and every `<=` comparison against it was false -
+ * the "critical health, abort the plan" branch could never fire. It now accepts
+ * either the positional form or a single snapshot object, and fills in the
+ * previous health/threat count itself when the caller does not track them.
+ */
 export function reassessAfterDamage(previousPlan, damageTaken, newHealth, newThreats, context) {
-    // After taking damage, reassess situation instead of blindly continuing original plan
+    if (previousPlan && typeof previousPlan === "object") {
+        // Snapshot form: reassessAfterDamage({ health, previousHealth, damage, hostileCount }, { hasBlocks })
+        const snap = previousPlan;
+        context = damageTaken && typeof damageTaken === "object" ? damageTaken : (context ?? {});
+        return reassessAfterDamage(
+            undefined,
+            Number.isFinite(snap.damage) ? snap.damage : Math.max(0, (snap.previousHealth ?? 20) - (snap.health ?? 20)),
+            Number.isFinite(snap.health) ? snap.health : 20,
+            Array.isArray(snap.threats) ? snap.threats
+                : Array.from({ length: Math.max(0, Number(snap.hostileCount) || 0) }, () => ({})),
+            { ...context, previousHealth: snap.previousHealth, previousThreatCount: snap.previousThreatCount }
+        );
+    }
+    context = context ?? {};
+    newThreats = Array.isArray(newThreats) ? newThreats : [];
     const healthDrop = (context.previousHealth ?? 20) - newHealth;
     const isSignificantDamage = damageTaken >= 4 || healthDrop >= 4;
 

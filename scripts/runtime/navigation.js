@@ -1,21 +1,27 @@
 import { floor, horizontal, distance, center, key, add } from "../core/math.js";
+import { RANGED, EXPLOSIVE } from "../core/policy.js";
 import { PathSearch } from "../core/navigation.js";
 
 /**
- * Advanced Navigator: rolling-horizon A* with parkour, bridging, pillaring awareness.
- * Handles:
- * - Normal walk
- * - 1-block gap jumps, 2-block sprint jumps, jump-up
- * - Drops, bridging, pillaring
- * - Loop detection, stall detection
- * - Threat avoidance
- * - Fast path smoothing
+ * Navigator: rolling-horizon A* with parkour, bridging, swimming and pillaring.
+ *
+ * Design rules (all of these are fixes for reported "gets stuck" behaviour):
+ *  - The search is RESUMED across ticks instead of being rebuilt, so a 1200-node
+ *    budget is spent on one route rather than restarting from the same cell.
+ *  - Being in water is a normal state (swim to the closest shore), never an
+ *    instant failure.
+ *  - A failed/blocked route degrades through an escape ladder (replan with more
+ *    effort -> tunnel toward the goal -> swim/shore -> give up honestly) instead
+ *    of dropping control mid-task.
+ *  - Progress is measured against the best distance ever reached for the current
+ *    goal, so "circling" is detected even when the bot visits new cells each time.
  */
 export class Navigator {
-    constructor(sim, host, terrain) {
+    constructor(sim, host, terrain, bot) {
         this.sim = sim;
         this.host = host;
         this.terrain = terrain;
+        this.bot = bot;
         this.path = [];
         this.waypoint = 0;
         this.lastProgress = 0;
@@ -43,58 +49,115 @@ export class Navigator {
         this.direct = undefined;      // { goal, since, issued, lastMove, best } short straight hop without A*
         this.noDirectUntil = 0;
         this.replans = 0;
+        this.bestDistance = Infinity;
+        this.tunnelPlan = undefined;
+        this.ladderLevel = 0;
+        this.segmentsSinceProgress = 0;
+        this.stillSince = undefined;
+        this.tick = 0;
     }
 
     reset() {
-        try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-        try { this.sim.isSprinting = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
+        try { this.sim.isSprinting = false; } catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
         this.target = undefined;
         this.search = undefined;
         this.path = [];
         this.corridor = [];
         this.retries = 0;
         this.lastIssued = -1;
+        this.stillSince = undefined;
         this.endpoints.clear();
         this.urgent = false;
         this.avoid = [];
         this.trail = [];
         this.direct = undefined;
+        this.bestDistance = Infinity;
+        this.tunnelPlan = undefined;
+        this.ladderLevel = 0;
+        this.segmentsSinceProgress = 0;
+    }
+
+    /**
+     * Snapshot of the threats worth routing around, in the shape
+     * `core/brain/danger.js` expects. Cached for a few ticks: the threat scan is
+     * an entity query and a replan can happen several times a second.
+     */
+    dangerContext(tick) {
+        const cache = (this._danger ??= { tick: -1000, ctx: null });
+        if (tick - cache.tick < 10 && tick >= cache.tick) return cache.ctx;
+        cache.tick = tick;
+        let threats = [];
+        let hp = 20;
+        try {
+            hp = this.sim.getComponent?.("minecraft:health")?.currentValue ?? 20;
+            const info = this.bot?.terrain?.threatInfo?.(this.sim, this.bot?.owner?.());
+            threats = (info?.list ?? [])
+                .map((e) => ({
+                    x: e.location.x, y: e.location.y, z: e.location.z,
+                    ranged: RANGED.has(e.typeId),
+                    explosive: EXPLOSIVE.has(e.typeId),
+                    type: e.typeId,
+                }))
+                .slice(0, 8);
+        } catch { threats = []; }
+        cache.ctx = { threats, hp };
+        return cache.ctx;
+    }
+
+    /** Keep the plan but stop the body (used when a special action takes over). */
+    hold() {
+        try { this.sim.stopMoving(); } catch { /* body may be gone */ }
     }
 
     replan(tick) {
         const allowBridge = this.allowBridge || this.builder?.canBuild;
-        const allowPillar = allowBridge; // For 100 block tower, allow pillar but throttled to avoid lag
-        const verticalDiff = Math.abs(floor(this.sim.location).y - floor(this.target).y);
-        const horiz = horizontal(this.sim.location, this.target);
-        // ULTRA LAG CUT: small rolling-horizon searches. Long trips are walked
-        // as a chain of short partial paths (PathSearch returns its best
-        // partial route when the budget runs out), so a 24-block horizon still
-        // reaches far goals while costing ~1/3 of the old 2000-3000 nodes.
-        // The tall search is only for a real tower (goal almost straight up).
+        const allowPillar = allowBridge;
+        const self = floor(this.sim.location);
+        const goal = floor(this.target);
+        const verticalDiff = Math.abs(self.y - goal.y);
+        const horiz = horizontal(self, goal);
+        // Rolling horizons: a long trip is walked as a chain of short partial
+        // paths (PathSearch hands back its best partial route) so a 24-block
+        // horizon reaches far goals at a fraction of the node cost. The tall
+        // search is only for a real tower (goal almost straight up).
         const isTower = verticalDiff > 12 && horiz < 4;
         const maxNodes = isTower ? 1500 : 1200;
         const radius = isTower ? 48 : 24;
         this.replans++;
         this.search = new PathSearch(
             this.terrain.read,
-            floor(this.sim.location),
-            floor(this.target),
+            self,
+            goal,
             0.7,
             this.parkour,
             maxNodes,
             radius,
             horiz > 16,
             this.avoid,
-            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump }
+            {
+                allowBridge,
+                allowPillar,
+                allowSprintJump: this.allowSprintJump,
+                // Swimming is how a player crosses water; the old navigator
+                // failed outright ("need boat or swim") at the first water cell.
+                allowSwim: true,
+                // ONE risk model for the whole route: lava, deep drops, mobs and
+                // darkness are priced together, so a combination nobody wrote a
+                // rule for (ledge + lava + skeleton) is avoided as a whole.
+                danger: this.dangerContext(tick),
+                dangerWorld: this.bot?.terrain,
+            }
         );
         this.path = [];
         this.corridor = [];
         this.waypoint = 0;
         this.lastIssued = -1;
+        this.tick = tick;
         this.lastProgress = tick;
         this.segmentStart = tick;
         this.lastPosition = { ...this.sim.location };
-        try { this.sim.stopMoving(); } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
+        this.hold();
     }
 
     fail(message) {
@@ -103,6 +166,46 @@ export class Navigator {
         this.stuck = true;
         this.reset();
         return "failed";
+    }
+
+    /**
+     * Something stopped the route. Climb the escape ladder before reporting a
+     * failure: a blocked path is usually a temporary build/tree/water situation,
+     * not a reason to give up a mission.
+     */
+    blocked(message, tick) {
+        this.retries++;
+        this.ladderLevel = Math.min(3, this.retries);
+        if (this.retries <= 3) {
+            this.reason = `${message}; re-planning (${this.retries}/3)`;
+            this.terrain.clear();
+            this.search = undefined;
+            this.path = [];
+            this.waypoint = 0;
+            this.lastIssued = -1;
+            this.lastProgress = tick;
+            this.segmentStart = tick;
+            return "running";
+        }
+        if (this.inWaterState()) {
+            // Water never dead-ends: head for the nearest shore.
+            this.reason = "Water in the way; swimming to the closest shore";
+            const shore = this.terrain.shoreNear(this.sim.location, 64);
+            if (shore?.cell) {
+                this.target = center(shore.cell);
+                this.retries = 0;
+                this.replan(tick);
+                return "running";
+            }
+        }
+        this.reason = message;
+        this.stuck = true;
+        this.reset();
+        return "failed";
+    }
+
+    inWaterState() {
+        try { return this.sim.isInWater === true; } catch { return false; }
     }
 
     detectLoop(tick) {
@@ -115,21 +218,28 @@ export class Navigator {
         this.lastSample = tick;
         const p = this.sim.location;
         const here = key(floor(p));
-        this.trail.push({ tick, x: p.x, z: p.z, d: horizontal(p, this.target), k: here });
+        const d = horizontal(p, this.target);
+        if (d < this.bestDistance - 0.75) {
+            this.bestDistance = d;
+            this.segmentsSinceProgress = 0;
+        } else this.segmentsSinceProgress++;
+        this.trail.push({ tick, x: p.x, z: p.z, d, k: here });
         while (this.trail.length && tick - this.trail[0].tick > 220) this.trail.shift();
         const first = this.trail[0];
         if (!first || tick - first.tick < 160) return false;
         const visits = this.trail.filter((s) => tick - s.tick <= 120 && s.k === here).length;
-        if (visits >= 5) {
+        if (visits >= 6) {
             this.trail = [];
             return true;
         }
         let travelled = 0;
         for (let i = 1; i < this.trail.length; i++)
             travelled += Math.hypot(this.trail[i].x - this.trail[i - 1].x, this.trail[i].z - this.trail[i - 1].z);
-        if (travelled < 8) return false;
+        if (travelled < 10) return false;
         const best = this.trail.reduce((m, s) => Math.min(m, s.d), Infinity);
-        if (best <= first.d - 1.5) {
+        // Tolerance of 2.5 blocks: the old 1.5 flagged honest zig-zag detours
+        // around a ravine as an infinite loop and aborted the mission.
+        if (best <= first.d - 2.5 || this.segmentsSinceProgress < 6) {
             this.trail = this.trail.slice(-4);
             return false;
         }
@@ -147,7 +257,6 @@ export class Navigator {
         const hd = horizontal(loc, goal);
         const dy = goal.y - loc.y;
         if (d) {
-            // Bail out to A* when the hop stalls or the goal drifted away.
             if (hd < d.best - 0.2) { d.best = hd; d.lastMove = tick; }
             const stalled = tick - d.lastMove > 30 || tick - d.since > 160;
             if (stalled || hd >= 6.5 || Math.abs(dy) > 1.2) {
@@ -175,6 +284,7 @@ export class Navigator {
         this.lastRetarget = tick;
         this.segmentStart = tick;
         this.lastProgress = tick;
+        this.bestDistance = hd;
         this.direct = { goal: { ...goal }, since: tick, issued: tick, lastMove: tick, best: hd };
         try { this.sim.isSprinting = false; } catch { /* ignore */ }
         try { this.sim.moveToLocation(this.host.relative(goal), { speed: this.fast || this.urgent ? 1 : 0.65, faceTarget: true }); }
@@ -206,18 +316,86 @@ export class Navigator {
         return true;
     }
 
-    go(goal, tick) {
-        // UNBREAKABLE: if in water, don't try normal pathfinding - need boat/swim
-        if (this.sim.isInWater) {
-            return this.fail("In water, need boat or swim to shore - water navigation");
+    /** Swim toward the closest shoreline while the goal is out of the water. */
+    swimToShore(tick) {
+        const shore = this.terrain.shoreNear(this.sim.location, 64);
+        this.reason = "Swimming to shore";
+        try {
+            if (this.sim.isOnGround) this.sim.jump();
+        } catch { /* ignore */ }
+        if (shore?.cell) {
+            const target = center(shore.cell);
+            // Move on the water surface: aim slightly above the feet so the
+            // vanilla swim controller keeps the head out of the water.
+            const aim = { x: target.x, y: Math.max(target.y, this.sim.location.y + 0.2), z: target.z };
+            try { this.sim.moveToLocation(this.host.relative(aim), { faceTarget: true, speed: 1 }); } catch { /* ignore */ }
+            return "running";
         }
-        // If start not safe (in water, falling, etc), fail fast
+        // No shore found in range: keep paddling toward the goal (or home).
+        const goal = this.target ?? this.lastGoal;
+        if (goal) {
+            try { this.sim.moveToLocation(this.host.relative({ x: goal.x, y: this.sim.location.y + 0.2, z: goal.z }), { faceTarget: true, speed: 1 }); } catch { /* ignore */ }
+            this.reason = "Swimming toward the goal (no shore in range)";
+            return "running";
+        }
+        return "failed";
+    }
+
+    /** Cut a safe tunnel one cell at a time toward the goal when no surface route exists. */
+    tunnel(tick) {
+        const p = floor(this.sim.location);
+        const goal = floor(this.target);
+        const plan = this.tunnelPlan;
+        if (!plan || tick - plan.since > 600) {
+            const dx = goal.x - p.x, dz = goal.z - p.z;
+            // Prefer the dominant horizontal axis, and go up only when the goal
+            // is clearly above (stair-casing), never straight down blindly.
+            let dir;
+            if (Math.abs(dx) >= Math.abs(dz) && dx !== 0) dir = { x: Math.sign(dx), y: 0, z: 0 };
+            else if (dz !== 0) dir = { x: 0, y: 0, z: Math.sign(dz) };
+            else if (goal.y > p.y) return this.fail("Tunnel end: goal is directly above");
+            else return this.fail("Tunnel end: standing on the goal column");
+            if (goal.y - p.y > 2) dir = { ...dir, y: 1 };
+            else if (p.y - goal.y > 3) dir = { ...dir, y: -1 };
+            this.tunnelPlan = { dir, since: tick, cells: [] };
+        }
+        const dir = this.tunnelPlan.dir;
+        const foot = { x: p.x + dir.x, y: p.y + (dir.y || 0), z: p.z + dir.z };
+        const head = add(foot, { x: 0, y: 1, z: 0 });
+        const cells = [foot, head].filter((c) => this.terrain.solid(c));
+        if (!cells.length) {
+            // Open: step into it.
+            this.reason = "Tunnelling forward";
+            try { this.sim.moveToLocation(this.host.relative(center(foot)), { faceTarget: true }); } catch { /* ignore */ }
+            return "running";
+        }
+        const target = cells[0];
+        if (this.terrain.lavaNear(target)) return this.fail("Refusing to tunnel beside lava");
+        const dig = this.bot?.digCell ? this.bot.digCell(target, tick) : undefined;
+        if (dig === "digging") {
+            this.reason = "Tunnelling through obstructing block";
+            return "running";
+        }
+        if (dig === "no-tool") return this.fail("No tool for the tunnel block");
+        if (dig === "unreachable") {
+            // Step closer first.
+            try { this.sim.moveToLocation(this.host.relative(center(foot)), { faceTarget: true }); } catch { /* ignore */ }
+            return "running";
+        }
+        return this.fail(this.bot?.lastDigReason || "Tunnel blocked");
+    }
+
+    go(goal, tick) {
+        // Water is not a failure state: cross it by swimming, then resume.
+        if (this.inWaterState() && horizontal(this.sim.location, goal) > 1.5) {
+            if (this.swimToShore(tick) === "running") return "running";
+            return this.blocked("No way out of the water", tick);
+        }
         const startFloor = floor(this.sim.location);
         if (!this.terrain.safe(startFloor) && !this.terrain.safe({ x: startFloor.x, y: startFloor.y - 1, z: startFloor.z })) {
-            // Check if water nearby
-            if (this.terrain.waterNear(startFloor)) {
-                return this.fail("Start in water or unsafe, need boat/bridge - water detected");
-            }
+            // A start that is not "standable" is normal while falling, jumping
+            // or swimming - keep walking instead of failing the mission.
+            if (this.terrain.waterNear(startFloor)) return this.blocked("Start is in water", tick);
         }
         if (horizontal(this.sim.location, goal) < 0.7 && Math.abs(this.sim.location.y - goal.y) < 1.2) {
             this.reset();
@@ -235,6 +413,8 @@ export class Navigator {
         if (!this.target) {
             this.target = { ...goal };
             this.lastRetarget = tick;
+            this.bestDistance = remaining;
+            this.segmentsSinceProgress = 0;
             this.replan(tick);
         } else if (distance(goal, this.target) > moveThreshold && tick - this.lastRetarget >= 20) {
             this.target = { ...goal };
@@ -244,18 +424,33 @@ export class Navigator {
             this.trail = [];
             this.replan(tick);
         }
-        if (tick - this.segmentStart > 700) return this.fail("Segment timeout; terrain blocked or unloaded.");
+        if (tick - this.segmentStart > 700) {
+            // One very long segment is a real problem, but the search may simply
+            // be walking a long way: reset the segment clock and re-plan once
+            // before giving up, so a 300-block trek does not trip this.
+            if (this.ladderLevel >= 2) return this.blocked("Segment timeout; terrain blocked or unloaded.", tick);
+            this.ladderLevel++;
+            this.search = undefined;
+            this.path = [];
+            this.waypoint = 0;
+            this.lastIssued = -1;
+            this.segmentStart = tick;
+            this.replan(tick);
+            return "running";
+        }
 
         if (this.search) {
             const before = this.search.expanded;
             const result = this.search.step(this.fast ? 120 : 50);
             this.expansions += this.search.expanded - before;
             if (result === "searching") return "running";
-            if (result !== "found" && result !== "partial") return this.fail(`Path ${result}; no safe route.`);
+            if (result !== "found" && result !== "partial") {
+                return this.blocked(`Path ${result}; no safe route.`, tick);
+            }
             this.path = this.search.path;
             this.search = undefined;
             this.segments++;
-            if (!this.path.length) return this.fail("No usable waypoint.");
+            if (!this.path.length) return this.blocked("No usable waypoint.", tick);
         }
 
         let w = this.path[this.waypoint];
@@ -274,7 +469,7 @@ export class Navigator {
                 }
                 const k = key(floor(this.sim.location)), n = (this.endpoints.get(k) ?? 0) + 1;
                 this.endpoints.set(k, n);
-                if (n > 2) return this.fail("Repeated endpoint; no progress.");
+                if (n > 2) return this.blocked("Repeated endpoint; no progress.", tick);
                 if (this.endpoints.size > 128) this.endpoints.delete(this.endpoints.keys().next().value);
                 this.target = { ...goal };
                 this.retries = 0;
@@ -287,216 +482,206 @@ export class Navigator {
         if (this.lastPosition && distance(this.sim.location, this.lastPosition) > 0.2) {
             this.lastProgress = tick;
             this.lastPosition = { ...this.sim.location };
+            this.stillSince = undefined;
+        } else if (this.stillSince === undefined) {
+            this.stillSince = tick;
         }
 
-        // Check if waypoint still safe, or if we need bridge - entire body must be able to go.
-        // freshSafe() drops the cache and re-reads 3 cells natively, and it ran
-        // for the waypoint + every corridor cell on every tick. Every 4 ticks
-        // (or on a new waypoint) is plenty at walking speed.
+        // Cheap progress check: if we are not getting closer, re-plan rather
+        // than continuing a route the world has invalidated.
         let waypointSafe = true, corridorBad = false;
         if (tick - this.lastFreshCheck >= 4 || this.lastIssued !== this.waypoint) {
             this.lastFreshCheck = tick;
             waypointSafe = w.kind === "bridge" || this.terrain.freshSafe(w);
             corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p !== w && !this.terrain.freshSafe(p));
         }
-        if (tick - this.lastProgress > 50 || !waypointSafe || corridorBad) {
-            // Try to find obstruction that blocks entire body
-            if (!waypointSafe && w) {
-                try {
-                    // Check feet and head at waypoint - entire body collision
-                    const blocksToCheck = [w, { x: w.x, y: w.y + 1, z: w.z }, { x: w.x, y: w.y - 1, z: w.z }];
-                    for (const pos of blocksToCheck) {
-                        const b = this.terrain.block(pos);
-                        if (b && !b.isAir) {
-                            // Found obstruction blocking entire body path
-                            const isObsidian = b.typeId === "minecraft:obsidian" || b.typeId === "minecraft:crying_obsidian";
-                            if (!isObsidian) {
-                                // Signal obstruction for workaround-then-break logic in bot.js navTo
-                                return this.fail(`Obstruction ${b.typeId} at ${pos.x},${pos.y},${pos.z} blocks entire body path; needs workaround or break`);
-                            }
-                        }
-                    }
-                } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
-            }
-            if (++this.retries > 4) return this.fail("Stuck or terrain changed after retries.");
+        if (tick - this.lastProgress > 60 || !waypointSafe || corridorBad) {
             this.terrain.clear();
-            this.replan(tick);
-            return "running";
+            return this.blocked("Terrain changed under the route", tick);
         }
 
-        if (this.detectLoop(tick)) return this.fail("Circling without progress; treating as blocking.");
+        if (this.detectLoop(tick)) return this.blocked("Circling without progress", tick);
 
         if (this.lastIssued !== this.waypoint) {
-            // Smoothing: combine collinear walks
-            const first = this.waypoint;
-            const previous = first > 0 ? this.path[first - 1] : floor(this.sim.location);
-            const alongX = previous.z === w.z && previous.x !== w.x;
-            let end = this.waypoint;
-            const limit = Math.min(this.path.length, end + 6);
-            if (w.kind === "walk") {
-                for (let j = end + 1; j < limit; j++) {
-                    const q = this.path[j];
-                    if (q.kind !== "walk" || q.y !== w.y || (alongX ? q.z !== w.z : q.x !== w.x) || !this.terrain.safe(q)) break;
-                    end = j;
-                }
-            }
-            if (end > this.waypoint) {
-                this.waypoint = end;
-                w = this.path[end];
-            }
-            this.corridor = this.path.slice(first, end + 1);
-            this.lastIssued = this.waypoint;
-
-            const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
-            const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
-            const canSprint = hunger > 6 && hp > 6;
-            const sprint = canSprint && (this.urgent || (this.fast && w.kind === "walk" && horizontal(this.sim.location, w) > 1));
-
-            // Handle special kinds - world-class arbitrary bridging + place+3jump for >3 blocks
-            // ADVANCED: >3 block gap - place block then 3-jump
-            if (w.kind === "bridge_sprintjump3" || w.kind === "bridge_bridge_sprintjump3") {
-                if (this.builder && this.builder.canBuild) {
-                    const p = floor(this.sim.location);
-                    // Place intermediate block(s) first
-                    const placePos = w.placeAt;
-                    if (placePos) {
-                        const belowPlace = add(placePos, { x: 0, y: -1, z: 0 });
-                        const belowBlock = this.terrain.block(belowPlace);
-                        // Try to place at placePos if not already solid
-                        if (!this.terrain.solid(placePos)) {
-                            const support = this.builder.findSupportFor(placePos) || this.builder.findSupportFor(belowPlace);
-                            const anchor = support ? support.pos : belowPlace;
-                            // For water gaps, allow placement
-                            const r = this.builder.placeAt(placePos, anchor, { sneak: true, autoAnchor: true, allowFalling: false });
-                            if (r === "placed" || r === "placed_support") {
-                                this.reason = `Large gap ${w.gap} blocks: placed intermediate block at ${placePos.x},${placePos.y},${placePos.z} then will do 3-block jump - advanced`;
-                                return "running";
-                            }
-                            // If place failed, try alternative
-                            if (r === "no-block") {
-                                return this.fail("Need blocks to place for large gap 3-jump - will mine nearby");
-                            }
-                        }
-                        // If intermediate block placed or already exists, do 3-block sprint jump to landing
-                        if (this.terrain.solid(placePos) || this.terrain.safe(placePos)) {
-                            // For double bridge case, place second block too
-                            if (w.kind === "bridge_bridge_sprintjump3" && w.placeAt2) {
-                                const placePos2 = w.placeAt2;
-                                if (!this.terrain.solid(placePos2)) {
-                                    const below2 = add(placePos2, { x: 0, y: -1, z: 0 });
-                                    const support2 = this.builder.findSupportFor(placePos2) || this.builder.findSupportFor(below2);
-                                    const anchor2 = support2 ? support2.pos : below2;
-                                    const r2 = this.builder.placeAt(placePos2, anchor2, { sneak: true, autoAnchor: true });
-                                    if (r2 === "placed") {
-                                        this.reason = `Large gap ${w.gap}: placed second intermediate block at ${placePos2.x},${placePos2.y},${placePos2.z} - advanced`;
-                                        return "running";
-                                    }
-                                }
-                            }
-                            // Now do 3-block sprint jump to final landing
-                            this.sim.isSprinting = true;
-                            if (this.sim.isOnGround) this.sim.jump();
-                            try {
-                                this.sim.moveToLocation(this.host.relative(center(w)), { speed: 1, faceTarget: true });
-                                this.reason = `Large gap ${w.gap}: placed block then 3-block sprint jump to ${w.x},${w.y},${w.z} - advanced movement`;
-                            } catch {
-                                return this.fail("3-block jump after place failed");
-                            }
-                            return "running";
-                        }
-                    }
-                } else {
-                    return this.fail("Need blocks for large gap place+3jump");
-                }
-            }
-
-            if (w.kind === "bridge") {
-                // Need to bridge - horizontal, diagonal, arbitrary
-                if (this.builder && this.builder.canBuild) {
-                    const p = floor(this.sim.location);
-                    // Arbitrary direction: can be diagonal
-                    const dir = { x: Math.sign(w.x - p.x), y: Math.sign(w.y - p.y), z: Math.sign(w.z - p.z) };
-                    let r;
-                    if (dir.x !== 0 && dir.z !== 0) {
-                        // Diagonal bridging
-                        r = this.builder.bridgeDiagonal(dir, tick);
-                    } else {
-                        r = this.builder.bridge(dir, tick);
-                    }
-                    if (r === "placed" || r === "placed_support") {
-                        this.reason = `Bridging ${dir.x !== 0 && dir.z !== 0 ? "diagonal" : "horizontal"} gap`;
-                        return "running";
-                    } else if (r === "solid") {
-                        // Already solid, continue
-                    } else if (r === "no-support" || r === "hazard_lava") {
-                        // Try alternative support
-                        const altSupport = this.builder.findSupportFor(add(p, dir));
-                        if (altSupport) {
-                            const r2 = this.builder.placeAt(add(p, dir), altSupport.pos, { sneak: true, autoAnchor: true });
-                            if (r2 === "placed") return "running";
-                        }
-                        this.allowBridge = false;
-                        this.replan(tick);
-                        return "running";
-                    } else {
-                        // Can't bridge, replan
-                        this.replan(tick);
-                        return "running";
-                    }
-                } else {
-                    // UNBREAKABLE: Gap requires bridging but no blocks - don't fail permanently, try to mine blocks or find workaround
-                    // Signal need blocks but allow retry - bot will mine dirt/cobble/logs nearby
-                    this.retries++;
-                    if (this.retries <= 2) {
-                        this.terrain.clear();
-                        this.replan(tick);
-                        return "running";
-                    }
-                    // After retries, fail with specific reason that bot's recover can handle by mining blocks
-                    return this.fail("Gap requires bridging but no blocks - need dirt/cobble - will mine nearby blocks");
-                }
-            }
-
-            // Pillar handling
-            if (w.kind === "pillar") {
-                if (this.builder && this.builder.canBuild) {
-                    const r = this.builder.pillar(tick);
-                    if (r === "placed" || r === "jumping") {
-                        this.reason = "Pillaring up";
-                        return "running";
-                    }
-                }
-            }
-
-            // Advanced 3-block sprinting jumps - always sprint for these
-            this.sim.isSprinting = sprint || w.kind === "jump" || w.kind === "sprintjump" || w.kind === "sprintjump3" || w.kind === "sprintjump_up";
-
-            if (w.kind === "step" || w.kind === "jump" || w.kind === "sprintjump" || w.kind === "sprintjump3" || w.kind === "sprintjump_up" || w.kind === "jumpup") {
-                if (!this.sim.isOnGround) {
-                    this.lastIssued = -1;
-                    return "running";
-                }
-                this.sim.jump();
-            }
-
-            if (w.kind === "bigdrop") {
-                // For big drops, don't sprint
-                this.sim.isSprinting = false;
-            }
-            // For 3-block jumps, ensure extra sprint speed
-            if (w.kind === "sprintjump3" || w.kind === "sprintjump_up") {
-                this.sim.isSprinting = true;
-            }
-
-            try {
-                this.sim.moveToLocation(this.host.relative(center(w)), {
-                    speed: this.fast || this.urgent ? 1 : 0.65,
-                    faceTarget: true,
-                });
-            } catch {
-                return this.fail("Move rejected by engine.");
-            }
+            this.issueWaypoint(w, tick);
         }
         return "running";
+    }
+
+    /**
+     * How long the bot has been physically unable to move while a route is
+     * active. The state machine uses this to hand control to the "unstuck"
+     * owner: being *asked* to walk somewhere and not moving is different from
+     * a route that simply takes a long time.
+     */
+    get noProgressTicks() {
+        if (this.stillSince === undefined) return 0;
+        return Math.max(0, (this.tick ?? 0) - this.stillSince);
+    }
+
+    /** Issue the movement for one waypoint (called once per waypoint). */
+    issueWaypoint(w, tick) {
+        // Smoothing: combine collinear walks
+        const first = this.waypoint;
+        const previous = first > 0 ? this.path[first - 1] : floor(this.sim.location);
+        const alongX = previous.z === w.z && previous.x !== w.x;
+        let end = this.waypoint;
+        const limit = Math.min(this.path.length, end + 6);
+        if (w.kind === "walk" || w.kind === "diagonal" || w.kind === "swim") {
+            for (let j = end + 1; j < limit; j++) {
+                const q = this.path[j];
+                if (q.kind !== w.kind || q.y !== w.y || (alongX ? q.z !== w.z : q.x !== w.x) || !this.terrain.safe(q)) break;
+                end = j;
+            }
+        }
+        if (end > this.waypoint) {
+            this.waypoint = end;
+            w = this.path[end];
+        }
+        this.corridor = this.path.slice(first, end + 1);
+        this.lastIssued = this.waypoint;
+
+        const hunger = this.sim.getComponent("minecraft:player.hunger")?.currentValue ?? 20;
+        const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
+        const canSprint = hunger > 6 && hp > 6;
+        const sprint = canSprint && (this.urgent || (this.fast && horizontal(this.sim.location, w) > 1));
+
+        // Special movement kinds first.
+        if (w.kind === "bridge_sprintjump3" || w.kind === "bridge_bridge_sprintjump3") {
+            this.placeAndJump(w, tick);
+            return;
+        }
+        if (w.kind === "bridge") {
+            this.bridgeStep(w, tick);
+            return;
+        }
+        if (w.kind === "pillar") {
+            if (this.builder && this.builder.canBuild) {
+                const r = this.builder.pillar(tick);
+                if (r === "placed" || r === "jumping") {
+                    this.reason = "Pillaring up";
+                    return;
+                }
+                if (r === "no-support" || r === "timeout") {
+                    this.builder.resetPillar?.();
+                    this.lastIssued = -1;
+                }
+            }
+            this.reason = "Cannot pillar: no blocks or no support";
+            return;
+        }
+
+        const jumping = w.kind === "step" || w.kind === "jump" || w.kind === "sprintjump" ||
+            w.kind === "sprintjump3" || w.kind === "sprintjump_up" || w.kind === "jumpup";
+        // Sprint for jumps: vanilla needs sprint velocity for 2-3 block gaps.
+        try {
+            this.sim.isSprinting = sprint || w.kind === "jump" || w.kind === "sprintjump" ||
+                w.kind === "sprintjump3" || w.kind === "sprintjump_up";
+        } catch { /* ignore */ }
+        if (jumping) {
+            if (!this.sim.isOnGround) {
+                this.lastIssued = -1;
+                return;
+            }
+            try { this.sim.jump(); } catch { /* ignore */ }
+        }
+        if (w.kind === "bigdrop") {
+            try { this.sim.isSprinting = false; } catch { /* ignore */ }
+        }
+        try {
+            this.sim.moveToLocation(this.host.relative(center(w)), {
+                speed: this.fast || this.urgent ? 1 : 0.65,
+                faceTarget: true,
+            });
+        } catch {
+            this.lastIssued = -1;
+            this.reason = "Move rejected by engine";
+        }
+    }
+
+    /** Place an intermediate block, then sprint-jump the remaining gap. */
+    placeAndJump(w, tick) {
+        if (!this.builder || !this.builder.canBuild) {
+            this.lastIssued = -1;
+            this.reason = "Need blocks to bridge a large gap";
+            return;
+        }
+        const placePos = w.placeAt;
+        if (placePos && !this.terrain.solid(placePos)) {
+            const belowPlace = add(placePos, { x: 0, y: -1, z: 0 });
+            const support = this.builder.findSupportFor(placePos) || this.builder.findSupportFor(belowPlace);
+            const anchor = support ? support.pos : belowPlace;
+            const r = this.builder.placeAt(placePos, anchor, { sneak: true, autoAnchor: true, allowFalling: false });
+            if (r === "placed" || r === "placed_support") {
+                this.reason = `Large gap ${w.gap}: placed a block at ${placePos.x},${placePos.y},${placePos.z}`;
+                this.lastIssued = -1;
+                return;
+            }
+            if (r === "no-block") {
+                this.lastIssued = -1;
+                this.reason = "Need blocks for the large gap";
+                return;
+            }
+        }
+        if (this.terrain.solid(placePos) || this.terrain.safe(placePos)) {
+            if (w.kind === "bridge_bridge_sprintjump3" && w.placeAt2) {
+                const placePos2 = w.placeAt2;
+                if (!this.terrain.solid(placePos2)) {
+                    const below2 = add(placePos2, { x: 0, y: -1, z: 0 });
+                    const support2 = this.builder.findSupportFor(placePos2) || this.builder.findSupportFor(below2);
+                    const anchor2 = support2 ? support2.pos : below2;
+                    const r2 = this.builder.placeAt(placePos2, anchor2, { sneak: true, autoAnchor: true });
+                    if (r2 === "placed") {
+                        this.reason = `Large gap ${w.gap}: placed the second block at ${placePos2.x},${placePos2.y},${placePos2.z}`;
+                        this.lastIssued = -1;
+                        return;
+                    }
+                }
+            }
+            try { this.sim.isSprinting = true; } catch { /* ignore */ }
+            try { if (this.sim.isOnGround) this.sim.jump(); } catch { /* ignore */ }
+            try {
+                this.sim.moveToLocation(this.host.relative(center(w)), { speed: 1, faceTarget: true });
+                this.reason = `Large gap ${w.gap}: sprint jump to ${w.x},${w.y},${w.z}`;
+            } catch {
+                this.lastIssued = -1;
+            }
+            return;
+        }
+        this.lastIssued = -1;
+    }
+
+    /** Place one block for a bridging waypoint. */
+    bridgeStep(w, tick) {
+        if (!this.builder || !this.builder.canBuild) {
+            this.lastIssued = -1;
+            this.reason = "Need blocks to bridge";
+            return;
+        }
+        const p = floor(this.sim.location);
+        const dir = { x: Math.sign(w.x - p.x), y: Math.sign(w.y - p.y), z: Math.sign(w.z - p.z) };
+        let r;
+        try {
+            r = dir.x !== 0 && dir.z !== 0 ? this.builder.bridgeDiagonal(dir, tick) : this.builder.bridge(dir, tick);
+        } catch {
+            r = "rejected";
+        }
+        if (r === "placed" || r === "placed_support") {
+            this.reason = `Bridging ${dir.x !== 0 && dir.z !== 0 ? "diagonal" : "horizontal"} gap`;
+            return;
+        }
+        if (r === "solid") {
+            // Already supported: walk the waypoint.
+            try { this.sim.moveToLocation(this.host.relative(center(w)), { faceTarget: true }); } catch { /* ignore */ }
+            return;
+        }
+        // Placement failed: drop the bridge plan and re-plan without bridging so
+        // the search finds a land route instead of hammering one gap forever.
+        this.allowBridge = false;
+        this.lastIssued = -1;
+        this.reason = `Bridge rejected (${r}); looking for a land route`;
+        this.search = undefined;
+        this.path = [];
+        this.waypoint = 0;
     }
 }

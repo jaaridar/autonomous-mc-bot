@@ -49,6 +49,8 @@ export class DeepMiner {
         this.branchIndex = 0;
         this.veins = [];
         this.currentVein = undefined;
+        this.dugAtLastOre = 0;
+        this.needApproach = undefined;
         this.veinKey = undefined;
         this.veinSince = 0;
         this.veinDugAt = -1;
@@ -73,13 +75,27 @@ export class DeepMiner {
         return true;
     }
 
+    /**
+     * Vanilla's block-interaction reach is 4.5 blocks from the *eye* to the
+     * block face (further in creative). 5.5 was therefore a silent no-op: the
+     * swing started, the server rejected it, and the branch miner waited the
+     * full 200-tick timeout before retrying - the "stuck in a shaft, mining
+     * nothing" report. Test the real reach and approach first when out of range.
+     */
+    static get REACH() { return 4.5; }
+
     // FRONT BLOCK FIX: direct break method that never fails on front block
     tryDirectBreak(cell, tick) {
         const bot = this.bot;
         const head = bot.sim.getHeadLocation();
         const at = add(cell, { x: 0.5, y: 0.5, z: 0.5 });
         const dist = distance(head, at);
-        if (dist > 5.5) return false; // too far, need approach
+        if (dist > DeepMiner.REACH) {
+            // Step into range instead of returning "too far" every tick.
+            this.needApproach = cell;
+            return false;
+        }
+        this.needApproach = undefined;
 
         const b = bot.terrain.block(cell);
         if (!b || b.isAir) return true; // already open
@@ -191,6 +207,18 @@ export class DeepMiner {
         if (this.tryDirectBreak(cell, tick)) {
             this.dig = { cell, since: tick };
             return "digging";
+        }
+
+        // Out of reach: walk to it instead of retrying the swing. Returning
+        // "blocked" here every tick is what stalled the shaft at 5.5 blocks.
+        if (this.needApproach) {
+            const near = this.needApproach;
+            this.needApproach = undefined;
+            if (!this.moving) {
+                this.goTo(near, tick);
+                this.reason = `Approaching ${near.x},${near.y},${near.z} - out of reach`;
+                return "working";
+            }
         }
 
         // Fallback to digCell
@@ -339,9 +367,13 @@ export class DeepMiner {
         if (this.moving) {
             return this.settle() === "arrived" ? "stepped" : "working";
         }
-        if (this.dug >= STEP_LIMIT) {
+        // The step budget exists to stop an endless branch, not to abandon a
+        // productive one. It now counts steps since the last ore found, so a
+        // miner that keeps hitting veins keeps digging and one that finds
+        // nothing after 400 steps still gives up cleanly.
+        if (this.dug - (this.dugAtLastOre ?? 0) >= STEP_LIMIT) {
             this.wantsOut = true;
-            this.reason = `Branch limit ${this.dug}; ascending - advanced`;
+            this.reason = `Branch limit ${this.dug} steps without ore; ascending`;
             return "exhausted";
         }
         if (this.turns >= 4) {
@@ -362,6 +394,7 @@ export class DeepMiner {
                 if (clusters.length && clusters[0].length >= 1) {
                     this.veins = clusters;
                     this.currentVein = clusters[0];
+                    this.dugAtLastOre = this.dug; // a productive branch may keep going
                     this.phase = "vein";
                     this.reason = `Found vein ${clusters[0].length} blocks - advanced mining`;
                     return "vein-found";

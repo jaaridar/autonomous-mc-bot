@@ -95,8 +95,19 @@ export class Hands {
             if (options.sneak)
                 this.sim.isSneaking = true;
             this.sim.lookAtBlock(this.host.relative(center(anchor)));
+            const type = this.bag.get(slot)?.typeId;
             const ok = this.sim.useItemInSlotOnBlock(selected, this.host.relative(center(anchor)), face);
             this.bag.invalidate?.();
+            if (ok) {
+                // The cell we filled is on `face` of the anchor. Telling the
+                // terrain avoids the 8-20 tick window where the pathfinder still
+                // believes the bot is standing next to an open cell (and walks
+                // into the block it just placed - the classic "bridge, then
+                // stuck" report).
+                const cell = add(anchor, face);
+                if (type) this.terrain.notePlaced?.(cell, type);
+                else this.terrain.invalidate?.(cell);
+            }
             return ok ? "placed" : "rejected";
         }
         catch {
