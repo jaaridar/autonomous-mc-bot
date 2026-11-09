@@ -486,6 +486,20 @@ export class Navigator {
             const result = this.search.step(this.fast ? 120 : 50);
             this.expansions += this.search.expanded - before;
             if (result === "searching") return "running";
+            if (result === "budget") {
+                // Out of nodes is NOT "there is no route": the horizon was just
+                // too small for this goal. Widen once (cheap, one replan) and
+                // only then hand it to the blocked ladder. Treating it as a
+                // hard failure is part of why long trips in caves gave up.
+                if (!this.wide) {
+                    this.wide = true;
+                    this.search = undefined;
+                    this.replan(tick);
+                    this.reason = "Search horizon too small; widening once.";
+                    return "running";
+                }
+                return this.blocked("Path search exhausted; still no route.", tick);
+            }
             if (result !== "found" && result !== "partial") {
                 return this.blocked(`Path ${result}; no safe route.`, tick);
             }

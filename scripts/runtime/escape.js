@@ -15,7 +15,7 @@
  *    escalates instead of repeating the same failed attempt forever.
  */
 import { Direction } from "@minecraft/server";
-import { add, floor, center, distance, key, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
+import { add, floor, center, distance, key, horizontal, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
 import { diggable, HAZARDS, RANGED } from "../core/policy.js";
 import { Hands } from "./hands.js";
 
@@ -154,6 +154,30 @@ export class Escaper {
 
     /* ------------------------------- water -------------------------------- */
 
+    /**
+     * Topmost water cell in the column above the feet - i.e. where the body
+     * floats. Swimming is "move along this height", never "move to y+0.4".
+     */
+    surfaceY(p) {
+        // Walk DOWN from just above the head until the first water cell, then
+        // up to the last contiguous water cell. Scanning upward from the body
+        // is self-defeating: every tick the body is moved a bit higher, the
+        // scan starts higher, and "the surface" climbs with it (the levitation
+        // bug). Downward from the head is stable for any body inside the water.
+        const typeAt = (y) => {
+            const c = this.terrain.block({ x: p.x, y, z: p.z });
+            const t = String(c?.typeId ?? c?.type ?? "");
+            return { water: /water/.test(t) && !/lava/.test(t), liquid: !!c?.isLiquid };
+        };
+        let top = null;
+        for (let y = p.y + 8; y >= p.y - 3; y--) {
+            const t = typeAt(y);
+            if (t.water) { if (top === null) top = y; }
+            else if (top !== null) break;
+        }
+        return top;
+    }
+
     findBoat(radius = 8) {
         try { return this.sim.dimension.getEntities({ type: "minecraft:boat", location: this.sim.location, maxDistance: radius })[0]; } catch { return undefined; }
     }
@@ -246,9 +270,16 @@ export class Escaper {
             if (this.drowning === undefined) this.drowning = tick;
             // Surface: jump is the vanilla "swim up" control.
             try { sim.jump(); } catch { /* ignore */ }
-            try { sim.lookAtLocation(this.host.relative({ x: sim.location.x, y: sim.location.y + 6, z: sim.location.z })); } catch { /* ignore */ }
             const cur = sim.location;
-            try { sim.moveToLocation(this.host.relative({ x: cur.x, y: cur.y + 2, z: cur.z }), { faceTarget: true }); } catch { /* ignore */ }
+            // Aim at the water surface, NOT "two blocks above where I am".
+            // `cur.y + 2` was re-evaluated every tick against a body that had
+            // just been moved up, so a bot in a single water block (or one
+            // whose `headInWater` probe is off by a block) levitated
+            // indefinitely instead of surfacing. Once the target is the surface
+            // row, the climb terminates by construction.
+            const surface = this.surfaceY(p);
+            const aimY = surface !== null && surface !== undefined ? surface + 0.9 : cur.y + 2;
+            try { sim.moveToLocation(this.host.relative({ x: cur.x, y: aimY, z: cur.z }), { faceTarget: true }); } catch { /* ignore */ }
             this.lastReason = "Drowning: surfacing";
             return "running";
         }
@@ -263,26 +294,51 @@ export class Escaper {
         }
         if (shore?.cell) {
             const aim = center(shore.cell);
-            try { sim.moveToLocation(this.host.relative({ x: aim.x, y: Math.max(aim.y, sim.location.y + 0.2), z: aim.z }), { faceTarget: true, speed: 1 }); } catch { /* ignore */ }
+            // Swim *along* the water line to the shore cell. The old aim was
+            // `Math.max(shore.y, currentY + 0.2)`, which added 0.2 to the body
+            // height on every tick: the bot climbed out of the water column
+            // into the air instead of swimming across, and since it never got
+            // wet again it never re-entered the "done" state - it just kept
+            // rising. Aim at the shore's own height, which is what a player
+            // swimming to a bank does.
+            // Aim at the *surface* row (the topmost water cell), i.e. swim on
+            // top of the water like a player. `center(cell)` is +0.5 into the
+            // cell, which is already the water line when the shore is at the
+            // same depth, and stays dry-land height when the bank is higher.
+            const surface = this.surfaceY(p);
+            const y = surface !== null && surface !== undefined ? surface + 0.2 : aim.y;
+            try { sim.moveToLocation(this.host.relative({ x: aim.x, y, z: aim.z }), { faceTarget: true, speed: 1 }); } catch { /* ignore */ }
             if (tick % 10 === 0) { try { sim.jump(); } catch { /* ignore */ } }
             this.lastReason = `Swimming to shore (${Math.round(shore.distance)} blocks)`;
+            // Close enough to step out: hand back so the pathfinder takes over
+            // on dry land instead of swimming through the beach.
+            if (horizontal(center(shore.cell), sim.location) < 1.2) {
+                this.lastReason = "Reached the shore";
+                this.swimming = false;
+                this.reset();
+                return "done";
+            }
             return "running";
         }
-        // No shore in range: head for the goal/owner so we are not paddling in circles.
+        // No shore in range: head for the goal/owner so we are not paddling in
+        // circles. Keep the swim height at the *water surface*, not "current +0.4":
+        // that piled 0.4 onto the body y every tick, so the bot "swam" upward
+        // into the sky instead of across the lake, and never reached land.
         const target = this.bot.owner()?.location ?? this.nav.lastGoal ?? this.bot.home();
         const cur = sim.location;
         if (target) {
             const dx = target.x - cur.x, dz = target.z - cur.z;
             const len = Math.hypot(dx, dz) || 1;
+            const surfaceY = this.surfaceY(p) ?? cur.y;
             try {
                 sim.moveToLocation(this.host.relative({
                     x: cur.x + (dx / len) * 4,
-                    y: cur.y + 0.4,
+                    y: surfaceY,
                     z: cur.z + (dz / len) * 4,
                 }), { faceTarget: true });
             } catch { /* ignore */ }
             if (tick % 8 === 0) { try { sim.jump(); } catch { /* ignore */ } }
-            this.lastReason = "No shore in range: swimming toward safety";
+            this.lastReason = "No shore in range: swimming across toward safety";
             return "running";
         }
         this.lastReason = "Swimming at the surface";
@@ -589,15 +645,28 @@ export class Escaper {
         const sim = this.sim;
         const p = floor(sim.location);
         const foot = add(p, dir), head = add(foot, UP);
+        // A cell we cleared last tick is now open: step into it BEFORE probing
+        // again. Without this the bot keeps clearing the *next* block from the
+        // same standing spot and never advances - it digs a tunnel it never
+        // walks through (the "digs forever, stays stuck" report).
+        if (this.stepInto) {
+            const aim = this.stepInto;
+            this.stepInto = undefined;
+            try { sim.moveToLocation(this.host.relative(center(aim)), { faceTarget: true }); } catch { /* ignore */ }
+            this.lastReason = "Stepping into the cleared tunnel";
+            return "running";
+        }
         const cells = [foot, head].filter((c) => this.terrain.solid(c));
         if (!cells.length) {
+            // The way is open: STEP INTO IT. The old version re-ran
+            // `digCell`/`groundNear` here forever because nothing ever moved
+            // the body into the cell it had just cleared, so the bot dug the
+            // same wall from the same spot until the budget ran out - the
+            // classic "it digs but never escapes" loop.
             const walk = this.terrain.groundNear(foot.x, foot.z, p.y, 4);
-            if (walk && !this.terrain.dangerous(walk)) {
-                try { sim.moveToLocation(this.host.relative(center(walk)), { faceTarget: true }); } catch { /* ignore */ }
-                this.lastReason = "Tunnelling forward";
-                return "running";
-            }
-            return this.giveUp("Tunnel opened but no walkable cell ahead");
+            try { sim.moveToLocation(this.host.relative(center(walk ?? foot)), { faceTarget: true }); } catch { /* ignore */ }
+            this.lastReason = "Stepping into the tunnel";
+            return "running";
         }
         const cell = cells[0];
         const type = this.terrain.block(cell)?.typeId;
@@ -608,8 +677,20 @@ export class Escaper {
         if (rule.tool === "axe") this.bag.tool("axe");
         else if (rule.tool === "shovel") this.bag.tool("shovel");
         const r = this.bot.digCell ? this.bot.digCell(cell, tick) : undefined;
-        if (r === "digging") { this.lastReason = "Tunnelling through " + type; return "running"; }
-        if (r === "open") return "running";
+        if (r === "digging") {
+            // Remember where to go once the swing lands. `digCell` returning
+            // "digging" means the engine accepted the swing, not that the block
+            // is gone yet; the step is attempted next tick and silently no-ops
+            // if the block is still there (moveToLocation simply does not
+            // penetrate a solid block).
+            this.stepInto = foot;
+            this.lastReason = "Tunnelling through " + type;
+            return "running";
+        }
+        // "open" means the swing found it already gone / startable: treat it as
+        // progress and move on next tick instead of waiting for a break that
+        // will never be reported.
+        if (r === "open") { this.lastReason = "Tunnel opening up"; return "running"; }
         if (r === "unreachable") {
             try { sim.moveToLocation(this.host.relative(center(foot)), { faceTarget: true }); } catch { /* ignore */ }
             this.lastReason = "Stepping closer to tunnel";
