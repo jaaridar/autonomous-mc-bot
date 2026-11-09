@@ -111,6 +111,15 @@ vanilla way — by walking over them:
 - Terrain reads are cached; planner is time-sliced (A* steps per tick, not a
   blocking search).
 - The observer sweep is bounded and staggered across ticks.
+- A* routes keep headroom from lava (soft cost on lava-touching cells) and
+  falls are priced by damage with an HP-aware depth limit.
+- A global unstuck watchdog forces a fresh approach after 60 s without
+  progress and stops the task honestly after 120 s — the bot no longer spins
+  in an infinite loop when terrain defeats it.
+- The escape planner ranks every survivable plan instead of refusing walks
+  that don't point at the owner; a carried water bucket is used as an
+  immediate lava clutch.
+- See [docs/BOTTLENECKS.md](docs/BOTTLENECKS.md) for the full audit.
 
 ## Current limits
 

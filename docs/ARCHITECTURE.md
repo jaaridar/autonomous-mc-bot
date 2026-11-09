@@ -32,7 +32,7 @@ If you are adding a feature, find its layer here first.
 
 - `scripts/runtime/` — engine adapters and the brain:
   - `bot.js` — the brain v6: tick order, mode dispatch, task objects, integrates all advanced modules including Nether speedrun world-class: survivalMaster -> quick tool #1 -> death recovery -> food readiness adaptive recalc -> nether director -> village director -> golem director -> food director -> bucket director -> structure loot -> lava pool portal opportunity -> threat eval escape/retreat/eat/combat -> mode dispatch, obstruction clearing, scaffolding, retain important
-  - `navigation.js` — `Navigator`: rolling-horizon A* with parkour + bridging awareness, loop detection, threat avoidance, builder integration
+  - `navigation.js` — `Navigator`: rolling-horizon A* with parkour + bridging awareness, HP-aware drop depth, loop detection, threat avoidance, builder integration
   - `builder.js` — `Builder`: bridging (find support, place with sneak), pillaring (jump-place), scaffolding, torch placement, obstruction clearing, portal frame 4x5 interior 2x3 min 10 full 14
   - `combat.js` — `Combat`: tactical fighting (rush for ranged, retreat for creeper, kite for heavy, group positioning, crit jump, strafe)
   - `looting.js` — `Looting`: scored chest scanning (16 blocks), home avoidance, valuable-first withdraw, village detection via entities
@@ -44,7 +44,7 @@ If you are adding a feature, find its layer here first.
   - `drops.js` — loose-drop collection with entity tracking
   - `scouting.js` — village detection + opportunistic foraging
   - `world.js` — `Terrain` with enhanced scans (storeNear 14 blocks, scanOres, findObstructions, obstructionsBelow, safeToMineEx), `BlockScan`
-  - `escape.js` — `Escaper`: water/lava/trapped handling, probes 4 dirs goal-first, combat_escape for 8+ mobs bombNear ranged 6+ enderman low health
+  - `escape.js` — `Escaper`: water/lava/trapped handling, water-bucket lava clutch, ranks every survivable plan (diagonals probed) instead of refusing non-goalward walks, movement-aware watchdog, combat_escape for 8+ mobs bombNear ranged 6+ enderman low health
   - `survival.js` — `SurvivalDirector`: gear ladder + food
   - `foraging.js` — animal hunting
   - `inventory.js` / `hands.js` / `equipment.js` / `furnace.js` / `host.js` / `memory.js` / `exploration.js`
