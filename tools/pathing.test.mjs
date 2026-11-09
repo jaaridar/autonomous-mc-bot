@@ -28,6 +28,7 @@ function makeWorld({ size = 40, height = () => 0, fill = [] }) {
         const b = H.get(`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`);
         if (!b) return { passable: true, support: false, hazard: false, type: "minecraft:air" };
         if (b.hazard) return { passable: false, support: true, hazard: true, type: b.type ?? "minecraft:lava" };
+        if (b.liquid) return { passable: true, support: false, hazard: true, type: b.type ?? "minecraft:water" };
         return { passable: false, support: true, hazard: false, type: b.type ?? "minecraft:stone" };
     };
 }
@@ -78,6 +79,33 @@ check("tunnel outranks sideways walk", ranked.findIndex((p) => p.kind === "tunne
 const onlySideways = rankEscapePlans([{ kind: "walk", preferred: false }]);
 check("sideways walk is still offered when it is the only way out", onlySideways.length === 1 && onlySideways[0].kind === "walk");
 check("empty input does not throw", rankEscapePlans(undefined).length === 0);
+
+
+// --- wading: shallow water is crossable, lava never is ---
+{
+    // 1-deep water ditch 2 wide at x=4..5 (water at y=0 above solid floor? no: ditch = floor at y=-1? model: ground y=0, water cells y=1? we need feet-in-water at y=1 with floor at y=0.
+    // Simplest: raise terrain to height 0 and put water at y=1 over it? No: wading means feet cell is water, floor below solid.
+    // Build: ground at y<=0. For x in 4..5, water replaces the y=1..2 space: feet cell (x,1,z) = water hazard, floor (x,0,z) = solid.
+    // Implement by marking water cells via fill with liquid flag.
+    const water = [];
+    for (let z = -6; z <= 6; z++) for (const x of [4, 5]) water.push({ x, y: 1, z, liquid: true, type: "minecraft:water" });
+    const w = makeWorld({ height: () => 0, fill: water });
+    const s = search(w, { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 });
+    check("shallow stream: route found by wading", s.status === "found");
+    check("shallow stream: route contains wade waypoints", s.path.some((q) => q.kind === "wade"));
+
+    // Same ditch filled with LAVA instead: must never step in it
+    const lava2 = [];
+    for (let z = -6; z <= 6; z++) for (const x of [4, 5]) lava2.push({ x, y: 1, z, hazard: true, type: "minecraft:lava" });
+    const s2 = search(makeWorld({ height: () => 0, fill: lava2 }), { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 }, { allowPartial: true });
+    check("lava ditch: no wade into lava (found around or honest partial)", s2.path.every((q) => !(q.x >= 4 && q.x <= 5 && q.z >= -6 && q.z <= 6 && q.y === 1)));
+
+    // Deep water (no floor): drain the ditch to bedrock -> wading must not be planned
+    const deep = [];
+    for (const z of [-4, 4]) for (let x = 4; x <= 5; x++) for (let y = 1; y <= 3; y++) deep.push({ x, y, z, liquid: true, type: "minecraft:water" });
+    const s3 = search(makeWorld({ height: () => 0, fill: deep }), { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 }, { allowPartial: true });
+    check("deep water with floor still wadeable only where floor exists", s3.status !== "found" || s3.path.every((q) => !(q.x >= 4 && q.x <= 5 && (q.z <= -4 || q.z >= 4) && q.y > 0)));
+}
 
 console.log(`\npathing.test: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

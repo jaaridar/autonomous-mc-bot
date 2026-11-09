@@ -302,8 +302,8 @@ export class Navigator {
         let waypointSafe = true, corridorBad = false;
         if (tick - this.lastFreshCheck >= 4 || this.lastIssued !== this.waypoint) {
             this.lastFreshCheck = tick;
-            waypointSafe = w.kind === "bridge" || this.terrain.freshSafe(w);
-            corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p !== w && !this.terrain.freshSafe(p));
+            waypointSafe = w.kind === "bridge" || w.kind === "wade" || this.terrain.freshSafe(w);
+            corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p.kind !== "wade" && p !== w && !this.terrain.freshSafe(p));
         }
         if (tick - this.lastProgress > 50 || !waypointSafe || corridorBad) {
             // Try to find obstruction that blocks entire body

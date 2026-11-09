@@ -63,7 +63,7 @@ const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${q.kind
 
 // ------------------------------------------------- A* neighbour equivalence
 {
-    let identical = 0, subset = 0, total = 0, bogusRemoved = 0;
+    let identical = 0, subset = 0, total = 0, bogusRemoved = 0, wading = 0, wadeValid = 0;
     for (let seed = 1; seed <= 60; seed++) {
         const w = randomWorld(seed);
         for (const allowBridge of [false, true]) {
@@ -72,7 +72,12 @@ const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${q.kind
             const b = new LegacySearch((p) => w(p.x, p.y, p.z), { x: 0, y: 1, z: 0 }, { x: 20, y: 1, z: 0 }, 0.7, true, 2000, 32, false, [], opts);
             for (let i = 0; i < 40; i++) {
                 const p = { x: (i * 7) % 13 - 6, y: (i % 3), z: (i * 5) % 11 - 5 };
-                const n = sig(a.neighbors(p)), o = sig(b.neighbors(p));
+                const raw = a.neighbors(p), rawB = b.neighbors(p);
+                // Intentional divergence (v1.2.8): 'wade' candidates let the search
+                // cross shallow water instead of refusing every stream. They are
+                // filtered for equivalence, then verified to be water-only.
+                for (const q of raw) if (q.kind === "wade") { wading++; if (w(q.x, q.y, q.z) === WATER) wadeValid++; }
+                const n = sig(raw.filter((q) => q.kind !== "wade")), o = sig(rawB);
                 total++;
                 if (!allowBridge) { if (n.join("|") === o.join("|")) identical++; }
                 else {
@@ -83,9 +88,10 @@ const sig = (list) => [...new Set(list.map((q) => `${q.x},${q.y},${q.z},${q.kind
             }
         }
     }
-    ok(identical === total / 2, `A*: neighbours identical to v1.2.4 without bridging (${identical}/${total / 2} cells)`);
-    ok(subset === total / 2, `A*: with bridging, neighbours are a subset of v1.2.4 (${subset}/${total / 2})`);
-    console.log(`     (removed ${bogusRemoved} bogus/duplicate bridge+pillar candidates)`);
+    ok(identical === total / 2, `A*: neighbours identical to v1.2.4 without bridging, wade candidates aside (${identical}/${total / 2} cells)`);
+    ok(subset === total / 2, `A*: with bridging, neighbours are a subset of v1.2.4, wade aside (${subset}/${total / 2})`);
+    ok(wading === wadeValid, `A*: every wade candidate targets shallow water (${wading})`);
+    console.log(`     (removed ${bogusRemoved} bogus/duplicate bridge+pillar candidates; ${wading} new wade candidates)`);
 }
 {
     // Flat ground: the old search proposed place-block-and-jump moves onto

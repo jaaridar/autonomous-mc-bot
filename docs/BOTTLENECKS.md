@@ -80,6 +80,16 @@ broader-first at equal cost; block reads unchanged or better.
 `step`/`drop`/`bigdrop` were missing from `KIND_COST` (silently 1.5/∞);
 explicit costs (2 / 1.5 / 3.5) and drop-depth pricing fix the cost model.
 
+### 2.5b Shallow water is a hard wall — `core/navigation.js`
+Every water cell was unwalkable, so a 1-block stream forced endless detours
+or an honest-but-useless "blocked". The search now plans **wade** moves
+(shallow water: solid floor, head cell free, cost 4). Deep water (no floor)
+and lava are never wadeable; going around is preferred when the detour beats
+wading (cost 4/cell), wading is taken when it doesn't. The executor treats
+wade waypoints as ordinary non-sprint waypoints and the corridor re-check is
+exempt for them. The perf equivalence gate now filters wade candidates and
+instead asserts every wade candidate targets a water cell (350/350).
+
 ### 2.6 Dead arbiter code — `core/arbiter.js`
 The follow-distance expression `bot.terrain ? bot.terrain.distance ? 0 : 0 : 0`
 always produced 0. Removed.
@@ -135,6 +145,15 @@ check is the only term that touches the hot path.
    design, but easy to misuse; the watchdog no longer depends on it.
 
 ## 5. What was NOT changed (and why)
+
+- **Bridging over lava is deliberately refused** by the planner, probe and
+  builder (`hazard_lava`). Blocks over lava are survivable only with
+  non-flammable blocks placed while sneaking; a bot can be scooped into the
+  lava mid-placement, and an in-game regression cannot be ruled out offline.
+  The honest answer — walk around, clutch with water, or stop — is preferred
+  to a likely death. If this is ever enabled, it must be gated on
+  non-flammable inventory, sneak placement, 1-2 block width, and a lava
+  bucket in reserve.
 
 - Bedrock physics: no pathfinder can cross lava safely without items; the
   bot now routes around lava and survives contact via water clutch when it

@@ -111,8 +111,9 @@ vanilla way — by walking over them:
 - Terrain reads are cached; planner is time-sliced (A* steps per tick, not a
   blocking search).
 - The observer sweep is bounded and staggered across ticks.
-- A* routes keep headroom from lava (soft cost on lava-touching cells) and
-  falls are priced by damage with an HP-aware depth limit.
+- A* routes keep headroom from lava (soft cost on lava-touching cells),
+  plan shallow-water wading when a detour is worse, and price falls by
+  damage with an HP-aware depth limit.
 - A global unstuck watchdog forces a fresh approach after 60 s without
   progress and stops the task honestly after 120 s — the bot no longer spins
   in an infinite loop when terrain defeats it.

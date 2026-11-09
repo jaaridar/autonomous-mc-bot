@@ -10,7 +10,7 @@ If you are adding a feature, find its layer here first.
   - `policy.js` — MINE table, hazards, hostiles, food
   - `recipes.js` — crafting, smelting dependencies
   - `ores.js` — ore Y-levels, bulk detection
-  - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, big drops, bridge cost)
+  - `navigation.js` — A* search with advanced parkour (1-gap, 2-gap sprint, jump-up, HP-aware big drops, shallow-water wading, lava-aware cost, bridge cost)
   - `blocks.js` — exhaustive Bedrock block taxonomy (passable, solid, falling, hazard, climbable, value scoring, obstruction detection)
   - `combat.js` — mob stats, threat scoring, tactics (kite/rush/retreat/pillar), strafe, crit windows
   - `loot.js` — chest loot scoring, valuable detection, junk filtering, upgrade logic

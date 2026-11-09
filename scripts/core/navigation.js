@@ -58,7 +58,7 @@ class Heap {
 }
 
 const KIND_COST = {
-    walk: 1, step: 2, drop: 1.5, jump: 3.5, sprintjump: 5, sprintjump3: 7, sprintjump_up: 8,
+    walk: 1, step: 2, drop: 1.5, wade: 4, jump: 3.5, sprintjump: 5, sprintjump3: 7, sprintjump_up: 8,
     bridge_sprintjump3: 10, bridge_bridge_sprintjump3: 14, jumpup: 3,
     bridge: 8, pillar: 6, bigdrop: 3,
 };
@@ -141,6 +141,19 @@ export class PathSearch {
         const c = this.rd(x, y, z);
         return !!c?.support && !c.hazard;
     }
+    /**
+     * Wadeable: shallow water over solid floor with the head cell free of
+     * hazards. Lets the bot cross streams/puddles instead of treating them
+     * as hard walls. Deep water (no floor) and lava are NEVER wadeable.
+     */
+    wadeable(x, y, z) {
+        const a = this.rd(x, y, z);
+        if (!a?.type || !WATER.test(a.type)) return false;
+        const b = this.rd(x, y + 1, z);
+        if (b?.hazard) return false;
+        const c = this.rd(x, y - 1, z);
+        return !!c?.support && !c.hazard;
+    }
     /** True when any cardinal neighbour of the feet/head/support cell is lava. */
     lavaAdjacent(x, y, z) {
         for (const d of CARDINAL) {
@@ -180,6 +193,10 @@ export class PathSearch {
             // Normal walk
             if (qStand) {
                 push(qx, py, qz, "walk");
+            }
+            // Wade through shallow water (slow, safe: solid floor, no hazard over head)
+            else if (this.wadeable(qx, py, qz)) {
+                push(qx, py, qz, "wade");
             }
             // Step up 1
             else if (this.stand(qx, py + 1, qz) && headClear) {
