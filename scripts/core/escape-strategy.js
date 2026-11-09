@@ -26,6 +26,26 @@ export const THREAT_PROFILES = {
     "minecraft:wither": { type: "boss", damage: 8, range: 20, speed: 0.3, fear: 10, flee: true, cover: true, groupFear: 2.0 },
 };
 
+/**
+ * Order escape plans for execution: dead plans are dropped; tunnels, bridges
+ * and climbs outrank plain walks; goal-committed walks outrank sideways ones -
+ * but a sideways walk is NOT discarded (the old runtime hard-skipped those and
+ * could report "no way out" while a clear exit stood open).
+ * plans: [{ kind: "walk"|"drop"|"tunnel"|"bridge"|"climb", preferred: boolean, why? }]
+ */
+export function rankEscapePlans(plans) {
+    return (Array.isArray(plans) ? plans : [])
+        .filter((p) => p && p.kind && p.kind !== "dead")
+        .map((p) => {
+            let score = p.preferred ? 30 : 10;
+            if (p.kind === "tunnel") score += 20;
+            else if (p.kind === "bridge") score += 15;
+            else if (p.kind === "climb") score += 10;
+            return { ...p, score };
+        })
+        .sort((a, b) => b.score - a.score);
+}
+
 export function getProfile(typeId) {
     return THREAT_PROFILES[typeId] ?? { type: "melee", damage: 2, range: 1.5, speed: 0.23, fear: 3, kite: true, groupFear: 0.4 };
 }

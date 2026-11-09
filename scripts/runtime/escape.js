@@ -6,7 +6,7 @@
 import { Direction } from "@minecraft/server";
 import { add, floor, center, distance, key, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
 import { diggable, HAZARDS, RANGED, EXPLOSIVE } from "../core/policy.js";
-import { getProfile, assess, bunkerPlan, chooseCoverDirection } from "../core/escape-strategy.js";
+import { getProfile, assess, bunkerPlan, chooseCoverDirection, rankEscapePlans } from "../core/escape-strategy.js";
 import { getMobStat } from "../core/combat.js";
 import { Hands } from "./hands.js";
 
@@ -929,7 +929,7 @@ export class Escaper {
         // taken before giving up - the old code hard-skipped walks that did
         // not point at the owner and could declare "no way out" while a
         // clear one-block sideways exit stood open.
-        const viable = [];
+        const plans = [];
         for (const dir of this.candidateDirs()) {
             const plan = this.probe(dir, p);
             if (plan.kind === "dead") {
@@ -940,15 +940,9 @@ export class Escaper {
                 continue;
             }
             const committed = this.escapeDir && this.escapeDir.x === dir.x && this.escapeDir.z === dir.z;
-            const preferredDir = committed || goalward(dir);
-            let score = preferredDir ? 30 : 10;
-            if (plan.kind === "tunnel") score += 20;
-            else if (plan.kind === "bridge") score += 15;
-            else if (plan.kind === "climb") score += 10;
-            viable.push({ dir, plan, score });
+            plans.push({ dir, plan, kind: plan.kind, preferred: committed || goalward(dir) });
         }
-        viable.sort((a, b) => b.score - a.score);
-        for (const { dir, plan } of viable) {
+        for (const { dir, plan } of rankEscapePlans(plans)) {
             this.escapeDir = dir;
             if (plan.kind === "tunnel") {
                 const r = this.tunnel(dir, tick);
