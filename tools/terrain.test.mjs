@@ -70,6 +70,43 @@ function lethalOn(w, path) {
 
 /* -------------------------------------------------------------- scenarios --- */
 
+// 0. REGRESSION: the runtime world shape.
+//
+// `Terrain.read(p)` takes ONE point and returns a `Cell`. The danger model used
+// to call `world.block(x, y, z)` unconditionally, which on a Terrain returns the
+// block at `undefined` - i.e. air. Every cell then looked like a 24-deep hole,
+// every cell scored `lethal`, and PathSearch found no legal neighbour: "Path
+// unreachable; no safe route" on flat open ground, permanently. The unit
+// fixtures all used the positional form, so nothing caught it.
+{
+    // Mirror the real runtime `Cell`: it exposes `support` (a getter for
+    // isSolid), not just `isSolid`, and `stand()` reads `support`.
+    const cell = (t, solid) => ({ type: t, isAir: !solid, passable: !solid, isSolid: solid, support: solid, isLiquid: false, hazard: false });
+    const AIR = cell("minecraft:air", false), STONE = cell("minecraft:stone", true);
+    const terrainish = {
+        read: (p) => (p.y <= 0 ? STONE : AIR),
+        block: (p) => (p.y <= 0 ? STONE : AIR),   // POINT form, like Terrain
+        reads: () => 0,
+    };
+    const d = cellDanger(terrainish, { x: 3, y: 1, z: 0 }, [], { hp: 20 });
+    ok(d.parts.fall === 0 && !d.lethal,
+        `terrain: a flat point-form world is not a lethal fall (score ${d.score})`);
+
+    // The same world WITHOUT a `read` method: only `block(p)`, point form.
+    // This is the branch that broke: called as block(x, y, z) it returns the
+    // block at `undefined` - air - for every cell.
+    const blockOnly = { block: (p) => (p?.y <= 0 ? STONE : AIR) };
+    const d2 = cellDanger(blockOnly, { x: 3, y: 1, z: 0 }, [], { hp: 20 });
+    ok(d2.parts.fall === 0 && !d2.lethal,
+        `terrain: point-form block() alone is not a lethal fall (score ${d2.score})`);
+
+    const s = search(terrainish, { x: 0, y: 1, z: 0 }, { x: 12, y: 1, z: 0 });
+    ok(s.status === "found" && s.path.length > 6,
+        `terrain: a path exists across flat point-form ground (${s.status}, ${s.path.length} nodes)`);
+    ok(lethalOn(terrainish, s.path).length === 0, "terrain: none of those nodes is lethal");
+}
+
+
 // 1. flat ground: a straight-ish route, no detour.
 {
     const w = world((x, y, z) => (y <= 0 ? STONE : AIR));

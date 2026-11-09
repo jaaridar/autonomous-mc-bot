@@ -114,7 +114,12 @@ export function chooseOwner(s, prev, tick = 0, job = null) {
     }
 
     /* --------------------------------- eat --------------------------------- */
-    if (s.hasFood && hunger <= 17) {
+    // Eating is only "safe" when the bot is not imminently going to die from
+    // something other than hunger. It used to check only for mobs, so a bot
+    // standing in lava or with its head under water would sit and eat while it
+    // burned to death - and EAT outranked ESCAPE in that case.
+    const grounded = !s.onLava && !s.inLava && !s.headInWater && !s.trapped && !s.suffocating;
+    if (s.hasFood && hunger <= 17 && grounded) {
         const starving = hunger <= 6;
         const safeToEat = threats === 0 || closest > 10 || starving;
         if (safeToEat) put(OWNERS.EAT, starving ? 90 : 55 + (17 - hunger), `hunger ${hunger}`);

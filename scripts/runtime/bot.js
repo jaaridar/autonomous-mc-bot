@@ -242,7 +242,10 @@ export class Bot {
      *      unwinnable goal.
      */
     unstuck(tick) {
-        const st = (this._unstuck ??= { rung: 0, since: 0, lastRound: 0 });
+        // A fresh round every 200 ticks is the ONLY reset: rung 4 returns false
+        // (control goes back to the mission) instead of restarting the ladder,
+        // otherwise rungs 1-4 repeated forever.
+        const st = (this._unstuck ??= { rung: 0, since: 0, lastRound: 0, waited: 0 });
         if (tick - st.lastRound > 200) { st.rung = 0; st.lastRound = tick; }
         if (!st.since) st.since = tick;
         const p = floor(this.sim.location);
@@ -264,12 +267,17 @@ export class Bot {
             return true;
         }
 
-        // Rung 2: physical shake - jump, sneak-step, stop.
+        // Rung 2: physical shake - jump and step sideways at the SAME height.
+        // Emitting an absolute position here is dangerous: `center(add(p, d))`
+        // carries `p.y`, and if the body has already been nudged up by a jump
+        // the next call carries the higher y again - one block per lap, forever
+        // (the bot levitated to y=225 this way).
         if (st.rung === 1) {
             st.rung = 2;
             try { this.sim.isSneaking = false; this.sim.jump(); } catch (_e) { this.fault(_e); }
             const d = COMPASS[(tick / 5 | 0) % COMPASS.length];
-            try { this.sim.moveToLocation(this.host.relative(center(add(p, d))), { faceTarget: false }); } catch (_e) { this.fault(_e); }
+            const side = floor(this.sim.location);
+            try { this.sim.moveToLocation(this.host.relative(center({ x: side.x + d.x, y: side.y, z: side.z + d.z })), { faceTarget: false }); } catch (_e) { this.fault(_e); }
             this.reason = "Unstuck: shaking loose (jump + step).";
             return true;
         }
@@ -279,13 +287,26 @@ export class Bot {
             st.rung = 3;
             this.nav.reset();
             const up = add(p, UP);
-            if (this.terrain.empty(add(up, UP))) {
+            // Only "climb" when there is actually something to climb onto:
+            // a standable cell one block up, with headroom above it. On open
+            // ground this rung must do nothing, or it becomes the levitation
+            // loop again (jump -> climb -> jump -> ...).
+            const standUp = this.terrain.empty(add(up, UP)) && this.terrain.solid(add(up, DOWN)) && this.terrain.solid(add(p, DOWN));
+            if (standUp) {
                 this.reason = "Unstuck: climbing one block.";
-                try { this.sim.jump(); this.sim.moveToLocation(this.host.relative(center(up)), { faceTarget: false }); } catch (_e) { this.fault(_e); }
+                try { this.sim.jump(); } catch (_e) { this.fault(_e); }
+                try { this.sim.moveToLocation(this.host.relative(center(up)), { faceTarget: false }); } catch (_e) { this.fault(_e); }
                 return true;
             }
+            // Drop through the floor ONLY when there is somewhere to drop to.
+            // Without this guard the bot dug the block under its own feet on
+            // flat open ground: a one-block trench with solid rock beneath it,
+            // i.e. strictly worse than standing still, repeated every 200 ticks
+            // until the whole area was a pit (and the goto never converged).
             const below = this.terrain.block(add(p, DOWN));
-            if (below && !below.isAir && !below.isLiquid) {
+            const under = this.terrain.read(add(add(p, DOWN), DOWN));
+            const dropThrough = under && !under.isSolid && !under.hazard;
+            if (dropThrough && below && !below.isAir && !below.isLiquid) {
                 this.reason = "Unstuck: clearing the cell below to drop through.";
                 const r = this.digCell(add(p, DOWN), tick);
                 if (r === "digging") return true;
@@ -293,12 +314,31 @@ export class Bot {
             return true;
         }
 
-        // Rung 4: the goal itself is the problem. Give up on it, explore.
+        // Rung 4 depends on WHO owns the goal.
+        //
+        // For a self-directed task ("find ore", "get wood") the goal is a guess,
+        // so abandoning it and scouting is correct. For a COMMANDED destination
+        // it is not: `!bot goto <x y z>` means "reach this place", and the old
+        // rung-4 behaviour (`scout.step()`, a random exploration waypoint) sent
+        // the bot in the opposite direction and then made it report the goal as
+        // unreachable - the "it wanders off and never arrives" report.
         if (st.rung === 3) {
             st.rung = 4;
-            this.record("Unstuck: abandoning an unreachable goal and exploring instead.");
             this.nav.reset();
             this.terrain.clear();
+            const commanded = this.mode === "goto" || this.mode === "follow" || this.mode === "guard";
+            if (commanded) {
+                if (this.arbiter) this.arbiter.fail(this.arbiter.current?.id ?? this.mode, tick, "no route to a commanded destination");
+                this.reason = this.mode === "goto"
+                    ? `Unstuck: no route to ${this.goal ? `${this.goal.x},${this.goal.y},${this.goal.z}` : "the destination"} yet - retrying with a wider search.`
+                    : "Unstuck: no route to the owner yet - retrying.";
+                // Keep the ladder where it is. Resetting `_unstuck` restarted
+                // the ladder at rung 0 on the next stuck tick, so rungs 1-4
+                // repeated forever - the loop the ladder exists to break. The
+                // `lastRound` timeout in unstuck() is the only legitimate reset.
+                return true;
+            }
+            this.record("Unstuck: abandoning an unreachable goal and exploring instead.");
             this.explorer.reset();
             if (this.arbiter) this.arbiter.fail(this.arbiter.current?.id ?? "mission", tick, "unreachable goal");
             if (this.mining) { this.mining.exploring = true; this.mining.target = undefined; this.mining.noTargetSince = tick; }
@@ -306,13 +346,21 @@ export class Bot {
             return true;
         }
 
-        // Nothing left to try this round: stand still but keep the owner, so the
-        // caller does not fall straight back into the failing task.
+        // Nothing local left to try. Do NOT sit here: release control back to
+        // the mission (return false) so the real task runs with a cleared nav.
+        // "Waiting for the world to change" was a permanent idle - the bot stood
+        // still for the rest of the session while the mission never resumed.
         st.rung = 4;
-        const spot = this.scout?.step?.(tick);
-        if (spot) { this.reason = spot; return true; }
-        this.reason = "Unstuck: no local remedy; waiting for the world to change.";
-        return true;
+        st.waited = (st.waited ?? 0) + 1;
+        this.nav.reset();
+        if (st.waited >= 3) {
+            // Several rounds without progress: tell the arbiter this job really
+            // cannot be done from here, so a different job can take over.
+            this.arbiter?.fail(this.arbiter.current?.id ?? this.mode, tick, "no local remedy");
+            st.waited = 0;
+        }
+        this.reason = "Unstuck: no local remedy - handing back to the task.";
+        return false;
     }
     retainImportant() {
         // Retain important stuff: iron ore, diamond, obsidian, etc - never drop critical
@@ -1033,7 +1081,9 @@ export class Bot {
         }
         this.threat = info.nearest;
 
-        const p = floor(this.sim.location), below = this.terrain.read(add(p, DOWN));
+        const p = floor(this.sim.location);
+        const below = this.terrain.read(add(p, DOWN));
+        const here = this.terrain.read(p);
         const justStuck = this.nav.stuck;
         this.nav.stuck = false;
         let escapeKind = this.escaper.active ? this.escaper.mode : "";
@@ -1070,8 +1120,12 @@ export class Bot {
             hasFood: foodSlot >= 0,
             headInWater: (() => { try { return this.terrain.headInWater(this.sim); } catch { return false; } })(),
             inWater: !!this.sim.isInWater,
-            onLava: below?.type === "minecraft:lava" || below?.type === "minecraft:flowing_lava",
-            lavaAdjacent: !!below?.hazard,
+            // `below` is the block under the feet; `feet` is where the body is.
+            // Both matter: standing IN lava (feet) and about to step into it
+            // (below) are different emergencies with the same answer - leave.
+            onLava: /lava/.test(String(below?.type ?? "")) || /lava/.test(String(here?.type ?? "")),
+            inLava: /lava/.test(String(here?.type ?? "")),
+            lavaAdjacent: !!below?.hazard || (() => { try { return this.terrain.lavaNear(p); } catch { return false; } })(),
             fallDepthBelow: (() => { const sy = this.survivalMaster?.fallStartY; return sy != null ? Math.max(0, sy - this.sim.location.y) : 0; })(),
             suffocating: false,
             trapped: justStuck && !this.sim.isInWater,

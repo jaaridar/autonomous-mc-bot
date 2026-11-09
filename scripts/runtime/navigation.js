@@ -151,7 +151,15 @@ export class Navigator {
                 // darkness are priced together, so a combination nobody wrote a
                 // rule for (ledge + lava + skeleton) is avoided as a whole.
                 danger: this.dangerContext(tick),
-                dangerWorld: this.bot?.terrain,
+                // Explicit adapter: `cellDanger` reads cells through `read(p)`.
+                // Handing it the Terrain directly relied on the reader guessing
+                // the shape, and a guess that lands on `block(x, y, z)` returns
+                // air for every cell - the whole world then scores as a lethal
+                // fall and no route exists anywhere (the bot cannot even leave
+                // an open field). A one-line adapter removes the ambiguity.
+                dangerWorld: this.bot?.terrain
+                    ? { read: (p) => this.bot.terrain.read(p) }
+                    : { read: (p) => this.terrain.read(p) },
             }
         );
         this.path = [];
@@ -385,10 +393,20 @@ export class Navigator {
 
     /** Cut a safe tunnel one cell at a time toward the goal when no surface route exists. */
     tunnel(tick) {
+        // No goal = no tunnel. `floor(undefined)` throws, and the caller's
+        // try/catch used to swallow it mid-plan, leaving `tunnelPlan` pointing
+        // at a direction that no longer related to anything -> the bot "tunnelled"
+        // to arbitrary places (including straight up) while a goto was active.
+        if (!this.target || !Number.isFinite(this.target.x) || !Number.isFinite(this.target.z)) {
+            this.tunnelPlan = undefined;
+            return this.fail("Tunnel needs a goal");
+        }
         const p = floor(this.sim.location);
         const goal = floor(this.target);
         const plan = this.tunnelPlan;
-        if (!plan || tick - plan.since > 600) {
+        const stale = plan && (plan.goal && horizontal(plan.goal, goal) > 8);
+        if (stale) this.tunnelPlan = undefined;
+        if (!plan || stale || tick - plan.since > 600) {
             const dx = goal.x - p.x, dz = goal.z - p.z;
             // Prefer the dominant horizontal axis, and go up only when the goal
             // is clearly above (stair-casing), never straight down blindly.
@@ -399,7 +417,7 @@ export class Navigator {
             else return this.fail("Tunnel end: standing on the goal column");
             if (goal.y - p.y > 2) dir = { ...dir, y: 1 };
             else if (p.y - goal.y > 3) dir = { ...dir, y: -1 };
-            this.tunnelPlan = { dir, since: tick, cells: [] };
+            this.tunnelPlan = { dir, since: tick, cells: [], goal: { ...goal } };
         }
         const dir = this.tunnelPlan.dir;
         const foot = { x: p.x + dir.x, y: p.y + (dir.y || 0), z: p.z + dir.z };

@@ -41,11 +41,43 @@ function normalise(c) {
     return { solid, liquid, passable: !!c.passable, hazard: !!c.hazard, type };
 }
 
+/**
+ * Read one cell through whatever `world` object the caller supplied.
+ *
+ * Two world shapes are in use and BOTH were being written against here:
+ *   - a plain reader `{ block(x, y, z) }` (the unit tests and PathSearch's
+ *     own memoised `rd`), and
+ *   - the runtime `Terrain`, whose `block(p)` takes ONE point object. Called
+ *     as `block(x, y, z)` it returns the block at `undefined` - or throws -
+ *     so every read became `EMPTY` (all air). The fall scan then saw a
+ *     24-deep hole under every cell, marked the whole world `lethal`, and the
+ *     pathfinder had no legal neighbour at all: "Path unreachable; no safe
+ *     route" on flat open ground, permanently.
+ *
+ * So try the point form first (Terrain), then the positional form (tests),
+ * and only then give up.
+ */
 const cell = (world, x, y, z) => {
-    try { return normalise(world.block(x, y, z)); }
-    catch { return EMPTY; }
+    if (!world) return EMPTY;
+    // Two world shapes are in use:
+    //   - `{ read(p) }`  - Terrain and the test fixtures; POINT form.
+    //   - `{ block(x, y, z) }` - the older plain reader; POSITIONAL form.
+    // Reading the wrong one does not throw, it returns the block at
+    // `undefined` (i.e. air), so EVERY cell looked like a 24-deep hole, the fall
+    // scan marked the whole world `lethal`, and the pathfinder had no legal
+    // neighbour at all - "Path unreachable; no safe route" on flat open ground,
+    // forever. `fn.length` tells the two apart reliably.
+    if (typeof world.read === "function") {
+        try { const c = world.read({ x, y, z }); if (c !== undefined) return normalise(c); } catch { /* fall through */ }
+    }
+    if (typeof world.block === "function") {
+        try {
+            const c = world.block.length >= 2 ? world.block(x, y, z) : world.block({ x, y, z });
+            if (c !== undefined) return normalise(c);
+        } catch { /* fall through */ }
+    }
+    return EMPTY;
 };
-
 export function fallDepth(world, x, y, z, max = MAX_FALL_SCAN) {
     let d = 0;
     for (let i = 1; i <= max; i++) {
