@@ -117,8 +117,8 @@ export class Arbiter {
             const score = (() => {
                 if (fallRisk) return 100;
                 if (threatInfo.count >= 3) return 95;
-                if (hp <= 6) return 90;
-                if (inWater && bot.terrain.headInWater(bot.sim)) return 98;
+                if (hp <= 6) return 96;
+                if (inWater && bot.terrain.headInWater(bot.sim)) return 99;
                 return 0;
             })();
             if (score > 0) {
@@ -138,7 +138,7 @@ export class Arbiter {
                 candidates.push({
                     id: "food",
                     director: bot.food,
-                    score: hunger <= 4 ? 92 : 70,
+                    score: hunger <= 4 ? 90 : 70,
                     reason: `hunger ${hunger}`,
                     tags: ["survival", "food"]
                 });
@@ -167,7 +167,8 @@ export class Arbiter {
                 candidates.push({
                     id: "escape",
                     director: deferTo("escape runs in the main loop"),
-                    score: inWater ? 88 : 80,
+                    // Escape outranks food (90) and missions, never stands below survival
+                    score: inWater ? 97 : (below?.hazard ? 94 : 88),
                     reason: `escape needed: inWater=${inWater} hazard=${below?.hazard} stuck=${bot.nav.stuck}`,
                     tags: ["survival"]
                 });
@@ -180,11 +181,10 @@ export class Arbiter {
             if (mode && mode !== "idle") {
                 let score = 50;
                 if (mode === "follow" && owner) {
-                    const dist = bot.terrain ? bot.terrain.distance ? 0 : 0 : 0;
-                    try { 
+                    try {
                         const d = Math.hypot(bot.sim.location.x - owner.location.x, bot.sim.location.z - owner.location.z);
                         score = d > 12 ? 80 : 60;
-                    } catch {}
+                    } catch { /* keep default */ }
                 } else if (mode === "mine") {
                     score = 65;
                 } else if (mode === "survival" || mode === "starter") {

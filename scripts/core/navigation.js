@@ -15,50 +15,55 @@ export function standable(read, p) {
 }
 
 class Heap {
-    constructor() { this.v = []; this.f = []; }
+    constructor() { this.v = []; this.f = []; this.c = []; }
     get size() { return this.v.length; }
-    push(v, f) {
+    push(v, f, c = 0) {
         // Parallel arrays + temp swaps: the old version allocated a {v,f}
         // wrapper per push and a throwaway array per swap ([a,b]=[b,a]).
-        const V = this.v, F = this.f;
+        // The third array is a FIFO tie-break for equal f so the search pops
+        // a deterministic, breadth-first-ish order instead of oscillating.
+        const V = this.v, F = this.f, C = this.c;
         let i = V.length;
         V.push(v);
         F.push(f);
+        C.push(c);
         while (i) {
             const p = (i - 1) >> 1;
-            if (F[p] <= f) break;
-            V[i] = V[p]; F[i] = F[p];
+            if (F[p] < f || (F[p] === f && C[p] <= c)) break;
+            V[i] = V[p]; F[i] = F[p]; C[i] = C[p];
             i = p;
         }
-        V[i] = v; F[i] = f;
+        V[i] = v; F[i] = f; C[i] = c;
     }
     pop() {
-        const V = this.v, F = this.f;
+        const V = this.v, F = this.f, C = this.c;
         if (!V.length) return;
         const top = V[0];
-        const lv = V.pop(), lf = F.pop();
+        const lv = V.pop(), lf = F.pop(), lc = C.pop();
         const n = V.length;
         if (n) {
             let i = 0;
             while (true) {
                 let c = i * 2 + 1;
                 if (c >= n) break;
-                if (c + 1 < n && F[c + 1] < F[c]) c++;
-                if (lf <= F[c]) break;
-                V[i] = V[c]; F[i] = F[c];
+                if (c + 1 < n && (F[c + 1] < F[c] || (F[c + 1] === F[c] && C[c + 1] < C[c]))) c++;
+                if (lf < F[c] || (lf === F[c] && lc <= C[c])) break;
+                V[i] = V[c]; F[i] = F[c]; C[i] = C[c];
                 i = c;
             }
-            V[i] = lv; F[i] = lf;
+            V[i] = lv; F[i] = lf; C[i] = lc;
         }
         return top;
     }
 }
 
 const KIND_COST = {
-    walk: 1, jump: 3.5, sprintjump: 5, sprintjump3: 7, sprintjump_up: 8,
+    walk: 1, step: 2, drop: 1.5, jump: 3.5, sprintjump: 5, sprintjump3: 7, sprintjump_up: 8,
     bridge_sprintjump3: 10, bridge_bridge_sprintjump3: 14, jumpup: 3,
-    bridge: 8, pillar: 6, bigdrop: 2.5,
+    bridge: 8, pillar: 6, bigdrop: 3,
 };
+/** Fall cost per depth: drops past 3 blocks hurt (depth - 3 damage), priced in. */
+const DROP_COST = [0, 1.5, 2.5, 3.5, 5, 8, 12];
 const LAVA = /lava/, WATER = /water/;
 
 /**
@@ -77,6 +82,11 @@ const LAVA = /lava/, WATER = /water/;
  * out the best partial route found so far is returned instead of failing,
  * so small budgets still make progress on long trips.
  */
+/** Soft cost added to every standable cell that touches lava (feet, head or
+ * support level). The search strongly prefers routes with headroom from lava,
+ * but still takes a lava-edge cell when it is the only way through. */
+const LAVA_ADJACENT = 6;
+
 export class PathSearch {
     constructor(read, start, goal, tolerance = 0.7, parkour = true, maxNodes = 2000, radius = 32, allowPartial = false, avoid = [], options = {}) {
         this.read = read;
@@ -92,6 +102,7 @@ export class PathSearch {
         this.status = "searching";
         this.path = [];
         this.expanded = 0;
+        this.counter = 0;
         this.open = new Heap();
         this.costs = new Map();
         this.cells = new Map();
@@ -99,12 +110,13 @@ export class PathSearch {
         this.allowBridge = options.allowBridge ?? false;
         this.allowPillar = options.allowPillar ?? false;
         this.allowSprintJump = options.allowSprintJump ?? parkour;
+        this.maxDrop = Math.max(2, Math.min(6, Math.floor(options.maxDrop ?? 3)));
         this.vertLimit = this.radius >= 100 ? 128 : (this.allowBridge ? 64 : 24);
         this.startH = horizontal(start, goal);
         this.best = undefined;
         this.bestH = Infinity;
         const n = { p: { x: start.x, y: start.y, z: start.z, kind: "walk" }, g: 0 };
-        this.open.push(n, 0);
+        this.open.push(n, 0, 0);
         this.costs.set(this.k(start.x, start.y, start.z), 0);
     }
 
@@ -128,6 +140,16 @@ export class PathSearch {
     isSolid(x, y, z) {
         const c = this.rd(x, y, z);
         return !!c?.support && !c.hazard;
+    }
+    /** True when any cardinal neighbour of the feet/head/support cell is lava. */
+    lavaAdjacent(x, y, z) {
+        for (const d of CARDINAL) {
+            for (const dy of [0, 1, -1]) {
+                const c = this.rd(x + d.x, y + dy, z + d.z);
+                if (c?.type && LAVA.test(c.type) && c.hazard) return true;
+            }
+        }
+        return false;
     }
     stand(x, y, z) {
         const a = this.rd(x, y, z);
@@ -163,11 +185,12 @@ export class PathSearch {
             else if (this.stand(qx, py + 1, qz) && headClear) {
                 push(qx, py + 1, qz, "step");
             }
-            // Drop down 1-3
+            // Drop down (1..maxDrop; maxDrop is HP-aware - never plan a
+            // harmful fall an exhausted bot cannot afford)
             else if (this.isAir(qx, py, qz) && this.isAir(qx, py + 1, qz)) {
-                for (let drop = 1; drop <= 3; drop++) {
+                for (let drop = 1; drop <= this.maxDrop; drop++) {
                     if (this.stand(qx, py - drop, qz)) {
-                        push(qx, py - drop, qz, drop === 1 ? "drop" : "bigdrop");
+                        push(qx, py - drop, qz, drop === 1 ? "drop" : "bigdrop", { dropDepth: drop });
                         break;
                     }
                 }
@@ -322,7 +345,7 @@ export class PathSearch {
 
     /** Out of budget / options: hand back the best partial route if it gets us meaningfully closer. */
     bestEffort(status) {
-        if (this.best && this.best.parent && this.bestH <= this.startH - 3) {
+        if (this.best && this.best.parent && this.bestH <= this.startH - 2) {
             this.path = this.trace(this.best);
             return (this.status = "partial");
         }
@@ -347,11 +370,12 @@ export class PathSearch {
                 return (this.status = progress ? "partial" : "found");
             }
             for (const q of this.neighbors(np)) {
-                const cost = KIND_COST[q.kind] ?? 1.5;
+                const base = q.dropDepth !== undefined ? DROP_COST[Math.min(q.dropDepth, DROP_COST.length - 1)] : (KIND_COST[q.kind] ?? 1.5);
+                const cost = base + (this.lavaAdjacent(q.x, q.y, q.z) ? LAVA_ADJACENT : 0);
                 const g = n.g + cost + this.penalty(q), k = this.k(q.x, q.y, q.z);
                 if (g >= (this.costs.get(k) ?? Infinity)) continue;
                 this.costs.set(k, g);
-                this.open.push({ p: q, g, parent: n }, g + horizontal(q, goal) * 0.9 + Math.abs(q.y - goal.y) * 0.3);
+                this.open.push({ p: q, g, parent: n }, g + horizontal(q, goal) * 0.9 + Math.abs(q.y - goal.y) * 0.3, ++this.counter);
             }
         }
         if (!this.open.size) return this.bestEffort("unreachable");
