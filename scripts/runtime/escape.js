@@ -6,7 +6,7 @@
 import { Direction } from "@minecraft/server";
 import { add, floor, center, distance, key, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
 import { diggable, HAZARDS, RANGED, EXPLOSIVE } from "../core/policy.js";
-import { getProfile, assess, bunkerPlan, chooseCoverDirection } from "../core/escape-strategy.js";
+import { getProfile, assess, bunkerPlan, chooseCoverDirection, rankEscapePlans, bumpWatchdog } from "../core/escape-strategy.js";
 import { getMobStat } from "../core/combat.js";
 import { Hands } from "./hands.js";
 
@@ -78,6 +78,9 @@ export class Escaper {
         this.swimming = false;
         this.escapeDir = undefined;
         this.deadDirs = [];
+        this.steps = 0;
+        this._bumpPos = undefined;
+        this._watchdog = undefined;
         this.assessment = undefined;
         this.coverAttempts = 0;
         this.bunkerAttempts = 0;
@@ -89,9 +92,21 @@ export class Escaper {
         try { this.sim.isSneaking = false; } catch (e) { console.warn("[Verdant] "+String(e?.message||e).slice(0,300)); }
     }
 
+    /**
+     * Watchdog for walk-out escapes. The old counter incremented on EVERY
+     * tick, so any walk that lasted more than 12 ticks (0.6 s) reported
+     * "done" and the escape was torn down while the bot was still in danger;
+     * the caller then counted the attempt as a failure. Now the counter only
+     * grows while the bot is genuinely going nowhere: any real movement
+     * (>1.5 blocks) re-arms it. 80 consecutive ticks without movement hands
+     * control back to the pathfinder.
+     */
     bump() {
-        if (++this.steps > 12) {
-            this.lastReason = "Handing back to pathfinder.";
+        const keep = bumpWatchdog(this._watchdog ??= { steps: 0, pos: undefined }, this.sim.location);
+        this.steps = this._watchdog.steps;
+        this._bumpPos = this._watchdog.pos;
+        if (!keep) {
+            this.lastReason = "Escape walk unproductive; handing back to pathfinder.";
             this.reset();
             return false;
         }
@@ -813,6 +828,11 @@ export class Escaper {
         const pref = this.escapeDirection();
         const side = { x: -pref.z, y: 0, z: pref.x };
         const order = [pref, side, { x: -side.x, y: 0, z: -side.z }, { x: -pref.x, y: 0, z: -pref.z }];
+        // Diagonals as extra candidates so a pit with only corner exits is
+        // still solvable; cardinals keep priority.
+        for (const d of COMPASS) {
+            if (!order.some((o) => o.x === d.x && o.z === d.z)) order.push(d);
+        }
         if (this.escapeDir) {
             const at = order.findIndex((d) => d.x === this.escapeDir.x && d.z === this.escapeDir.z);
             if (at > 0) { order.splice(at, 1); order.unshift(this.escapeDir); }
@@ -869,6 +889,26 @@ export class Escaper {
             return this.combatEscape(tick);
         }
 
+        // LAVA EMERGENCY: in lava (or standing on lava). If we carry a water
+        // bucket, put water at our feet - source lava becomes obsidian and
+        // flowing lava cobbles, giving a safe cell right where we stand.
+        // Without a bucket the sim would keep walking and melt.
+        const feet = p, head = add(p, UP), down = add(p, DOWN);
+        if (this.terrain.lavaAt(feet) || this.terrain.lavaAt(head) || this.terrain.lavaAt(down)) {
+            const slot = this.bag.find((s) => s.typeId === "minecraft:water_bucket");
+            if (slot >= 0) {
+                try {
+                    const selected = this.bag.select(slot);
+                    this.sim.lookAtBlock(this.host.relative({ x: p.x + 0.5, y: p.y - 0.5, z: p.z + 0.5 }));
+                    if (this.sim.useItemInSlot(selected)) {
+                        this.lastReason = "Lava emergency: placed water - turning lava to obsidian/cobble";
+                        return "running";
+                    }
+                } catch (e) { console.warn("[Verdant] " + String(e?.message || e).slice(0, 300)); }
+            }
+            this.lastReason = "In lava with no water bucket - getting out NOW";
+        }
+
         if (this.terrain.dangerous(p) || this.terrain.dangerous(add(p, DOWN))) {
             const spot = COMPASS.map((d) => this.terrain.groundNear(p.x + d.x * 2, p.z + d.z * 2, p.y, 4))
                 .filter((q) => q && !this.terrain.dangerous(q))
@@ -882,6 +922,12 @@ export class Escaper {
         const preferred = this.escapeDirection();
         const goalward = (d) => d.x === preferred.x && d.z === preferred.z;
         const why = [];
+        // Phase 1: score every viable plan. Tunnel/bridge/climb and
+        // goal-committed walks keep priority, but ANY survivable walk-out is
+        // taken before giving up - the old code hard-skipped walks that did
+        // not point at the owner and could declare "no way out" while a
+        // clear one-block sideways exit stood open.
+        const plans = [];
         for (const dir of this.candidateDirs()) {
             const plan = this.probe(dir, p);
             if (plan.kind === "dead") {
@@ -892,7 +938,9 @@ export class Escaper {
                 continue;
             }
             const committed = this.escapeDir && this.escapeDir.x === dir.x && this.escapeDir.z === dir.z;
-            if (!committed && !goalward(dir) && (plan.kind === "walk" || plan.kind === "drop")) continue;
+            plans.push({ dir, plan, kind: plan.kind, preferred: committed || goalward(dir) });
+        }
+        for (const { dir, plan } of rankEscapePlans(plans)) {
             this.escapeDir = dir;
             if (plan.kind === "tunnel") {
                 const r = this.tunnel(dir, tick);
@@ -907,13 +955,13 @@ export class Escaper {
             }
             if (plan.kind === "drop") {
                 const drop = this.terrain.groundNear(p.x + dir.x, p.z + dir.z, p.y - 1, 6);
-                if (!drop || this.terrain.dangerous(drop)) continue;
+                if (!drop || this.terrain.dangerous(drop)) { this.escapeDir = undefined; continue; }
                 sim.isSprinting = true;
                 this.lastReason = "Dropping to lower ground.";
                 return this.walkTo(center(drop));
             }
             const walk = this.terrain.groundNear(p.x + dir.x, p.z + dir.z, p.y, 3);
-            if (!walk || this.terrain.dangerous(walk)) continue;
+            if (!walk || this.terrain.dangerous(walk)) { this.escapeDir = undefined; continue; }
             sim.isSprinting = true;
             this.lastReason = "Walking out.";
             return this.walkTo(center(walk));

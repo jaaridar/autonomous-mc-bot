@@ -1034,6 +1034,41 @@ export class Bot {
             const observed = JSON.stringify(this.bag.counts());
             if (observed !== this.progressSignature) { this.progressSignature = observed; this.recoveryAttempts = 0; this.escapeAttempts = 0; }
         }
+        // GLOBAL UNSTUCK WATCHDOG: task modes where standing still is a bug,
+        // not a choice. Nothing moved and the inventory did not change for
+        // 60 s -> force a fresh approach (nav reset / explore); 120 s ->
+        // honestly stop the task instead of looping forever. Directors that
+        // are legitimately stationary (idle, guard, camp, sleeping, boating)
+        // are exempt. Progress = position cell change OR inventory change.
+        if (tick % 100 === 0 && ["mine", "goto", "starter", "speedrun", "survival", "collect", "loot", "golem", "recover"].includes(this.mode) && !this.isSleeping() && !this.ridingBoat() && !this.escapeSeal) {
+            const wp = this.sim.location;
+            const sig = `${Math.floor(wp.x)},${Math.floor(wp.y)},${Math.floor(wp.z)}|${this.progressSignature}`;
+            if (sig === this._watchdogSig) {
+                if (this._watchdogSince === undefined) this._watchdogSince = tick;
+                const stuckFor = tick - this._watchdogSince;
+                if (stuckFor >= 2400) {
+                    this._watchdogSince = tick;
+                    this.record("watchdog: 2 minutes without progress; blocking task for rethink");
+                    this.blockTask(`No progress for 2 minutes in mode ${this.mode}; the approach is not working here.`, "retry");
+                    return;
+                }
+                if (stuckFor >= 1200 && this._watchdogNudged !== tick) {
+                    this._watchdogNudged = tick;
+                    this.record("watchdog: 60s without progress; forcing fresh path/exploration");
+                    this.nav.reset();
+                    if (this.mining) {
+                        this.mining.exploring = true;
+                        this.mining.target = undefined;
+                        this.mining.noTargetSince = tick;
+                        this.explorer.reset();
+                    }
+                    this.reason = "Unstuck: replanning approach";
+                }
+            } else {
+                this._watchdogSig = sig;
+                this._watchdogSince = tick;
+            }
+        }
         // ROBUST: Task deadline should NOT auto shutdown - reset and retry with exploring instead of manual block
         if (tick - this.taskStart > (this.mode === "survival" || this.mode === "goto" || this.mode === "speedrun" ? 36000 : this.mode === "starter" ? 12000 : 7200) && ["mine", "goto", "starter", "speedrun"].includes(this.mode)) {
             this.record(`Task deadline exceeded in ${this.mode}, resetting and retrying robustly`);

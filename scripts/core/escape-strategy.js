@@ -26,6 +26,26 @@ export const THREAT_PROFILES = {
     "minecraft:wither": { type: "boss", damage: 8, range: 20, speed: 0.3, fear: 10, flee: true, cover: true, groupFear: 2.0 },
 };
 
+/**
+ * Order escape plans for execution: dead plans are dropped; tunnels, bridges
+ * and climbs outrank plain walks; goal-committed walks outrank sideways ones -
+ * but a sideways walk is NOT discarded (the old runtime hard-skipped those and
+ * could report "no way out" while a clear exit stood open).
+ * plans: [{ kind: "walk"|"drop"|"tunnel"|"bridge"|"climb", preferred: boolean, why? }]
+ */
+export function rankEscapePlans(plans) {
+    return (Array.isArray(plans) ? plans : [])
+        .filter((p) => p && p.kind && p.kind !== "dead")
+        .map((p) => {
+            let score = p.preferred ? 30 : 10;
+            if (p.kind === "tunnel") score += 20;
+            else if (p.kind === "bridge") score += 15;
+            else if (p.kind === "climb") score += 10;
+            return { ...p, score };
+        })
+        .sort((a, b) => b.score - a.score);
+}
+
 export function getProfile(typeId) {
     return THREAT_PROFILES[typeId] ?? { type: "melee", damage: 2, range: 1.5, speed: 0.23, fear: 3, kite: true, groupFear: 0.4 };
 }
@@ -201,4 +221,30 @@ export function strafePattern(tick, threatType) {
         return { x: 0, z: -1 };
     }
     return null;
+}
+
+/**
+ * Stagnation watchdog for walk-out escapes. The old runtime counter
+ * incremented on EVERY tick, so any walk longer than 12 ticks reported
+ * "done" while the bot was still in danger, and the caller counted it as a
+ * failed escape attempt. Movement-aware version: real movement (>slack
+ * blocks) re-arms the counter; only consecutive stagnant ticks accrue.
+ *
+ * `state` is caller-owned and mutated in place: `{ steps: number, pos? }`.
+ * Returns true while the walk may continue; false once the bot has spent
+ * `limit` consecutive ticks without moving — the caller should hand control
+ * back to the pathfinder.
+ */
+export function bumpWatchdog(state, pos, { slack = 1.5, limit = 80 } = {}) {
+    const p = pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)
+        ? pos
+        : { x: 0, y: 0, z: 0 };
+    const s = state && typeof state === "object" ? state : { steps: 0, pos: undefined };
+    const moved = !s.pos || Math.hypot(p.x - s.pos.x, p.y - s.pos.y, p.z - s.pos.z) > slack;
+    if (moved) {
+        s.steps = 0;
+        s.pos = { x: p.x, y: p.y, z: p.z };
+    }
+    s.steps += 1;
+    return s.steps <= limit;
 }

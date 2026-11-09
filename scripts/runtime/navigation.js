@@ -74,6 +74,12 @@ export class Navigator {
         const isTower = verticalDiff > 12 && horiz < 4;
         const maxNodes = isTower ? 1500 : 1200;
         const radius = isTower ? 48 : 24;
+        // HP-aware fall limit: hurt bots cannot afford 5-block drops (2 damage).
+        let maxDrop = 3;
+        try {
+            const hp = this.sim.getComponent("minecraft:health")?.currentValue ?? 20;
+            if (hp >= 16) maxDrop = 5; else if (hp >= 12) maxDrop = 4; else if (hp < 6) maxDrop = 2;
+        } catch { /* unknown health: stay conservative */ }
         this.replans++;
         this.search = new PathSearch(
             this.terrain.read,
@@ -85,7 +91,7 @@ export class Navigator {
             radius,
             horiz > 16,
             this.avoid,
-            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump }
+            { allowBridge, allowPillar, allowSprintJump: this.allowSprintJump, maxDrop }
         );
         this.path = [];
         this.corridor = [];
@@ -264,7 +270,7 @@ export class Navigator {
             return "running";
         }
 
-        if (horizontal(this.sim.location, center(w)) < 0.5 && Math.abs(this.sim.location.y - w.y) < 0.7) {
+        if (horizontal(this.sim.location, center(w)) < 0.72 && Math.abs(this.sim.location.y - w.y) < 0.7) {
             this.waypoint++;
             this.lastProgress = tick;
             if (this.waypoint === this.path.length) {
@@ -296,8 +302,8 @@ export class Navigator {
         let waypointSafe = true, corridorBad = false;
         if (tick - this.lastFreshCheck >= 4 || this.lastIssued !== this.waypoint) {
             this.lastFreshCheck = tick;
-            waypointSafe = w.kind === "bridge" || this.terrain.freshSafe(w);
-            corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p !== w && !this.terrain.freshSafe(p));
+            waypointSafe = w.kind === "bridge" || w.kind === "wade" || this.terrain.freshSafe(w);
+            corridorBad = this.corridor.some((p) => p.kind !== "bridge" && p.kind !== "wade" && p !== w && !this.terrain.freshSafe(p));
         }
         if (tick - this.lastProgress > 50 || !waypointSafe || corridorBad) {
             // Try to find obstruction that blocks entire body

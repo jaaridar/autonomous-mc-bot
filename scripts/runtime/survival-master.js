@@ -252,8 +252,7 @@ export class SurvivalMaster {
             return true;
         }
         // Retreat from edge
-        this.retreatFromEdge(ctx.p, tick);
-        return true;
+        return this.retreatFromEdge(ctx.p, tick);
     }
 
     handleCaveWhileTreeCut(ctx, tick) {
