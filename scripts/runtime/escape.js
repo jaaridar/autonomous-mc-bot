@@ -6,7 +6,7 @@
 import { Direction } from "@minecraft/server";
 import { add, floor, center, distance, key, CARDINAL, COMPASS, UP, DOWN, away } from "../core/math.js";
 import { diggable, HAZARDS, RANGED, EXPLOSIVE } from "../core/policy.js";
-import { getProfile, assess, bunkerPlan, chooseCoverDirection, rankEscapePlans } from "../core/escape-strategy.js";
+import { getProfile, assess, bunkerPlan, chooseCoverDirection, rankEscapePlans, bumpWatchdog } from "../core/escape-strategy.js";
 import { getMobStat } from "../core/combat.js";
 import { Hands } from "./hands.js";
 
@@ -80,6 +80,7 @@ export class Escaper {
         this.deadDirs = [];
         this.steps = 0;
         this._bumpPos = undefined;
+        this._watchdog = undefined;
         this.assessment = undefined;
         this.coverAttempts = 0;
         this.bunkerAttempts = 0;
@@ -101,13 +102,10 @@ export class Escaper {
      * control back to the pathfinder.
      */
     bump() {
-        const p = this.sim.location;
-        if (this._bumpPos && distance(p, this._bumpPos) > 1.5) {
-            this.steps = 0;
-            this._bumpPos = { ...p };
-        }
-        if (!this._bumpPos) this._bumpPos = { ...p };
-        if (++this.steps > 80) {
+        const keep = bumpWatchdog(this._watchdog ??= { steps: 0, pos: undefined }, this.sim.location);
+        this.steps = this._watchdog.steps;
+        this._bumpPos = this._watchdog.pos;
+        if (!keep) {
             this.lastReason = "Escape walk unproductive; handing back to pathfinder.";
             this.reset();
             return false;

@@ -222,3 +222,29 @@ export function strafePattern(tick, threatType) {
     }
     return null;
 }
+
+/**
+ * Stagnation watchdog for walk-out escapes. The old runtime counter
+ * incremented on EVERY tick, so any walk longer than 12 ticks reported
+ * "done" while the bot was still in danger, and the caller counted it as a
+ * failed escape attempt. Movement-aware version: real movement (>slack
+ * blocks) re-arms the counter; only consecutive stagnant ticks accrue.
+ *
+ * `state` is caller-owned and mutated in place: `{ steps: number, pos? }`.
+ * Returns true while the walk may continue; false once the bot has spent
+ * `limit` consecutive ticks without moving — the caller should hand control
+ * back to the pathfinder.
+ */
+export function bumpWatchdog(state, pos, { slack = 1.5, limit = 80 } = {}) {
+    const p = pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)
+        ? pos
+        : { x: 0, y: 0, z: 0 };
+    const s = state && typeof state === "object" ? state : { steps: 0, pos: undefined };
+    const moved = !s.pos || Math.hypot(p.x - s.pos.x, p.y - s.pos.y, p.z - s.pos.z) > slack;
+    if (moved) {
+        s.steps = 0;
+        s.pos = { x: p.x, y: p.y, z: p.z };
+    }
+    s.steps += 1;
+    return s.steps <= limit;
+}

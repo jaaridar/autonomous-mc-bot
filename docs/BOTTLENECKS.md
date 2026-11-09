@@ -15,7 +15,9 @@ counted it as an attempt; after 14 attempts (`escapeAttempts >= 14`) the bot
 called `blockTask()` and stopped. **This is the single largest cause of
 "can't escape".** Fixed: the counter now only advances while the position is
 not changing (>1.5 blocks of movement re-arms); 80 consecutive stagnant ticks
-(4 s) hand control back to the pathfinder.
+(4 s) hand control back to the pathfinder. The logic lives in the pure,
+unit-tested `bumpWatchdog()` in `core/escape-strategy.js` (5 regression checks
+in `pathing.test.mjs`).
 
 ### 1.2 Escape refused every walk-out not pointing at the owner — `trapped()`
 Any `walk`/`drop` plan that was not committed or toward the goal direction
@@ -173,4 +175,5 @@ node tools/run-all.mjs     # parse, linkcheck, undef, imports, unit, brain,
 ```
 
 New regression suite: `tools/pathing.test.mjs` (HP-aware cliff drops, lava
-headroom routing, walled-goal honesty, escape-plan ranking).
+headroom routing, walled-goal honesty, escape-plan ranking, escape watchdog
+re-arm/give-up semantics, shallow-water wading vs lava/deep water).

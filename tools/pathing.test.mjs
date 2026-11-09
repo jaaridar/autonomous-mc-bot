@@ -8,7 +8,7 @@
  * Run: `node tools/pathing.test.mjs` (run-all.mjs runs it too).
  */
 import { PathSearch } from "../scripts/core/navigation.js";
-import { rankEscapePlans } from "../scripts/core/escape-strategy.js";
+import { rankEscapePlans, bumpWatchdog } from "../scripts/core/escape-strategy.js";
 
 let pass = 0, fail = 0;
 const check = (name, cond) => { if (cond) pass++; else { fail++; console.log("FAIL: " + name); } };
@@ -105,6 +105,35 @@ check("empty input does not throw", rankEscapePlans(undefined).length === 0);
     for (const z of [-4, 4]) for (let x = 4; x <= 5; x++) for (let y = 1; y <= 3; y++) deep.push({ x, y, z, liquid: true, type: "minecraft:water" });
     const s3 = search(makeWorld({ height: () => 0, fill: deep }), { x: 0, y: 1, z: 0 }, { x: 9, y: 1, z: 0 }, { allowPartial: true });
     check("deep water with floor still wadeable only where floor exists", s3.status !== "found" || s3.path.every((q) => !(q.x >= 4 && q.x <= 5 && (q.z <= -4 || q.z >= 4) && q.y > 0)));
+}
+
+// --- bumpWatchdog: escape walk hand-back is movement-aware, not tick-count-naive ---
+{
+    const stand = { steps: 0, pos: undefined };
+    let keep = true;
+    const p0 = { x: 0, y: 64, z: 0 };
+    for (let i = 0; i < 80; i++) keep = bumpWatchdog(stand, p0) && keep;
+    check("standing still 80 ticks keeps the walk alive", keep === true);
+    check("81st stagnant tick hands back to the pathfinder", bumpWatchdog(stand, p0) === false);
+
+    const walker = { steps: 0, pos: undefined };
+    const pos = { x: 0, y: 64, z: 0 };
+    for (let i = 0; i < 79; i++) bumpWatchdog(walker, pos);
+    pos.x = 2; // real movement (>1.5 blocks) re-arms the counter
+    bumpWatchdog(walker, pos);
+    check("movement re-arms the watchdog (79 stagnant + move + 79 = still alive)", walker.steps === 1);
+    for (let i = 0; i < 79; i++) bumpWatchdog(walker, pos);
+    check("re-armed counter reaches the limit again and gives up", bumpWatchdog(walker, pos) === false);
+
+    const drifter = { steps: 0, pos: undefined };
+    bumpWatchdog(drifter, { x: 0, y: 64, z: 0 });
+    for (let i = 0; i < 5; i++) bumpWatchdog(drifter, { x: 0.5, y: 64, z: 0 }); // half-block drift does not re-arm
+    check("sub-threshold drift does not re-arm", drifter.steps === 6);
+
+    const falling = { steps: 0, pos: undefined };
+    bumpWatchdog(falling, { x: 0, y: 64, z: 0 });
+    bumpWatchdog(falling, { x: 0, y: 60, z: 0 }); // vertical movement counts as progress
+    check("falling counts as movement (re-arms)", falling.steps === 1);
 }
 
 console.log(`\npathing.test: ${pass} passed, ${fail} failed`);
